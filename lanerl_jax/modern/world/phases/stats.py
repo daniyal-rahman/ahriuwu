@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from ... import champions as K
 from ...core.stat_pipeline import sync_max_health
 from .. import views as V
 from ..config import N_CHAMPIONS, WorldConfig
@@ -20,6 +21,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     new_total = st_static.max_hp + s.combat.dyn_health
     hp_c, mx_c = sync_max_health(s.hp[:c], old_total, new_total)
     hp_c = jnp.where(s.alive[:c], hp_c, s.hp[:c])
+    # Kit size modifiers scale the gameplay radius (wiki Unit size).
+    size = K.size(s.kits, V._kit_ctx(s, cfg, st_static, sc.caps, sc.now, cfg.dt))
     s = s._replace(hp=s.hp.at[:c].set(hp_c), max_hp=s.max_hp.at[:c].set(mx_c),
+                   radius=s.radius.at[:c].set(cfg.champion_base.gameplay_radius * (1.0 + size)),
                    champ=champ._replace(static_max_hp=st_static.max_hp))
     return s, sc._replace(static=static, st_static=st_static)

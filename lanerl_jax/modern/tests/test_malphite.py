@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import pytest as _pytest
-
-_pytest.skip("Malphite is not registered until every rule is exact "
-             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
 
 from types import SimpleNamespace
 

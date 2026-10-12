@@ -159,6 +159,7 @@ def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, no
                                                  s.kind[jnp.clip(s.champ.attack_order, 0, s.kind.shape[0] - 1)],
                                                  W.KIND_NONE).astype(jnp.int32),
                     rooted=s.cc.root_until[:c] > now, move_speed=st.move_speed,
+                    dashing=now < s.champ.dash_until,
                     kit_shield=jnp.sum(jnp.where(s.shields.source[:c] == D.SOURCE_KIT,
                                                  D.shield_value(s.shields, now)[:c], 0.0), axis=1))
 

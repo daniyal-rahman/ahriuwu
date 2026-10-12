@@ -51,6 +51,8 @@ R_SPEED = 1500.0                                      # + move speed
 R_RADIUS = 325.0                                      # wiki (client castRadius 270)
 R_AP = 0.9
 R_KNOCKUP = scalar(NAME, "R", "KnockupDuration")      # 1.5
+P_SIZE_PER_ARMOR = 0.08 / 100.0                       # wiki Shard of the Monolith: 8% size per 100 armor
+P_SIZE_CAP = 0.35
 UNIT_TARGET_RANGE = (Q_RANGE, 0.0, 0.0, 0.0)
 
 Q_FLAGS = D.TAG_ACTIVE_SPELL
@@ -79,7 +81,8 @@ class State(NamedTuple):
     cripple_until: Any      # (C, N)
     cripple: Any            # (C,) strength at cast rank
     r_pending: Any          # dashing
-    r_land_at: Any
+    r_cast_at: Any
+    r_land_at: Any          # planned landing (used when the world gives no dash state)
     r_x: Any
     r_y: Any
     r_cast_id: Any
@@ -91,7 +94,7 @@ def init(n_champions: int, n_units: int) -> State:
     f = jnp.zeros((c,), bool)
     i = jnp.zeros((c,), jnp.int32)
     return State(z - NEVER, f, z + NEVER, i - 1, i, i, z, z - NEVER, f, z, z - NEVER, i,
-                 f, z + NEVER, i, jnp.zeros((c, n), jnp.float32) - NEVER, z, f, z + NEVER, z, z, i)
+                 f, z + NEVER, i, jnp.zeros((c, n), jnp.float32) - NEVER, z, f, z, z + NEVER, z, z, i)
 
 
 def _mine(kctx) -> Any:
@@ -167,7 +170,7 @@ def cast(state: State, kctx, units, order) -> tuple[State, KitOut]:
         w_cast_id=jnp.where(w, cid, state.w_cast_id),
         e_pending=state.e_pending | e, e_fire_at=jnp.where(e, later(kctx, E_CAST_TIME), state.e_fire_at),
         e_cast_id=jnp.where(e, cid, state.e_cast_id),
-        r_pending=state.r_pending | rr, r_land_at=jnp.where(rr, f32(now + reach / speed), state.r_land_at),
+        r_pending=state.r_pending | rr, r_cast_at=jnp.where(rr, now, state.r_cast_at), r_land_at=jnp.where(rr, f32(now + reach / speed), state.r_land_at),
         r_x=jnp.where(rr, f32(rx), state.r_x), r_y=jnp.where(rr, f32(ry), state.r_y),
         r_cast_id=jnp.where(rr, cid, state.r_cast_id))
     mana = jnp.sum(jnp.where(jnp.stack([q, w, e, rr], -1), cost, 0.0), axis=1)
@@ -216,10 +219,15 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     cripple_until = jnp.where(e_hit, f32(now + kctx.dt + E_DURATION), state.cripple_until)
     cripple = jnp.where(e_fire, ranked(NAME, "E", "ASReduction", r[:, 2]) / 100.0, state.cripple)
 
-    # Unstoppable Force lands where the dash ends: damage and a 1.5 s knock-up (not reduced by tenacity).
-    r_due = state.r_pending & (due(kctx, state.r_land_at) | dead)
+    # Unstoppable Force lands where the dash ends (terrain can stop it short): damage and a 1.5 s knock-up (not
+    # reduced by tenacity).
+    if kctx.dashing is None:
+        landed, lx, ly = due(kctx, state.r_land_at), state.r_x, state.r_y
+    else:
+        landed, lx, ly = ~kctx.dashing & (now > state.r_cast_at + 0.5 * kctx.dt), kctx.x, kctx.y
+    r_due = state.r_pending & (landed | dead)
     r_fire = r_due & alive
-    rdx, rdy = units.x[None, :] - state.r_x[:, None], units.y[None, :] - state.r_y[:, None]
+    rdx, rdy = units.x[None, :] - lx[:, None], units.y[None, :] - ly[:, None]
     r_hit = r_fire[:, None] & enemies(kctx, units) \
         & (jnp.sqrt(rdx * rdx + rdy * rdy) <= R_RADIUS + units.radius[None, :])
     r_raw = ranked(NAME, "R", "BaseDamage", r[:, 3]) + R_AP * kctx.ap
@@ -284,10 +292,21 @@ def on_takedown(state: State, kctx, units, kills) -> State:
 def stats(state: State, kctx) -> ItemStats:
     """Thunderclap passive armor (tripled while Granite Shield holds) and Seismic Shard's stolen move speed."""
     m = _mine(kctx)
-    pct = jnp.where(m & (kctx.ranks[:, 1] > 0), ranked(NAME, "W", "BonusArmorPassive", kctx.ranks[:, 1]), 0.0)
-    pct = pct * jnp.where(_shielded(kctx), W_SHIELD_MULT, 1.0)
+    pct = jnp.where(m, _w_armor_pct(kctx), 0.0)
     ms = jnp.where(m & (kctx.now < state.q_ms_until), state.q_ms, 0.0)
     return ItemStats(percent_armor=f32(pct), move_speed=f32(ms))
+
+
+def _w_armor_pct(kctx) -> Any:
+    pct = jnp.where(kctx.ranks[:, 1] > 0, ranked(NAME, "W", "BonusArmorPassive", kctx.ranks[:, 1]), 0.0)
+    return pct * jnp.where(_shielded(kctx), W_SHIELD_MULT, 1.0)
+
+
+def size(state: State, kctx) -> Any:
+    """Shard of the Monolith: 8% size per 100 total armor, at most 35%; Thunderclap's bonus armor does not count
+    (wiki), so it is divided back out of the composed armor."""
+    armor = kctx.armor / (1.0 + _w_armor_pct(kctx))
+    return f32(jnp.where(_mine(kctx), jnp.clip(P_SIZE_PER_ARMOR * armor, 0.0, P_SIZE_CAP), 0.0))
 
 
 def defense(state: State, kctx) -> KitDefense:

@@ -49,9 +49,12 @@ E_CAST_TIME = 0.25
 E_RANGE = 535.0                                       # castRangeDisplayOverride / wiki
 E_HALF_ANGLE = 25.0                                   # client castConeAngle (wiki: a 50 degree cone)
 E_LOCK = 0.4                                          # wiki: no movement, Q or R after the cast time
-E_REBOUND = 150.0                                     # wiki (estimated): targets end 150 from Darius
-E_PULL_SPEED = 1500.0                                 # client missileSpeed of the sweep (INFERRED-L)
-E_REBOUND_TIME = 0.5                                  # wiki: the rebound takes about 0.5 s
+# Pull and rebound, measured on 14 pulls of Garen in the 16.9 replay corpus (20 fps positions; DAR.E2): the target
+# is dragged at 1784 units/s to about 45 from Darius's centre, then rebounds over about 0.5 s to about 230 from it.
+E_PULL_SPEED = 1784.0
+E_PULL_STOP = 45.0
+E_REBOUND = 230.0
+E_REBOUND_TIME = 0.5
 E_SLOW = scalar(NAME, "E", "SlowPercent") / 100.0     # 0.4, from the rebound
 E_SLOW_DURATION = 1.0
 R_RANGE = 475.0
@@ -90,10 +93,12 @@ class State(NamedTuple):
     e_dy: Any
     e_cast_id: Any
     e_lock_until: Any       # Q and R blocked
-    disp_until: Any         # (C, N) displacement end
-    disp_x: Any             # (C, N) rebound point
-    disp_y: Any
-    disp_speed: Any
+    disp_until: Any         # (C, N) rebound end
+    pull_until: Any         # (C, N) pull end (then the rebound)
+    disp_ux: Any            # (C, N) unit vector from Darius toward the target at the sweep
+    disp_uy: Any
+    anchor_x: Any           # (C,) Darius's position at the sweep (he cannot move during the pull)
+    anchor_y: Any
     slow_at: Any            # (C, N) Apprehend slow starts (rebound end)
     r_pending: Any
     r_fire_at: Any
@@ -114,7 +119,7 @@ def init(n_champions: int, n_units: int) -> State:
     zn = jnp.zeros((c, n), jnp.float32)
     return State(jnp.zeros((c, n), jnp.int32), zn, zn, z - NEVER,
                  f, z + NEVER, z - NEVER, i, f, z, i, i - 1, z - NEVER, z - NEVER,
-                 f, z + NEVER, z, z, i, z - NEVER, zn - NEVER, zn, zn, zn, zn + NEVER,
+                 f, z + NEVER, z, z, i, z - NEVER, zn - NEVER, zn - NEVER, zn, zn, z, z, zn + NEVER,
                  f, z + NEVER, i - 1, i, i, z - NEVER, z - NEVER, z - NEVER, z - NEVER)
 
 
@@ -259,13 +264,15 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
         & ((ang <= jnp.deg2rad(E_HALF_ANGLE) + slack) | (dist <= units.radius[None, :]))
     ux = jnp.where(dist > 1e-3, rx / jnp.maximum(dist, 1e-3), state.e_dx[:, None])
     uy = jnp.where(dist > 1e-3, ry / jnp.maximum(dist, 1e-3), state.e_dy[:, None])
-    travel = jnp.abs(dist - E_REBOUND)
-    t_air = jnp.maximum(dist - E_REBOUND, 0.0) / E_PULL_SPEED + E_REBOUND_TIME
+    t_pull = jnp.maximum(dist - E_PULL_STOP, 0.0) / E_PULL_SPEED
+    t_air = t_pull + E_REBOUND_TIME
     up = jnp.where(pulled, t_air, 0.0)
     disp_until = jnp.where(pulled, f32(now + kctx.dt + t_air), state.disp_until)
-    disp_x = jnp.where(pulled, f32(kctx.x[:, None] + ux * E_REBOUND), state.disp_x)
-    disp_y = jnp.where(pulled, f32(kctx.y[:, None] + uy * E_REBOUND), state.disp_y)
-    disp_speed = jnp.where(pulled, f32(travel / t_air), state.disp_speed)
+    pull_until = jnp.where(pulled, f32(now + kctx.dt + t_pull), state.pull_until)
+    disp_ux = jnp.where(pulled, f32(ux), state.disp_ux)
+    disp_uy = jnp.where(pulled, f32(uy), state.disp_uy)
+    anchor_x = jnp.where(e_fire, kctx.x, state.anchor_x)
+    anchor_y = jnp.where(e_fire, kctx.y, state.anchor_y)
     slow_at = jnp.where(pulled, f32(now + t_air), state.slow_at)
     slow_now = (state.slow_at <= now + 0.5 * kctx.dt) & units.alive[None, :]
     slow = jnp.where(slow_now, E_SLOW, 0.0)
@@ -298,7 +305,8 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
         q_pending=state.q_pending & ~q_due, w_on=state.w_on & ~w_end,
         e_pending=state.e_pending & ~e_due,
         e_lock_until=jnp.where(e_fire, f32(now + E_LOCK), state.e_lock_until),
-        disp_until=f32(disp_until), disp_x=f32(disp_x), disp_y=f32(disp_y), disp_speed=f32(disp_speed),
+        disp_until=f32(disp_until), pull_until=f32(pull_until), disp_ux=disp_ux, disp_uy=disp_uy,
+        anchor_x=f32(anchor_x), anchor_y=f32(anchor_y),
         slow_at=f32(slow_at),
         r_pending=state.r_pending & ~r_due,
         r_hit_at=jnp.where(r_fire, now, state.r_hit_at),
@@ -395,11 +403,17 @@ def ghosted(state: State, kctx) -> Any:
 
 
 def displacement(state: State, kctx, n_units: int) -> tuple[Any, Any, Any, Any]:
-    """(N,) Apprehend pulls: ``(active, to_x, to_y, speed)`` for the world to move."""
+    """(N,) Apprehend: ``(active, to_x, to_y, speed)`` for the world to move — the pull to 45 from Darius at 1784,
+    then the rebound to 230 over 0.5 s."""
     on = _mine(kctx)[:, None] & (kctx.now < state.disp_until)
+    pulling = kctx.now < state.pull_until
+    reach = jnp.where(pulling, E_PULL_STOP, E_REBOUND)
+    tx = state.anchor_x[:, None] + state.disp_ux * reach
+    ty = state.anchor_y[:, None] + state.disp_uy * reach
+    sp = jnp.where(pulling, E_PULL_SPEED, (E_REBOUND - E_PULL_STOP) / E_REBOUND_TIME)
     k = jnp.argmax(on, axis=0)
-    pick = lambda a: jnp.take_along_axis(a, k[None, :], axis=0)[0]          # noqa: E731
-    return jnp.any(on, axis=0), pick(state.disp_x), pick(state.disp_y), pick(state.disp_speed)
+    pick = lambda a: jnp.take_along_axis(jnp.broadcast_to(a, on.shape), k[None, :], axis=0)[0]   # noqa: E731
+    return jnp.any(on, axis=0), pick(tx), pick(ty), pick(sp)
 
 
 def debuffs(state: State, kctx, units) -> Debuffs:

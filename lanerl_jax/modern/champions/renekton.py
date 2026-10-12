@@ -57,6 +57,7 @@ R_FURY_CAST = scalar(NAME, "R", "FuryOnCast")         # 20
 R_FURY_RATE = scalar(NAME, "R", "FuryPerSecond")      # 5
 R_FURY_LIMIT = 75.0                                   # wiki: Dominus generates Fury up to 75
 R_RANGE_BONUS = 25.0
+R_SIZE = 0.2                                          # wiki: Dominus +20% size
 
 Q_FLAGS = D.TAG_AOE | D.TAG_ACTIVE_SPELL
 W_FLAGS = D.TAG_ACTIVE_SPELL | D.PROP_LIFESTEAL       # basic damage, first strike also spell damage (wiki)
@@ -73,7 +74,8 @@ class State(NamedTuple):
     w_emp: Any              # the empowered (3-strike) version
     w_cast_id: Any
     e_dash: Any             # dashing (Slice or Dice)
-    e_until: Any
+    e_cast_at: Any
+    e_until: Any            # planned end (used when the world gives no dash state)
     e_px: Any               # position at the previous tick (hit path)
     e_py: Any
     e_hit: Any              # (C, N) bool units already hit by this dash
@@ -99,7 +101,7 @@ def init(n_champions: int, n_units: int) -> State:
     z = jnp.zeros((c,), jnp.float32)
     f = jnp.zeros((c,), bool)
     i = jnp.zeros((c,), jnp.int32)
-    return State(z, z - NEVER, z - NEVER, f, z, f, i, f, z, z, z, jnp.zeros((c, n), bool), z, f, i, z - NEVER, f,
+    return State(z, z - NEVER, z - NEVER, f, z, f, i, f, z, z, z, z, jnp.zeros((c, n), bool), z, f, i, z - NEVER, f,
                  jnp.zeros((c, n), jnp.float32), z, f, z + NEVER, f, z, z, i, i, i)
 
 
@@ -197,7 +199,7 @@ def cast(state: State, kctx, units, order) -> tuple[State, KitOut]:
         q_lock_until=jnp.where(q, later(kctx, Q_LOCK), state.q_lock_until),
         w_on=state.w_on | w, w_until=jnp.where(w, later(kctx, W_DURATION), state.w_until),
         w_emp=jnp.where(w, w_emp, state.w_emp), w_cast_id=jnp.where(w, cid, state.w_cast_id),
-        e_dash=state.e_dash | e, e_until=jnp.where(e, f32(now + E_DISTANCE / speed), state.e_until),
+        e_dash=state.e_dash | e, e_cast_at=jnp.where(e, now, state.e_cast_at), e_until=jnp.where(e, f32(now + E_DISTANCE / speed), state.e_until),
         e_px=jnp.where(e, kctx.x, state.e_px), e_py=jnp.where(e, kctx.y, state.e_py),
         e_hit=jnp.where(e[:, None], False, state.e_hit), e_fury=jnp.where(e, 0.0, state.e_fury),
         e_emp=jnp.where(e, e_emp, state.e_emp), e_cast_id=jnp.where(e, cid, state.e_cast_id),
@@ -246,8 +248,11 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     e_shred = jnp.where(jnp.any(shred, axis=1), ranked(NAME, "E", "EnragedArmorShred", r[:, 2]) / 100.0,
                         state.e_shred)
     e_hit = state.e_hit | e_new
-    # The world moves the dash after this hook: the stretch ending at e_until is checked on the tick after.
-    e_done = state.e_dash & ((now >= state.e_until - 1e-6) | dead)
+    # The world moves the dash after this hook, so the last stretch is checked on the tick after it ends (terrain
+    # can end it early).
+    ended = (now >= state.e_until - 1e-6) if kctx.dashing is None \
+        else ~kctx.dashing & (now > state.e_cast_at + 0.5 * kctx.dt)
+    e_done = state.e_dash & (ended | dead)
     landed_slice = e_done & ~state.e_is_dice & jnp.any(e_hit, axis=1) & alive
     dice_until = jnp.where(landed_slice, f32(now + E_WINDOW), state.e_dice_until)
 
@@ -342,6 +347,10 @@ def on_takedown(state: State, kctx, units, kills) -> State:
 def stats(state: State, kctx) -> ItemStats:
     on = _mine(kctx) & state.r_on
     return ItemStats(health=f32(jnp.where(on, ranked(NAME, "R", "HealthGain", state.r_rank), 0.0)))
+
+
+def size(state: State, kctx) -> Any:
+    return f32(jnp.where(_mine(kctx) & state.r_on, R_SIZE, 0.0))
 
 
 def defense(state: State, kctx) -> KitDefense:

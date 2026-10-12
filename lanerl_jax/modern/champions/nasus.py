@@ -49,8 +49,8 @@ R_TICK = scalar(NAME, "R", "TickRate")                # 0.5
 R_CAP = scalar(NAME, "R", "MaxDamageCap")             # 240 per second
 R_AP_PCT = 1e-4                                       # DamageCalc: +1% max HP per 100 AP per second
 R_QCDR = scalar(NAME, "R", "QCDR")                    # 0.5
-R_MIN_RADIUS = 400.0                                  # wiki aura radius at base size
-R_RADIUS_PER_SIZE = 80.0                              # +0.8 per 1% bonus size (base gameplay radius 80)
+R_MIN_RADIUS = 400.0                                  # wiki: storm radius at base size, never smaller
+R_REACH = 320.0                                       # wiki: +0.8 per 1% bonus size = 320 + gameplay radius 80 x size
 UNIT_TARGET_RANGE = (0.0, W_RANGE, 0.0, 0.0)          # per slot; 0 = not unit-targeted (walk-in casting)
 POINT_TARGET_RANGE = (0.0, 0.0, E_RANGE, 0.0)         # Spirit Fire walks to the location
 LARGE_EPICS = (OBJ.T_GRUB, OBJ.T_HERALD, OBJ.T_BARON, OBJ.T_DRAKE, OBJ.T_ELDER)
@@ -132,9 +132,10 @@ def w_slow(start_slow: Any, per: Any, step: Any) -> Any:
     return start_slow + per * jnp.asarray(step, jnp.float32)
 
 
-def r_radius(rank: Any) -> Any:
-    """Storm radius (center to edge): 400 + 0.8 per 1% bonus size (``SizeIncreasePercent`` 30/35/40%)."""
-    return R_MIN_RADIUS + R_RADIUS_PER_SIZE * ranked(NAME, "R", "SizeIncreasePercent", rank)
+def r_radius(gameplay_radius: Any) -> Any:
+    """Storm radius (center to edge): 320 + Nasus's gameplay radius, at least 400 (wiki: 400 + 0.8 per 1% bonus
+    size beyond the base radius 80)."""
+    return jnp.maximum(R_MIN_RADIUS, R_REACH + gameplay_radius)
 
 
 def _large(units, t) -> Any:
@@ -257,7 +258,7 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     storm = state.r_on & alive & ~r_fire & (r_ticks < round(R_DURATION / R_TICK)) \
         & due(kctx, r_start + (r_ticks + 1).astype(jnp.float32) * R_TICK)
     r_hit = storm[:, None] & enemies(kctx, units) \
-        & (center_dist(kctx, units) <= r_radius(state.r_rank)[:, None] + units.radius[None, :])
+        & (center_dist(kctx, units) <= r_radius(units.radius[kctx.unit])[:, None] + units.radius[None, :])
     pct = (ranked(NAME, "R", "AOEDamagePercent", state.r_rank) + R_AP_PCT * kctx.ap) * R_TICK
     r_raw = jnp.minimum(pct[:, None] * units.max_hp[None, :], R_CAP * R_TICK)
     p_r = D.packets(r_hit, kctx.unit[:, None], cols, r_raw, D.MAGIC, R_FLAGS, cast_id=state.r_cast_id[:, None])
@@ -326,6 +327,12 @@ def stats(state: State, kctx) -> ItemStats:
                      armor=f32(resist), magic_resist=f32(resist))
 
 
+def size(state: State, kctx) -> Any:
+    """Fury of the Sands: +30/35/40% size while active (``SizeIncreasePercent``)."""
+    on = _mine(kctx) & state.r_on
+    return f32(jnp.where(on, ranked(NAME, "R", "SizeIncreasePercent", state.r_rank), 0.0))
+
+
 def defense(state: State, kctx) -> KitDefense:
     c = kctx.unit.shape[0]
     o = jnp.ones((c,), jnp.float32)
@@ -354,4 +361,4 @@ def debuffs(state: State, kctx, units) -> Debuffs:
 
 
 __all__ = ["State", "init", "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats",
-           "defense", "attack_mods", "debuffs", "lifesteal", "w_slow", "r_radius"]
+           "defense", "attack_mods", "debuffs", "size", "lifesteal", "w_slow", "r_radius"]

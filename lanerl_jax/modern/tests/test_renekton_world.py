@@ -1,11 +1,6 @@
 """Renekton through the real compiled tick: Cull the Meek Fury and healing, a Slice dash that moves him and hits
 on the way, the empowered W stripping Garen's shield, Fury on the observation's resource bar and Dominus health
 (one top-lane world, own compile)."""
-import pytest as _pytest
-
-_pytest.skip("Renekton is not registered until every rule is exact "
-             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
-
 
 from functools import lru_cache
 
@@ -123,3 +118,32 @@ def test_dominus_raises_max_health():
     s = run(s, MS.no_orders(), 10)
     np.testing.assert_allclose(float(s.max_hp[0]), float(base.max_hp[0]) + 300.0, rtol=1e-5)
     assert float(s.kits.renekton.fury[0]) >= 20.0
+
+
+def test_slice_into_a_wall_stops_short():
+    """Wiki Dash: a dash whose end point is not walkable stops at the last walkable point before the wall."""
+    from lanerl_jax.modern import mechanics as M
+    from lanerl_jax.modern.map.terrain import is_walkable
+    cfg = world()[0]
+    ter = M.team_terrain(cfg.terrain, 0)
+    walk = lambda x, y: bool(is_walkable(x, y, 50.0, ter))                 # noqa: E731
+    # A lane point and a direction whose 450-unit dash ends inside a wall, with open ground for the first 150.
+    lane = np.asarray(cfg.lane_path)
+    found = None
+    for px, py in lane[2:-2]:
+        for ang in np.deg2rad(np.arange(0.0, 360.0, 15.0)):
+            ux, uy = np.cos(ang), np.sin(ang)
+            path = [walk(px + ux * d, py + uy * d) for d in np.arange(0.0, 451.0, 10.0)]
+            if all(path[:16]) and not path[-1]:
+                found = (float(px), float(py), ux, uy, 10.0 * path.index(False))
+                break
+        if found:
+            break
+    assert found is not None
+    sx, sy, ux, uy, wall = found
+    s = placed((sx, sy), (sx + 3000.0, sy))
+    s = step(s, orders(cast_slot=[2, -1], cast_x=[sx + 1000.0 * ux, 0.0], cast_y=[sy + 1000.0 * uy, 0.0]))
+    s = run(s, MS.no_orders(), 20)
+    along = (float(s.x[0]) - sx) * ux + (float(s.y[0]) - sy) * uy
+    assert 100.0 < along < wall, (along, wall)                        # dashed, and stopped before the wall
+    assert walk(float(s.x[0]), float(s.y[0]))

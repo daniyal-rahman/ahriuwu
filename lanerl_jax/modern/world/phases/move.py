@@ -63,11 +63,16 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     team_mv = jnp.clip(s.team, 0, 1)                                  # neutral monsters walk the blue mask
     x, y, _, anchor = M.move_step(s.x, s.y, gx, gy, ms, active, team_mv, s.radius, cfg.routes, terrain, dt,
                                   s.route_anchor, movers=cfg.layout.ward0)
-    # Kit dashes follow their target unit, ignoring terrain; the item dash (Rocketbelt) starts a tick late.
+    # Kit dashes follow their target unit; point dashes land per ``dash_end`` (wiki Dash). The item dash
+    # (Rocketbelt) starts a tick late.
     dash = sc.kit_out.dash
     pd = s.prev.pending_dash
-    dash = W.Dash(*(jnp.where(pd.active & ~dash.active, a, b) for a, b in zip(pd, dash)))
+    item_dash = pd.active & ~dash.active                               # Rocketbelt never crosses terrain
+    dash = W.Dash(*(jnp.where(item_dash, a, b) for a, b in zip(pd, dash)))
     dstart = dash.active & s.alive[:c]
+    point = dstart & (dash.target < 0)
+    ex, ey = M.dash_end(s.x[:c], s.y[:c], dash.to_x, dash.to_y, s.team[:c], s.radius[:c], terrain, ~item_dash)
+    dash = dash._replace(to_x=jnp.where(point, ex, dash.to_x), to_y=jnp.where(point, ey, dash.to_y))
     dt_ = jnp.clip(dash.target, 0, n - 1)
     dx = jnp.where(dash.target >= 0, s.x[dt_], dash.to_x)
     dy = jnp.where(dash.target >= 0, s.y[dt_], dash.to_y)

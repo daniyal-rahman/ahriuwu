@@ -1,10 +1,5 @@
 """Nasus through the real compiled tick: record radii, walk-in Spirit Fire, Wither's cripple on the target's attack
 speed, Siphoning Strike stacks from a lane last hit and Fury of the Sands health (one top-lane world, own compile)."""
-import pytest as _pytest
-
-_pytest.skip("Nasus is not registered until every rule is exact "
-             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
-
 
 from functools import lru_cache
 
@@ -123,4 +118,6 @@ def test_fury_of_the_sands_raises_max_health():
     s = step(s, orders(cast_slot=[3, -1]))
     s = run(s, MS.no_orders(), 10)
     np.testing.assert_allclose(float(s.max_hp[0]), float(base.max_hp[0]) + 300.0, rtol=1e-5)
+    np.testing.assert_allclose(float(s.radius[0]), 80.0 * 1.3, rtol=1e-6)        # wiki Unit size: +30% at rank 1
+    np.testing.assert_allclose(float(base.radius[0]), 80.0)
     assert float(s.champ.cooldowns[0, 3]) > 100.0

@@ -14,13 +14,16 @@ import jax.numpy as jnp
 
 from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
+from . import darius
 from . import garen
 from . import jax as jax_kit
+from . import malphite
+from . import nasus
+from . import renekton
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-# Nasus, Renekton, Darius and Malphite stay out until every rule is exact (docs/modern/CHAMPIONS.md, Pending).
-KITS = (garen, jax_kit)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -140,6 +143,16 @@ def resource_fraction(state: ChampionState, champion_ids, mana_fraction) -> Any:
     return out
 
 
+def size(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) bonus size fraction from kits (Nasus R, Renekton R, Malphite passive); scales the gameplay radius
+    (wiki Unit size; pathing and selection radii are unaffected)."""
+    out = jnp.zeros(kctx.unit.shape, jnp.float32)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "size"):
+            out = out + k.size(st, kctx)
+    return out
+
+
 def displacement(state: ChampionState, kctx: KitCtx, n_units: int) -> tuple[Any, Any, Any, Any]:
     """(N,) forced movement from kits (Darius E pull): ``(active, to_x, to_y, speed)``."""
     active = jnp.zeros((n_units,), bool)
@@ -160,5 +173,5 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "debuffs", "dodging_units", "ghosted", "resource_fraction", "point_target_ranges", "displacement",
+           "attack_mods", "debuffs", "dodging_units", "ghosted", "resource_fraction", "point_target_ranges", "displacement", "size",
            "unit_target_ranges"]

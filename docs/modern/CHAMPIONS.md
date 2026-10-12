@@ -1,4 +1,4 @@
-# CHAMPIONS.md — Garen and Jax (registered); Nasus, Renekton, Darius, Malphite (pending), 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius and Malphite, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
 in `core.py`; `renekton.py`, `darius.py`, `malphite.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
@@ -63,13 +63,6 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
 | JAX.R2 | Only if the swing hits a champion: for 8 s, bonus armor equal to `BaseResists + 0.4 × bonus AD + (champions − 1) × (ResistsPerExtraTarget + 0.1 × bonus AD)`, and `MRMult` (0.6) × that as MR. The value is fixed when the swing lands. | 45/60/75, +20/25/30 | CLIENT `BaseArmor`/`BonusArmor`/`BaseMR`; WIKI "If this hits a champion". Snapshot: INFERRED-M |
 | JAX.R3 | Passive: each landed attack adds a stack (max 2, 2.5 s, refreshed). The attack that lands at 2 stacks (1 while R2 is active) consumes them and deals `PassiveBaseDamage + 0.6 × AP` magic damage as an on-hit proc, ×0.5 against structures. That attack's windup cannot be cancelled. Against wards the proc triggers but is not consumed and has no effect. Dodged attacks add no stacks. | 75/130/185 | CLIENT, WIKI |
 
-## Pending: Nasus, Renekton, Darius, Malphite
-
-These four kits are implemented but **not registered** (`champions.KITS`) and their tests skip. Each returns, one at
-a time, only when its approximation list below is empty: every engineering shortcut replaced by the exact rule, and
-every value no client, wiki or patch source gives measured in the live client (Practice Tool / custom-game protocol,
-results recorded here with the measurement). Order: Nasus, Renekton, Darius, Malphite.
-
 ## Nasus (75)
 
 Patches that apply on the Rift (client values already include them): 26.16 (Q stacks 4, 10 on large kills), 26.17
@@ -87,51 +80,36 @@ twice as fast), 26.19 (Q base 30–110). The 26.16 "Nasus" block that also lists
 | NAS.W2 | The slow grows by `SlowPerTick` at 1, 2, 3 and 4 s (47–95% at 4 s). With target tenacity T the steps come every `(1 − T)` s and the slow ends at `5 (1 − T)` s; each step re-applies the slow with the remaining base duration so the world's tenacity rule gives that same end. The cripple uses the base slow value (slow resist does not reduce it). | +3/6/9/12/15% per s | CLIENT `SlowPerTick`, `MaxSlowTooltipOnly`; PATCH 26.18; WIKI notes |
 | NAS.E1 | Location within 650 (walks into range). After a 0.25 s cast time and a 0.25 s delay, deals `InitialHitDamage + 0.6 AP` magic damage to enemies within 380 of the point (center to edge). Dying during the cast time cancels it; the delay does not lock Nasus. | 60–100 mana; 12 s; 50–170 | CLIENT `castRange`, `castRadius`, `InitialDamage`; WIKI cast time and delay |
 | NAS.E2 | The fire then burns for 5 s: one tick per second (5 ticks) of `DamagePerTick + 0.12 AP` magic damage, and enemies inside lose `ArmorShredPercent` of their armor, lingering 1 s after they leave or the fire ends. | 10–34 per s; 30–50% | CLIENT `TotalDotDamage` = per tick × 5 s and tooltip "over 5 seconds"; WIKI V14.18 "per second", linger |
-| NAS.R1 | After a 0.2 s cast time, for 15 s: `BonusHealth` max health, `InitialResistGain` armor and MR, 50 attack range (adds to Q's 50), Siphoning Strike's base cooldown halved. Ends on death. The cooldown starts at cast. | 100 mana; 120/100/80 s; 300/450/600, 40/55/70 | CLIENT, PATCH V13.12 |
-| NAS.R2 | Every 0.5 s (30 ticks) enemies within `400 + 0.8 × bonus size %` (424/428/432, center to edge) take `(AOEDamagePercent + 1% per 100 AP) × 0.5` of their max health as magic damage, capped at 120 per tick (240 per second) against every unit type. | 3/4/5% per s | CLIENT `DamageCalc`, `TickRate`, `MaxDamageCap`, `SizeIncreasePercent`; WIKI radius and cap |
+| NAS.R1 | After a 0.2 s cast time, for 15 s: `BonusHealth` max health, `InitialResistGain` armor and MR, 50 attack range (adds to Q's 50), `SizeIncreasePercent` size (gameplay radius 80 → 104/108/112), Siphoning Strike's base cooldown halved. Ends on death. The cooldown starts at cast. | 100 mana; 120/100/80 s; 300/450/600, 40/55/70 | CLIENT, PATCH V13.12 |
+| NAS.R2 | Every 0.5 s (30 ticks) enemies within `max(400, 320 + gameplay radius)` (424/428/432 at base size, center to edge) take `(AOEDamagePercent + 1% per 100 AP) × 0.5` of their max health as magic damage, capped at 120 per tick (240 per second) against every unit type. | 3/4/5% per s | CLIENT `DamageCalc`, `TickRate`, `MaxDamageCap`, `SizeIncreasePercent`; WIKI radius and cap |
 
-### Nasus open items (must all close before Nasus is registered)
+### Nasus limitations
 
-Live client is 16.20; Nasus's Rift gameplay data is byte-identical to 16.19 (diff of the CDragon 16.19 / 16.20 bins:
-only stat-stone event ids and an alternate-mode value block differ), so 16.20 measurements apply.
+Every known difference from the live game. Values marked INFERRED have no client, wiki or patch source; the rest are
+modelling shortcuts with the exact rule stated.
 
-Engineering (no new facts needed): cost and cooldown after the cast time, death cancels (WIKI Cast time: "most
-abilities incur their cooldown and resource cost after their cast time completes", "cannot be interrupted ... except
-by death"); Wither cancels without cost if the target dies, becomes untargetable or leaves sight during the cast
-(WIKI unit-targeted cancel conditions); spell shields block Wither (zero-damage spell carrier, blocked casts drop
-their CC); Wither interrupts the target's windup on application (WIKI bug note); Wither's cripple ends with its slow
-(cleanse, Garen Q); Q crit uses the attack's crit multiplier; Q stacks only when a Q-attack packet kills (turrets
-included); Q on wards; up to three concurrent Spirit Fires; Spirit Fire sight (200); Fury of the Sands size grows
-the gameplay radius (WIKI Unit size: Nasus 112 at rank 3 = 80 x 1.4) and the storm reaches 320 + gameplay radius,
-at least 400.
-
-Measurements (Practice Tool unless noted; OBS 60 fps, 1920x1080, cursor captured, camera locked on Nasus, HUD and
-damage numbers on; target dummies have gameplay radius 65 — do not use "Add 100 Max HP", it doubles their size):
-
-| ID | Question | Protocol |
-|---|---|---|
-| N1 | Spirit Fire: time from the start of the cast to the first damage, and to each tick. | Rank 1 E, dummy 300 away. Cast E with the cursor on the dummy's centre; refresh cooldowns; 10 casts. I read the cast-bar start, the initial number and the 5 tick numbers frame by frame. |
-| N2 | Spirit Fire radius (client 380, wiki 400). | Dummy fixed. Cast E at points moving away from the dummy in roughly 20-unit steps (about 10 px) until the initial hit stops landing; then repeat on the other side. Keep the camera locked so I can convert cursor pixels to world units. |
-| N3 | Spirit Fire sight duration (wiki "2.5 s, estimated") and radius 200. | Cast E into an unseen brush or fogged area within 650 where nothing else gives sight; 5 casts. |
-| N4 | Fury of the Sands: first storm tick after the cast, tick spacing, and radius at ranks 1 and 3. | Dummies at about 350, 420, 450 and 500 from Nasus (spawn them, then stand still). Cast R at level 6 and again at level 16 (refresh cooldowns). |
-| N5 | Can Siphoning Strike be pressed again while empowered, and does that change anything? | Press Q, wait 1 s, press Q again, then attack a dummy; also press Q twice and watch the Q icon. |
-| N6 | Does the halved Q cooldown from R keep applying after R ends (remaining time jumps or not)? | Level 16, R, then Q a dummy about 1 s before R ends; read the Q cooldown number before and after R expires. Also Q at 13 s into R. |
-| N7 | Wither's "too far away" cancel distance during its 0.25 s cast. | Custom game vs a bot (needs a moving target), with replay saved: cast W at the bot near max range while it walks away, about 15 times. Your replay extraction gives the bot's position and whether the cooldown started. |
-| N8 | Does Q need the attack to land the kill, or does any Nasus damage on that tick count? | Covered by the rule text ("If this attack kills the target"); no test. |
-
-### Nasus approximations
-
-1. **Q on wards and structures.** Champion attacks on wards are ward hits that never reach the kit, so Q is not
-   spent on a ward and gives no stacks. Turret kills give no stacks either, because the world's takedown matrix
-   (`Kills.killed_units`) has no structure columns.
-2. **Wither cleanse.** Cleanse or Garen Q end the world slow but the kit's cripple keeps running to the original
-   end (the client treats both as one debuff). Wither's first-application windup interrupt (a listed bug) is not
-   modelled. Holder tenacity from summoner Cleanse is not in `KitCtx.tenacity`.
-3. **Spirit Fire geometry.** One fire per Nasus: at extreme ability haste (cooldown under 5.5 s) a new cast replaces
-   the burning one. Sight of the area is not modelled. Radius is the client `castRadius` 380; the wiki lists 400.
-   The 0.25 s delay after the cast time is the wiki's reading (INFERRED-M).
-4. **Fury of the Sands size.** The size increase only widens the storm; Nasus's gameplay and pathing radii do not
-   grow.
+1. **Cost and cooldown timing.** W, E and R pay mana and start their cooldown at the key press. The rule (WIKI Cast
+   time) is after the cast time (0.25 / 0.25 / 0.2 s), and nothing is paid if Nasus dies during it.
+2. **Wither cancel conditions.** The cast always completes once started. Live: it cancels without cost if the target
+   dies, becomes untargetable, leaves sight or gets "too far away" during the 0.25 s cast (that distance is unknown).
+3. **Spell shields.** Wither deals no damage, so a spell shield (Annul) neither blocks nor pops on it; live, it
+   blocks Wither. The same gap lets kit CC from a blocked damage packet through (shared, see below).
+4. **Wither details.** Its cripple keeps running if the slow is cleansed (Cleanse, Garen Q); live, both are one
+   debuff. The target's attack windup is not interrupted on application (live, a listed bug does). Tenacity from
+   summoner Cleanse is not in `KitCtx.tenacity`.
+5. **Siphoning Strike stacks.** A stack is granted if the Q target dies to any Nasus damage on the tick the Q attack
+   lands; live, the Q attack itself must kill. Turret kills give no stacks (the takedown matrix has no structure
+   columns) and Q is not spent on wards (ward hits never reach the kit); live, both give stacks.
+6. **Siphoning Strike crit.** On a crit the flat bonus is multiplied by the holder's crit damage, not the attack's
+   actual multiplier (differs only with Infinity Edge-style crit scaling).
+7. **Siphoning Strike re-press and Fury of the Sands cooldown.** Q cannot be pressed again while empowered, and the
+   halved cooldown is fixed when the cooldown starts (unverified either way).
+8. **Spirit Fire.** One fire per Nasus (a second cast replaces the first; only possible above ~118 ability haste).
+   The 200-radius sight (wiki "2.5 s, estimated") is not modelled. Radius 380 is the client `castRadius`; the wiki
+   lists 400. The first hit at cast + 0.25 + 0.25 s and the first tick 1 s after it are INFERRED from the wiki text.
+9. **Fury of the Sands storm timing.** The first storm tick 0.5 s after the cast time is INFERRED. (Size is modelled:
+   the gameplay radius grows 80 → 104 / 108 / 112, WIKI Unit size, and the storm reaches max(400, 320 + gameplay
+   radius) center to edge.)
 
 ## Renekton (58)
 
@@ -152,16 +130,20 @@ Arena Mod)" refers to the Arena override; the client value is the Rift one.
 | REN.E2 | If Slice hit an enemy, Dice can be cast within 4 s of the dash's end (no cooldown check): the same dash and damage; empowered it adds `EnragedBaseDamage + 1.35 bonus AD` and `EnragedArmorShred` % armor reduction for 4 s. | +70–250; 25–35% | CLIENT `DiceTimer`, `EnragedArmorShred`, `ShredTimer`; WIKI |
 | REN.R1 | After 0.25 s, for 15 s: `HealthGain` max health, +25 attack range, +20 Fury, then +5 Fury per second while below 75. Every 0.5 s enemies within 375 (center to edge) take `(AuraDamagePerSecond + 0.1 AP + 0.1 bonus AD) × 0.5` magic damage. Ends on death; the cooldown starts at cast. | 120/100/80 s; 300/500/700; 30–120 per tick | CLIENT `TotalDamagePerSecond`, `TickRate`, `FuryOnCast`, `FuryPerSecond`; WIKI radius, 75 cap, range |
 
-### Renekton approximations
+### Renekton limitations
 
 1. **W strikes.** The strikes are one attack hit plus one kit packet, so item and rune on-hit effects fire once,
    not per strike. The 0.2 s empowered-attack cast time (wiki "estimated") is not modelled; the attack keeps its stat
    windup. Casting R does not end the post-strike lockout.
-2. **Slice and Dice geometry.** Kit dashes ignore terrain like Jax Q, so a dash into a wall ends inside it and the
-   world ejects him. The hit width (client `mLineWidth` 50 measured from the path) is INFERRED-M. The Dice window is
+2. **Slice and Dice geometry.** Dashes follow the wiki terrain rule (cross a wall only to a walkable end point,
+   else stop short). The hit width (client `mLineWidth` 50 measured from the path) is INFERRED-M. The Dice window is
    measured from the end of the Slice dash (wiki: "within the next 4 seconds", INFERRED-M).
-3. **Fury at the edges.** Low-health ×1.5 multiplies each source's amount after its per-cast cap. Dominus size is not
-   in the hitbox.
+3. **Fury at the edges.** Low-health ×1.5 multiplies each source's amount after its per-cast cap (order INFERRED).
+   Fury resets to 0 on death (INFERRED). (Dominus's +20% size is modelled: gameplay radius 80 → 96.)
+4. **Cost and cooldown timing.** Dominus starts its cooldown at the key press; live, after its 0.25 s cast time
+   (WIKI notes it is not refunded on death during the cast).
+5. **Spell shields.** The W stun and other kit CC are not blocked by a spell shield (shared, see below); the empowered
+   W's shield strip ignores spell shields, which matches the wiki.
 
 ## Darius (122)
 
@@ -176,23 +158,29 @@ Rift patches since 26.1: 26.4 Hemorrhage monster damage ×2.5 (client `MonsterMo
 | DAR.W1 | Attack reset; the next attack within 4 s gains 25 range and an uncancellable windup, deals `(ADRatio − 1) × AD` bonus physical damage (× crit damage when the attack crits; basic and spell damage) and slows 90% for 1 s. Cooldown post-effect. | 40 mana; 5 s; 40–60% AD | CLIENT `ADRatio`, `SlowPercent`, `SlowDuration`; WIKI |
 | DAR.W2 | If the empowered attack kills its target, the mana is refunded and W restarts at half its cooldown. | 50% | CLIENT `PercentCDRefund`; WIKI |
 | DAR.E1 | Passive: `PassivePercentArmorPen` % armor penetration once learned. | 20–40% | CLIENT; PATCH V14.2 |
-| DAR.E2 | After a 0.25 s cast time, every enemy within 535 (center to edge) and 25° of the cast direction (plus its angular radius) is pulled to 150 from Darius and knocked up for the pull plus a 0.5 s rebound, then slowed 40% for 1 s. Darius cannot move or cast Q/R for 0.4 s after the cast time, then attacks the nearest pulled champion (else unit). Cooldown at cast. | 70–30 mana; 26–16 s | CLIENT `castConeAngle`, `SlowPercent`; WIKI radius, rebound, lockout, follow-up attack |
+| DAR.E2 | After a 0.25 s cast time, every enemy within 535 (center to edge) and 25° of the cast direction (plus its angular radius) is dragged at 1784 units/s to 45 from Darius's centre, then rebounds over 0.5 s to 230 from it, airborne throughout, then slowed 40% for 1 s. Darius cannot move or cast Q/R for 0.4 s after the cast time, then attacks the nearest pulled champion (else unit). Cooldown at cast. | 70–30 mana; 26–16 s | CLIENT `castConeAngle`, `SlowPercent`; WIKI radius, lockout, follow-up attack; pull speed, stop and rebound measured on 14 pulls of Garen in the 16.9 replay corpus (20 fps positions; median 1784 u/s, arrival 49, rebound end 230 after 0.50 s, range 200-283) |
 | DAR.R1 | Enemy champion within 475 (center to edge); not while rooted. Darius leaps to it over the 0.3667 s cast time, then deals `(RBaseDamage + 0.75 bonus AD) × (1 + 0.2 × stacks)` true damage and applies a stack. Cooldown at cast. | 100/100/0 mana; 120/100/80 s; 125/250/375 | CLIENT `Damage`, `RDamagePercentPerHemoStack`, `castRange`, `mCastTime`, `cantCastWhileRooted` |
 | DAR.R2 | If the target dies within 0.15 s, Darius gains Noxian Might; at ranks 1–2 he may recast within 20 s at no cost and without a cooldown check (the first cast's cooldown keeps running), at rank 3 the cooldown resets. Q and E are blocked for 0.25 s after the cast time. | 20 s | CLIENT `RRecastDuration`; WIKI |
 
-### Darius approximations
+### Darius limitations
 
-1. **Apprehend motion.** The pull and rebound are one straight move from the target to the rebound point over the
-   knock-up, at `|distance − 150| / time`. The pull speed (1500, the sweep's client `missileSpeed`) is INFERRED-L.
-   Pulls ignore terrain and collision like kit dashes. Darius's 0.4 s post-cast lock also blocks attacks.
+1. **Apprehend motion.** Pull and rebound use the replay medians (speed 1784, stop 45, rebound to 230 in 0.5 s);
+   individual pulls varied (rebound ends 200-283 from Darius), and they were measured on champions only (minions
+   use the same numbers). A short pause at arrival seen in 2 of 14 pulls is not modelled. Pulls ignore terrain
+   and collision. Darius's 0.4 s post-cast lock also blocks attacks.
 2. **Noxian Guillotine.** Fear and slow of nearby minions and monsters after an execution are not modelled (the world
    has no fear). The leap is a dash to the target over the cast time; it does not stop at thin walls.
 3. **Hemorrhage reveal** (sight of a target the bleed will kill) and Apprehend's sight are not modelled.
+4. **Hemorrhage ticks** every 1.25 s (wiki); the client's `SecondsPerTick` is 1.26.
+5. **Cost and cooldown timing.** Apprehend and Noxian Guillotine start their cooldown and pay mana at the key press;
+   live, after their cast times (0.25 / 0.3667 s).
+6. **Spell shields.** The pull, knock-up and slows are not blocked by a spell shield (shared, see below).
 
 ## Malphite (54)
 
 | ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
 |---|---|---|---|
+| MAL.P0 | Shard of the Monolith: size grows by 8% per 100 total armor, at most 35%; Thunderclap's bonus armor does not count. | 80 → up to 108 | WIKI Granite Shield (script-only in the client) |
 | MAL.P1 | Granite Shield: a shield of 10% max health (no expiry) whenever Malphite has lost no health for 8 s (7 from level 7, 6 from 13) and the shield is below full. It refills the same shield instance (`D.SOURCE_KIT`): a new grant replaces the old one. Damage the shield absorbs does not reset the delay. | 10% max HP | CLIENT `TotalShield`, `PassiveCooldown`; WIKI notes |
 | MAL.Q1 | Enemy unit (not structures) within 625 (center to edge); 0.25 s cast time, then a 1200-speed shard: `BaseDamage + 0.6 AP` magic and a `SpeedSteal` % slow for 3 s; Malphite gains the target's current move speed × that slow as flat move speed for 3 s. Fizzles if the target dies. | 70–90 mana; 8 s; 70–270; 20–40% | CLIENT `castRange`, `missileSpeed`, `SpeedSteal`, `SlowDuration`; WIKI cast time, speed steal |
 | MAL.W1 | Passive: `BonusArmorPassive` % armor (STAT.40 total multiplier), ×3 while Granite Shield holds. | 10–30% | CLIENT `BonusArmorPassive`, `BonusArmorPassiveMultiplier` |
@@ -200,17 +188,30 @@ Rift patches since 26.1: 26.4 Hemorrhage monster damage ×2.5 (client `MonsterMo
 | MAL.E1 | After its 0.2419 s cast time: `BaseDamage + 0.4 armor + 0.6 AP` magic to enemies within 400 (center to edge) and an `ASReduction` % attack-speed cripple for 3 s. | 50–70 mana; 7 s; 60–200; 30–50% | CLIENT `mCastTime`, `castRadius`, `EDamageCalc`, `ASReduction` |
 | MAL.R1 | Dashes to the cursor, at most 1000 (cast at max range), at `1500 + move speed`; CC does not stop it. On arrival: `BaseDamage + 0.9 AP` magic to enemies within 325 of the end point and a 1.5 s knock-up. Cooldown at cast. | 100 mana; 130/115/100 s; 200/300/400 | CLIENT `castRange`, `KnockupDuration`, `TotalDamage`; WIKI speed, radius (client `castRadius` 270) |
 
-### Malphite approximations
+### Malphite limitations
 
 1. **Thunderclap cone angle.** Neither the client data nor the wiki gives it; the kit uses a 45° half-angle
    (INFERRED-L). Aftershocks fire once per landed attack, not as a separate on-hit item proc.
 2. **Seismic Shard speed steal** reads the target's current move speed (after its other slows and the soft caps),
    not the raw value the wiki describes.
 3. **Ground Slam cripple** takes the strongest cripple on the target instead of stacking multiplicatively with
-   others (`combine_debuffs`). **Shard of the Monolith** size is not modelled.
-4. **Unstoppable Force** passes through terrain like the other kit dashes.
+   others (`combine_debuffs`). **Shard of the Monolith** size ignores armor reduction (Black Cleaver lowers it live).
+4. **Unstoppable Force** damage radius 325 is the wiki value; the client `castRadius` is 270. It lands where the
+   dash actually stops (wiki terrain rule).
+5. **Cost and cooldown timing.** Seismic Shard and Ground Slam pay at the key press; live, after their cast times
+   (0.25 / 0.2419 s).
+6. **Spell shields.** The slows, cripple and knock-up are not blocked by a spell shield (shared, see below).
 
 ## Approximations that remain
+
+Shared by every kit:
+
+- **Cost and cooldown timing.** Spells with a cast time pay mana and start their cooldown at the key press; the
+  live rule is after the cast time (Garen R 0.435 s, Jax R 0.25 s and the pending kits above).
+- **Spell shields and CC.** The world's spell shield blocks enemy ActiveSpell *damage packets* only. CC emitted by a
+  kit is applied even when the same cast's damage was blocked, and CC-only casts never pop a spell shield.
+
+Per kit (Garen, Jax):
 
 1. **Garen passive inputs.** The kit sees only damage packets. Zero-damage enemy abilities and summoner spells
    without damage, such as Exhaust, do not disable Perseverance. Epic monsters cannot disable it either,
@@ -248,6 +249,8 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitOut.cast_lockout` | (C,) | Now honoured from any hook, not only on a cast start (Renekton W post-strike lockout). |
 | `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
 | `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted (Darius E). |
+| `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
+| `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`

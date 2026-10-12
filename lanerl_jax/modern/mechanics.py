@@ -251,6 +251,23 @@ def move_step(x: Any, y: Any, goal_x: Any, goal_y: Any, speed: Any, active: Any,
     return new[:, 0], new[:, 1], ok | ~active, anchor
 
 
+def dash_end(x0: Any, y0: Any, x1: Any, y1: Any, team: Any, radius: Any, terrain: tuple, cross: Any,
+             samples: int = 33) -> tuple[Any, Any]:
+    """Point-dash landing (wiki Dash): a dash that may cross terrain (``cross``) keeps a walkable end point;
+    otherwise it stops short at the last walkable point before the first wall on its path."""
+    def one(ax, ay, bx, by, tm, r, cr):
+        ter = team_terrain(terrain, tm)
+        f = jnp.linspace(0.0, 1.0, samples)
+        px, py = ax + (bx - ax) * f, ay + (by - ay) * f
+        ok = jax.vmap(lambda u, v: is_walkable(u, v, jnp.minimum(r, 50.0), ter))(px, py)
+        blocked = ~ok & (jnp.arange(samples) > 0)
+        first = jnp.where(jnp.any(blocked), jnp.argmax(blocked), samples)
+        last = jnp.maximum(first - 1, 0)
+        keep = cr & ok[-1]
+        return jnp.where(keep, bx, px[last]), jnp.where(keep, by, py[last])
+    return jax.vmap(one)(x0, y0, x1, y1, team, radius, cross)
+
+
 def blink_point(x0: Any, y0: Any, x1: Any, y1: Any, max_range: Any, team: Any, radius: Any, terrain: tuple,
                 samples: int = 16) -> tuple[Any, Any]:
     """Flash landing: clamp to ``max_range``, then the farthest walkable point on the segment, so Flash crosses

@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import pytest as _pytest
-
-_pytest.skip("Nasus is not registered until every rule is exact "
-             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -295,8 +290,10 @@ def test_r_fury_of_the_sands(rank):
     assert float(K.attack_mods(st, k).extra_range[0]) == 50.0
     _, o = K.on_attack(st, k, u, launch([False, False], [-1, -1]))
     np.testing.assert_allclose(float(o.base_cooldown[0, 0]), 0.5 * cooldowns("Nasus", "Q")[2])
-    radius = 400.0 + 80.0 * jv("Nasus", "R", "SizeIncreasePercent", rank)
-    np.testing.assert_allclose(float(N.r_radius(jnp.int32(rank))), radius, rtol=1e-6)
+    size = jv("Nasus", "R", "SizeIncreasePercent", rank)
+    np.testing.assert_allclose(float(K.size(st, k)[0]), size, rtol=1e-6)
+    np.testing.assert_allclose(float(N.r_radius(jnp.float32(80.0 * (1.0 + size)))), 400.0 + 80.0 * size, rtol=1e-6)
+    np.testing.assert_allclose(float(N.r_radius(jnp.float32(60.0))), 400.0)                  # never below 400
     ticks, t = [], 10.2
     for _ in range(int(round(16.0 / DT))):
         t += DT

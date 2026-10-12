@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import pytest as _pytest
-
-_pytest.skip("Darius is not registered until every rule is exact "
-             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -180,12 +175,15 @@ def test_e_apprehend_pulls_the_cone():
     st, o = K.periodic(st, at(k, 10.25), u)
     up = np.asarray(o.cc.knockup[0])
     assert up[JAX] > 0 and up[MINION_RED2] > 0 and up[MINION_RED] == 0 and up[MINION_BLUE] == 0
-    np.testing.assert_allclose(up[JAX], (450.0 - 150.0) / 1500.0 + 0.5, rtol=1e-5)
+    np.testing.assert_allclose(up[JAX], (450.0 - 45.0) / 1784.0 + 0.5, rtol=1e-5)
     assert int(o.attack_target[0]) == JAX                           # the champion first
-    act, tx, ty, sp = K.displacement(st, at(k, 10.3), 6)
+    act, tx, ty, sp = K.displacement(st, at(k, 10.3), 6)                  # pulling in
     assert bool(act[JAX]) and bool(act[MINION_RED2]) and not bool(act[MINION_RED])
-    np.testing.assert_allclose([float(tx[JAX]), float(ty[JAX])], [150.0, 0.0], atol=1e-3)
-    np.testing.assert_allclose(float(sp[JAX]), 300.0 / up[JAX], rtol=1e-5)
+    np.testing.assert_allclose([float(tx[JAX]), float(ty[JAX])], [45.0, 0.0], atol=1e-3)
+    np.testing.assert_allclose(float(sp[JAX]), 1784.0)
+    act, tx, ty, sp = K.displacement(st, at(k, 10.25 + up[JAX] - 0.1), 6)  # rebounding out
+    np.testing.assert_allclose([float(tx[JAX]), float(ty[JAX])], [230.0, 0.0], atol=1e-3)
+    np.testing.assert_allclose(float(sp[JAX]), (230.0 - 45.0) / 0.5)
     assert not bool(K.displacement(st, at(k, 10.25 + up[JAX] + 2 * DT), 6)[0][JAX])
     # The 40% slow starts when the rebound ends.
     st, outs = run_periodic(st, k, u, 10.25, 1.0)

@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import pytest as _pytest
-
-_pytest.skip("Renekton is not registered until every rule is exact "
-             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
-
 import jax
 import jax.numpy as jnp
 import numpy as np
