@@ -89,7 +89,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     put = can_grant[:, None] & (jnp.arange(7)[None, :] == gslot[:, None])
     inv = I.Inventory(jnp.where(put, grant_row[:, None], inv.item).astype(jnp.int32),
                       jnp.where(put, 1, inv.stack).astype(jnp.int32))
-    lock = jnp.maximum(champ.cast_lock_until, jnp.where(kit_all.cast_started, now + kit_all.cast_lockout, 0.0))
+    lock = jnp.maximum(champ.cast_lock_until, jnp.where(kit_all.cast_started | (kit_all.cast_lockout > 0),
+                                                        now + kit_all.cast_lockout, 0.0))
     act = out.active                                                  # item-active cast times (Hydra)
     lock = jnp.maximum(lock, jnp.where(act.used & ~act.can_move, now + act.cast_time, 0.0))
     item_lock = jnp.maximum(champ.item_cast_until, jnp.where(act.used & act.can_move, now + act.cast_time, 0.0))

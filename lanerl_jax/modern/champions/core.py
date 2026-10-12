@@ -64,6 +64,7 @@ class KitCtx(NamedTuple):
     attack_target_kind: Any = None   # (C,) int32 world kind of the unit the holder attacks (KIND_NONE if none)
     rooted: Any = None               # (C,) bool (Jax Q cantCastWhileRooted)
     tenacity: Any = None             # (C,) holders' tenacity (stats and kit sources); None = 0 (Nasus W ramp)
+    move_speed: Any = None           # (C,) holders' move speed after slows (Renekton E dash speed); None = 0
 
     @property
     def total_ad(self):
@@ -83,10 +84,12 @@ class KitOut(NamedTuple):
     cast_started: Any                # (C,) bool
     cast_slot: Any                   # (C,) int32, -1 none
     cast_id: Any                     # (C,) int32, 0 none
-    cast_lockout: Any                # (C,) seconds the champion can't move/attack
+    cast_lockout: Any                # (C,) seconds from now the champion can't move/attack/cast (any hook)
     cleanse_slow: Any = None         # (C,) bool: remove the holder's slows (Garen Q); None = never
     attack_target: Any = None        # (C,) int32: issue a basic-attack order on this unit (-1 none; Jax Q
                                      # on an enemy champion); None = never
+    strip_shields: Any = None        # (C, N) bool: destroy the unit's shields before this tick's damage (Renekton
+                                     # empowered W); None = never
 
 
 class KitDefense(NamedTuple):
@@ -212,7 +215,7 @@ def no_out(c: int, n: int) -> KitOut:
                   ShieldGrant(zs, zs.astype(jnp.int32), zs, zs), zc,
                   jnp.zeros((c, 4), bool), jnp.zeros((c, 4), jnp.float32), jnp.zeros((c,), bool),
                   jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32), zc,
-                  jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32))
+                  jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c, n), bool))
 
 
 def out(c: int, n: int, **fields) -> KitOut:
@@ -224,6 +227,7 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
     for p in parts:
         cs = p.cleanse_slow if p.cleanse_slow is not None else jnp.zeros((c,), bool)
         at = p.attack_target if p.attack_target is not None else jnp.full((c,), -1, jnp.int32)
+        ss = p.strip_shields if p.strip_shields is not None else jnp.zeros((c, n), bool)
         acc = KitOut(
             D.concat_packets(acc.packets, p.packets), merge_cc(acc.cc, p.cc),
             Dash(*(jnp.where(p.dash.active, b, a) for a, b in zip(acc.dash, p.dash))),
@@ -235,7 +239,7 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
             jnp.where(p.cast_started, p.cast_slot, acc.cast_slot),
             jnp.where(p.cast_started, p.cast_id, acc.cast_id),
             jnp.maximum(acc.cast_lockout, p.cast_lockout), acc.cleanse_slow | cs,
-            jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32))
+            jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32), acc.strip_shields | ss)
     return acc
 
 

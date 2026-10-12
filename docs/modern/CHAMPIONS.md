@@ -1,7 +1,8 @@
-# CHAMPIONS.md — Garen, Jax and Nasus, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus and Renekton, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, `test_nasus.py`, `test_nasus_world.py`.
+in `core.py`; `renekton.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, `test_nasus.py`, `test_nasus_world.py`,
+`test_renekton.py`, `test_renekton_world.py`.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -14,7 +15,7 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
   Calculation `mStat` numbers were checked against the item calculations: 2 is AD, 4 is attack speed, 6 is MR,
   7 is move speed, 8 is crit chance, 9 is crit damage and 12 is health.
 - **WIKI**: `Template:Data Garen/*` and `Template:Data Jax/*` ability data and the patch history pages,
-  fetched raw on 2026-10-02; `Template:Data Nasus/*` and `Nasus/Patch history` cached raw in
+  fetched raw on 2026-10-02; `Template:Data Nasus/*`, `Template:Data Renekton/*` and their patch histories cached raw in
   `cdragon-16.19/wiki-2026-10-12-champions/`.
 - **PATCH**: Riot patch notes 26.1–26.19. These Summoner's Rift changes apply: 26.1 (Garen E crit is 30% of
   bonus crit damage; Jax passive gains a level-19 breakpoint), 26.5 (Garen Q MS duration, E AD ratio),
@@ -96,6 +97,36 @@ twice as fast), 26.19 (Q base 30–110). The 26.16 "Nasus" block that also lists
 4. **Fury of the Sands size.** The size increase only widens the storm; Nasus's gameplay and pathing radii do not
    grow.
 
+## Renekton (58)
+
+Fury is kit state: 0–100 (`arIncrements` 50 × `arMaxSegments` 2); the world's mana stays 0 and the observation's
+resource bar shows Fury / 100 (`champions.resource_fraction`). Rune legality treats him as resourceless (RUNES.md
+§2.2). Rift patches: 26.17 W cooldown 16–8 s (client); 26.19 R +20 Fury after W bug fix. The 26.17 note's "(removed
+Arena Mod)" refers to the Arena override; the client value is the Rift one.
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| REN.P1 | Each landed basic attack on a non-structure gives 5 Fury. Below 50% max health every Fury gain is ×1.5. Fury is capped at 100 and reset to 0 on death. | 5; ×1.5 | CLIENT `FuryPerAttack`, `LowHealthPercentThreshold`, `FuryIncreasePercent`; WIKI; death reset INFERRED-M |
+| REN.P2 | After 12 s without attacking, dealing or taking damage, Renekton loses 1 Fury every 0.25 s. Dominus keeps the clock refreshed. | 12 s | CLIENT `InCombatDuration`; WIKI |
+| REN.P3 | With at least 50 Fury, the next Q, W or Dice (not Slice) consumes 50 Fury and is empowered. Empowered casts generate no Fury. | 50 | WIKI |
+| REN.Q1 | Instant cleave within 400 (480 during Dominus, center to edge): `BaseDamage + 1.0 bonus AD` physical (empowered `EmpoweredBaseDamage + 1.4 bonus AD`). Heals per enemy hit: champions `ChampHeal + 0.17 bonus AD`, others `BaseMinionHeal + 0.02 bonus AD`, capped at `BasicHealCap`; empowered heals ×3 with `EmpoweredHealCap`. Fury: 2.5 per non-champion, 10 per champion, at most 30 per cast. For 0.25 s Renekton cannot attack, cast E or cast R. | 7 s; 60–180, 90–270; caps 50–150 / 200–600 | CLIENT `Range`, `UltimateRangeMod`, calculations; WIKI lockout |
+| REN.W1 | Attack reset; for 6 s the next basic attack has 175 range (+50) and strikes 2 times (3 empowered) for `BaseDamagePerHit + 0.75 AD` each, stunning 0.75 s (1.5 s). The attack's own AD hit stands for the first strike (it crits as the attack does); the kit adds the rest as one packet. The empowered version first destroys the target's shields unless it is a monster. Not consumed against structures. Cooldown starts post-effect (hit, dodge or expiry). After the strikes Renekton is locked 0.525 s. | 16–8 s; 5–65 + 75% AD | CLIENT `BuffDuration`, `TotalADPerHit`, `StunDuration`, `EnragedStunDuration`; WIKI range, lockout, shields, structures, V14.4 monsters |
+| REN.W2 | Fury: 5 per strike (10) plus 10 against a champion; the empowered version gives none. | +10 vs champions | CLIENT `BonusFuryVsChamps`; WIKI |
+| REN.E1 | Slice: dashes a fixed 450 toward the cursor at `750 + move speed`; enemies within 50 of the path (plus their radius) take `BaseDamage + 0.9 bonus AD` physical once. Fury 2 per non-champion, 10 per champion, at most 30 per dash. Not while rooted or in the Q lockout. The cooldown starts at the Slice cast. | 16–10 s; 40–160 | CLIENT `castRangeDisplayOverride`, `DashSpeed`, `mLineWidth`, `cantCastWhileRooted`; WIKI `cdstart = on-cast` |
+| REN.E2 | If Slice hit an enemy, Dice can be cast within 4 s of the dash's end (no cooldown check): the same dash and damage; empowered it adds `EnragedBaseDamage + 1.35 bonus AD` and `EnragedArmorShred` % armor reduction for 4 s. | +70–250; 25–35% | CLIENT `DiceTimer`, `EnragedArmorShred`, `ShredTimer`; WIKI |
+| REN.R1 | After 0.25 s, for 15 s: `HealthGain` max health, +25 attack range, +20 Fury, then +5 Fury per second while below 75. Every 0.5 s enemies within 375 (center to edge) take `(AuraDamagePerSecond + 0.1 AP + 0.1 bonus AD) × 0.5` magic damage. Ends on death; the cooldown starts at cast. | 120/100/80 s; 300/500/700; 30–120 per tick | CLIENT `TotalDamagePerSecond`, `TickRate`, `FuryOnCast`, `FuryPerSecond`; WIKI radius, 75 cap, range |
+
+### Renekton approximations
+
+1. **W strikes.** The strikes are one attack hit plus one kit packet, so item and rune on-hit effects fire once,
+   not per strike. The 0.2 s empowered-attack cast time (wiki "estimated") is not modelled; the attack keeps its stat
+   windup. Casting R does not end the post-strike lockout.
+2. **Slice and Dice geometry.** Kit dashes ignore terrain like Jax Q, so a dash into a wall ends inside it and the
+   world ejects him. The hit width (client `mLineWidth` 50 measured from the path) is INFERRED-M. The Dice window is
+   measured from the end of the Slice dash (wiki: "within the next 4 seconds", INFERRED-M).
+3. **Fury at the edges.** Low-health ×1.5 multiplies each source's amount after its per-cast cap. Dominus size is not
+   in the hitbox.
+
 ## Approximations that remain
 
 1. **Garen passive inputs.** The kit sees only damage packets. Zero-damage enemy abilities and summoner spells
@@ -129,7 +160,11 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitCtx.tenacity` | (C,) | Holders' tenacity (stats and kit sources, Garen W). Times the Nasus W steps. |
 | `POINT_TARGET_RANGE` | per slot | Walk-in range of a location-targeted spell (Nasus E 650); the world queues the cast and walks to the point. |
 | `debuffs(...).attack_speed_cripple` | (N,) | Kit attack-speed cripple (Nasus W), applied to the composed champion attack speed. |
+| `KitCtx.move_speed` | (C,) | Holders' move speed after slows (Renekton E dash speed). |
+| `KitOut.strip_shields` | (C, N) bool | Destroy the unit's shields before this tick's damage (Renekton empowered W). |
+| `KitOut.cast_lockout` | (C,) | Now honoured from any hook, not only on a cast start (Renekton W post-strike lockout). |
+| `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350).
+and `acquisition_range` (Nasus 350, Renekton 600).

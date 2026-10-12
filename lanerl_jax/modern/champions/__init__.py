@@ -17,10 +17,11 @@ from ..items.effects.core import Debuffs, combine_debuffs
 from . import garen
 from . import jax as jax_kit
 from . import nasus
+from . import renekton
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus)
+KITS = (garen, jax_kit, nasus, renekton)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -130,6 +131,16 @@ def ghosted(state: ChampionState, kctx: KitCtx) -> Any:
     return out
 
 
+def resource_fraction(state: ChampionState, champion_ids, mana_fraction) -> Any:
+    """(C,) resource bar: a kit's own resource where it has one (Renekton Fury), else ``mana_fraction``."""
+    out = jnp.asarray(mana_fraction, jnp.float32)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "resource"):
+            r = k.resource(st, jnp.asarray(champion_ids, jnp.int32))
+            out = jnp.where(jnp.isnan(r), out, r)
+    return out
+
+
 def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
     """(N,) target-side reductions from kits (Garen E armor shred)."""
     n = units.x.shape[0]
@@ -138,4 +149,5 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "debuffs", "dodging_units", "ghosted"]
+           "attack_mods", "debuffs", "dodging_units", "ghosted", "resource_fraction", "point_target_ranges",
+           "unit_target_ranges"]

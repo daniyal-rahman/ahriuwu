@@ -74,6 +74,10 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                      cc_on_hit=jnp.zeros((c, n), bool), sight=s.sight | s.prev.death_seen, visible=sc.vis_c,
                      epic_takedown=s.prev.epic, large_monster_kill=s.prev.large,
                      in_river=V.in_river(cfg, s.x[:c], s.y[:c]))
+    shields_in = s.shields
+    if kit_all.strip_shields is not None:                             # Renekton empowered W, before the hit
+        strip = jnp.any(kit_all.strip_shields, axis=0)
+        shields_in = shields_in._replace(amount=jnp.where(strip[:, None], 0.0, shields_in.amount))
     items0 = s.combat.items
     items0 = items0._replace(actives=A.with_aim(items0.actives, orders.cast_target, orders.cast_x, orders.cast_y))
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
@@ -82,7 +86,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                       U.item_units(s), attack=sc.attack,
                       cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,
-                      hp=s.hp, max_hp=s.max_hp, shields=s.shields, status=s.status, kills=s.prev.kills,
+                      hp=s.hp, max_hp=s.max_hp, shields=shields_in, status=s.status, kills=s.prev.kills,
                       holder_stats=sc.static, cc=cc_items, ev=ev,
                       main_capacity=cfg.layout.packet_capacity, follow_up_capacity=cfg.layout.follow_up_capacity)
     hp, max_hp, shields, status = out.hp, out.max_hp, out.shields, out.status

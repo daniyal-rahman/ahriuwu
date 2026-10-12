@@ -157,7 +157,7 @@ def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, no
                     attack_target_kind=jnp.where(s.champ.attack_order >= 0,
                                                  s.kind[jnp.clip(s.champ.attack_order, 0, s.kind.shape[0] - 1)],
                                                  W.KIND_NONE).astype(jnp.int32),
-                    rooted=s.cc.root_until[:c] > now)
+                    rooted=s.cc.root_until[:c] > now, move_speed=st.move_speed)
 
 
 def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:
