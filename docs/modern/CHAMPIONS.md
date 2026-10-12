@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus and Renekton, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton and Darius, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, `test_nasus.py`, `test_nasus_world.py`,
-`test_renekton.py`, `test_renekton_world.py`.
+in `core.py`; `renekton.py`, `darius.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, `test_nasus.py`,
+`test_nasus_world.py`, `test_renekton.py`, `test_renekton_world.py`, `test_darius.py`, `test_darius_world.py`.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -15,7 +15,7 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
   Calculation `mStat` numbers were checked against the item calculations: 2 is AD, 4 is attack speed, 6 is MR,
   7 is move speed, 8 is crit chance, 9 is crit damage and 12 is health.
 - **WIKI**: `Template:Data Garen/*` and `Template:Data Jax/*` ability data and the patch history pages,
-  fetched raw on 2026-10-02; `Template:Data Nasus/*`, `Template:Data Renekton/*` and their patch histories cached raw in
+  fetched raw on 2026-10-02; `Template:Data {Nasus,Renekton,Darius}/*` and their patch histories cached raw in
   `cdragon-16.19/wiki-2026-10-12-champions/`.
 - **PATCH**: Riot patch notes 26.1–26.19. These Summoner's Rift changes apply: 26.1 (Garen E crit is 30% of
   bonus crit damage; Jax passive gains a level-19 breakpoint), 26.5 (Garen Q MS duration, E AD ratio),
@@ -127,6 +127,32 @@ Arena Mod)" refers to the Arena override; the client value is the Rift one.
 3. **Fury at the edges.** Low-health ×1.5 multiplies each source's amount after its per-cast cap. Dominus size is not
    in the hitbox.
 
+## Darius (122)
+
+Rift patches since 26.1: 26.4 Hemorrhage monster damage ×2.5 (client `MonsterMod`). Gameplay radius is the default 65
+(V14.9); pathing radius 25.77.
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| DAR.P1 | Damaging basic attacks and abilities (Q blade, W, R after its damage) apply a Hemorrhage stack for 5 s (refreshed, max 5) to non-structures. Each stack deals `13 → 30` (linear in level) `+ 0.3 bonus AD` physical over the 5 s, a quarter every 1.25 s from the first stack (4 ticks per application); ×2.5 against monsters. Dead units lose their stacks. | 5 stacks | CLIENT `BleedDamagePerStack`, `MaxStacks`, `BleedDuration`, `MonsterMod`; WIKI 1.25 s ticks (client `SecondsPerTick` 1.26) |
+| DAR.P2 | Five stacks on an enemy champion, or an R execution, grant Noxian Might for 5 s: `30 + 5/level` to 10, `+10/level` 11–13, `+25/level` from 14 bonus AD, and every application sets five stacks. | 30–230 AD | CLIENT `NoxianMightBonusAD`; WIKI |
+| DAR.Q1 | Ghosted for 1 s; after 0.75 s (Darius may walk but not attack, cast E or R) the axe hits enemies within 460 (center to edge) for `BaseDamage + TotalADRatio % AD` physical; centres within 240 take 35% and get no stack. Heals 17% of missing health per champion or large monster hit by the blade, at most 3. Cooldown starts at the swing. | 25–45 mana; 9–5 s; 50–170 + 100–140% AD | CLIENT `TotalADRatio`, `InnerCircleDamagePercent`, `MissingHealthHeal`; WIKI radii, heft, `cdstart = post-effect` |
+| DAR.W1 | Attack reset; the next attack within 4 s gains 25 range and an uncancellable windup, deals `(ADRatio − 1) × AD` bonus physical damage (× crit damage when the attack crits; basic and spell damage) and slows 90% for 1 s. Cooldown post-effect. | 40 mana; 5 s; 40–60% AD | CLIENT `ADRatio`, `SlowPercent`, `SlowDuration`; WIKI |
+| DAR.W2 | If the empowered attack kills its target, the mana is refunded and W restarts at half its cooldown. | 50% | CLIENT `PercentCDRefund`; WIKI |
+| DAR.E1 | Passive: `PassivePercentArmorPen` % armor penetration once learned. | 20–40% | CLIENT; PATCH V14.2 |
+| DAR.E2 | After a 0.25 s cast time, every enemy within 535 (center to edge) and 25° of the cast direction (plus its angular radius) is pulled to 150 from Darius and knocked up for the pull plus a 0.5 s rebound, then slowed 40% for 1 s. Darius cannot move or cast Q/R for 0.4 s after the cast time, then attacks the nearest pulled champion (else unit). Cooldown at cast. | 70–30 mana; 26–16 s | CLIENT `castConeAngle`, `SlowPercent`; WIKI radius, rebound, lockout, follow-up attack |
+| DAR.R1 | Enemy champion within 475 (center to edge); not while rooted. Darius leaps to it over the 0.3667 s cast time, then deals `(RBaseDamage + 0.75 bonus AD) × (1 + 0.2 × stacks)` true damage and applies a stack. Cooldown at cast. | 100/100/0 mana; 120/100/80 s; 125/250/375 | CLIENT `Damage`, `RDamagePercentPerHemoStack`, `castRange`, `mCastTime`, `cantCastWhileRooted` |
+| DAR.R2 | If the target dies within 0.15 s, Darius gains Noxian Might; at ranks 1–2 he may recast within 20 s at no cost and without a cooldown check (the first cast's cooldown keeps running), at rank 3 the cooldown resets. Q and E are blocked for 0.25 s after the cast time. | 20 s | CLIENT `RRecastDuration`; WIKI |
+
+### Darius approximations
+
+1. **Apprehend motion.** The pull and rebound are one straight move from the target to the rebound point over the
+   knock-up, at `|distance − 150| / time`. The pull speed (1500, the sweep's client `missileSpeed`) is INFERRED-L.
+   Pulls ignore terrain and collision like kit dashes. Darius's 0.4 s post-cast lock also blocks attacks.
+2. **Noxian Guillotine.** Fear and slow of nearby minions and monsters after an execution are not modelled (the world
+   has no fear). The leap is a dash to the target over the cast time; it does not stop at thin walls.
+3. **Hemorrhage reveal** (sight of a target the bleed will kill) and Apprehend's sight are not modelled.
+
 ## Approximations that remain
 
 1. **Garen passive inputs.** The kit sees only damage packets. Zero-damage enemy abilities and summoner spells
@@ -164,7 +190,8 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitOut.strip_shields` | (C, N) bool | Destroy the unit's shields before this tick's damage (Renekton empowered W). |
 | `KitOut.cast_lockout` | (C,) | Now honoured from any hook, not only on a cast start (Renekton W post-strike lockout). |
 | `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
+| `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted (Darius E). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton 600).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600).

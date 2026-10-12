@@ -90,10 +90,18 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cx = jnp.where(s_out.teleport_arrive, s_out.teleport_x, cx)
     cy = jnp.where(s_out.teleport_arrive, s_out.teleport_y, cy)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))
+    # Kit displacements (Darius E): straight toward the kit's point at its speed, ignoring terrain and collision.
+    disp, d_x, d_y, d_v = K.displacement(sc.kits, sc.kctx, n)
+    disp = disp & s.alive
+    ddx, ddy = d_x - s.x, d_y - s.y
+    dd = jnp.sqrt(ddx * ddx + ddy * ddy)
+    df = jnp.where(dd > 1e-6, jnp.minimum(d_v * dt, dd) / jnp.maximum(dd, 1e-6), 0.0)
+    x = jnp.where(disp, s.x + ddx * df, x).astype(x.dtype)
+    y = jnp.where(disp, s.y + ddy * df, y).astype(y.dtype)
     # Collision (COLLISION.md). Wards don't collide; structures block only through their navgrid pads (their
     # circles reach past the pads that routes are baked around and pinned units).
     ghost = (jnp.zeros((n,), bool).at[:c].set(s_out.ghosted | (now < dash_until) | K.ghosted(sc.kits, sc.kctx))
-             | LA.minion_ghosted(lane_ai, units, now))
+             | LA.minion_ghosted(lane_ai, units, now) | disp)
     collide = s.alive & (s.kind != W.KIND_WARD) & ~W.is_structure(s.kind)
     path_r = UC.pathing_radius(s.kind, s.sub, s.radius, cfg.champion_base.pathing_radius)
     x, y = UC.resolve(s.x, s.y, x, y, radius=path_r, collide=collide,

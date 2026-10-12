@@ -1,0 +1,585 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "baseValue": 5.199999809265137,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 175.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 1.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 37.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseDamageModifiable": {
+      "baseValue": 64.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseHPModifiable": {
+      "baseValue": 652.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 32.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 340.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 2.0,
+      "__type": "ModifiableFloat"
+    },
+    "basicAttack": {
+      "mAttackDelayCastOffsetPercent": -0.10000000149011612,
+      "mAttackDelayCastOffsetPercentAttackSpeedRatio": 0.5,
+      "mAttackProbability": 0.5,
+      "__type": "AttackSlotData"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 5.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 114.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.1899999976158142,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 2.049999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "primaryAbilityResource": {
+      "arType": 0,
+      "{726ee5cd}": {
+        "baseValue": 263.0,
+        "__type": "ModifiableFloat"
+      },
+      "{6216bf7b}": {
+        "baseValue": 58.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 1.3200000524520874,
+        "__type": "ModifiableFloat"
+      },
+      "{3a509002}": {
+        "baseValue": 0.07000000029802322,
+        "__type": "ModifiableFloat"
+      },
+      "__type": "AbilityResourceSlotInfo"
+    },
+    "acquisitionRange": 600.0,
+    "pathfindingCollisionRadius": 25.766599655151367,
+    "selectionRadius": 120.0
+  },
+  "patch": "26.19",
+  "slots": {
+    "Q": "Characters/Darius/Spells/DariusCleaveAbility/DariusCleave",
+    "W": "Characters/Darius/Spells/DariusNoxianTacticsONHAbility/DariusNoxianTacticsONH",
+    "E": "Characters/Darius/Spells/DariusAxeGrabConeAbility/DariusAxeGrabCone",
+    "R": "Characters/Darius/Spells/DariusExecuteAbility/DariusExecute",
+    "Passive": "Characters/Darius/Spells/DariusHemoMarkerAbility/DariusHemoMarker"
+  },
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/darius/darius.bin.json",
+  "spells": {
+    "Characters/Darius/Spells/DariusCleaveAbility/DariusCleave": {
+      "calculations": {
+        "BladeDamage": {
+          "tooltipOnly": true,
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mSubpart": {
+                "mPart1": {
+                  "mDataValue": "TotalADRatio",
+                  "__type": "NamedDataValueCalculationPart"
+                },
+                "mPart2": {
+                  "mNumber": 0.009999999776482582,
+                  "__type": "NumberCalculationPart"
+                },
+                "__type": "ProductOfSubPartsCalculationPart"
+              },
+              "__type": "StatBySubPartCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "HandleDamage": {
+          "mMultiplier": {
+            "mNumber": 0.3499999940395355,
+            "__type": "NumberCalculationPart"
+          },
+          "tooltipOnly": true,
+          "mModifiedGameCalculation": "BladeDamage",
+          "__type": "GameCalculationModified"
+        }
+      },
+      "cooldown": {
+        "values": [
+          10.0,
+          9.0,
+          8.0,
+          7.0,
+          6.0,
+          5.0,
+          5.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          25.0,
+          30.0,
+          35.0,
+          40.0,
+          45.0,
+          50.0
+        ],
+        "{0a3e0478}": 25.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "MissingHealthHeal",
+          "values": [
+            17.0,
+            17.0,
+            17.0,
+            17.0,
+            17.0,
+            17.0,
+            17.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "TotalADRatio",
+          "values": [
+            90.0,
+            100.0,
+            110.0,
+            120.0,
+            130.0,
+            140.0,
+            150.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseDamage",
+          "values": [
+            10.0,
+            50.0,
+            80.0,
+            110.0,
+            140.0,
+            170.0,
+            200.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "InnerCircleDamagePercent",
+          "values": [
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MissingHealPercent",
+          "values": [
+            51.0,
+            51.0,
+            51.0,
+            51.0,
+            51.0,
+            51.0,
+            51.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Darius/Spells/DariusNoxianTacticsONHAbility/DariusNoxianTacticsONH": {
+      "calculations": {
+        "EmpoweredAttackDamage": {
+          "tooltipOnly": true,
+          "mFormulaParts": [
+            {
+              "mStat": 2,
+              "mSubpart": {
+                "mDataValue": "ADRatio",
+                "__type": "NamedDataValueCalculationPart"
+              },
+              "__type": "StatBySubPartCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          5.0,
+          5.0,
+          5.0,
+          5.0,
+          5.0,
+          5.0,
+          5.0
+        ],
+        "{0a3e0478}": 5.0,
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          40.0
+        ],
+        "{0a3e0478}": 40.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "SlowPercent",
+          "values": [
+            90.0,
+            90.0,
+            90.0,
+            90.0,
+            90.0,
+            90.0,
+            90.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "PercentCDRefund",
+          "values": [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ADRatio",
+          "values": [
+            1.5,
+            1.399999976158142,
+            1.4500000476837158,
+            1.5,
+            1.5499999523162842,
+            1.600000023841858,
+            1.649999976158142
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowDuration",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Darius/Spells/DariusAxeGrabConeAbility/DariusAxeGrabCone": {
+      "cooldown": {
+        "values": [
+          26.0,
+          26.0,
+          23.5,
+          21.0,
+          18.5,
+          16.0,
+          16.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          70.0,
+          60.0,
+          50.0,
+          40.0,
+          30.0,
+          20.0
+        ],
+        "{0a3e0478}": 70.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "PassivePercentArmorPen",
+          "values": [
+            20.0,
+            20.0,
+            25.0,
+            30.0,
+            35.0,
+            40.0,
+            45.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowPercent",
+          "values": [
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowDuration",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Darius/Spells/DariusExecuteAbility/DariusExecute": {
+      "calculations": {
+        "Damage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "RBaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 0.75,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "MaximumDamage": {
+          "mMultiplier": {
+            "mNumber": 2.0,
+            "__type": "NumberCalculationPart"
+          },
+          "tooltipOnly": true,
+          "mModifiedGameCalculation": "Damage",
+          "__type": "GameCalculationModified"
+        }
+      },
+      "cooldown": {
+        "values": [
+          120.0,
+          120.0,
+          100.0,
+          80.0,
+          6.0,
+          6.0,
+          6.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          100.0,
+          100.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "RBaseDamage",
+          "values": [
+            0.0,
+            125.0,
+            250.0,
+            375.0,
+            500.0,
+            625.0,
+            750.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RDamagePercentPerHemoStack",
+          "values": [
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RRecastDuration",
+          "values": [
+            20.0,
+            20.0,
+            20.0,
+            20.0,
+            20.0,
+            20.0,
+            20.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Darius/Spells/DariusHemoMarkerAbility/DariusHemoMarker": {
+      "calculations": {
+        "BleedDamagePerStack": {
+          "mFormulaParts": [
+            {
+              "mStartValue": 13.0,
+              "mEndValue": 30.0,
+              "__type": "ByCharLevelInterpolationCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 0.30000001192092896,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "NoxianMightBonusAD": {
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 30.0,
+              "mInitialBonusPerLevel": 5.0,
+              "mBreakpoints": [
+                {
+                  "mLevel": 11,
+                  "mBonusPerLevelAtAndAfter": 10.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 14,
+                  "mBonusPerLevelAtAndAfter": 25.0,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "values": [
+        {
+          "name": "MonsterMod",
+          "values": [
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SecondsPerTick",
+          "values": [
+            1.2599999904632568,
+            1.2599999904632568,
+            1.2599999904632568,
+            1.2599999904632568,
+            1.2599999904632568,
+            1.2599999904632568,
+            1.2599999904632568
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BleedDuration",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MaxStacks",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    }
+  }
+}
