@@ -90,6 +90,35 @@ twice as fast), 26.19 (Q base 30–110). The 26.16 "Nasus" block that also lists
 | NAS.R1 | After a 0.2 s cast time, for 15 s: `BonusHealth` max health, `InitialResistGain` armor and MR, 50 attack range (adds to Q's 50), Siphoning Strike's base cooldown halved. Ends on death. The cooldown starts at cast. | 100 mana; 120/100/80 s; 300/450/600, 40/55/70 | CLIENT, PATCH V13.12 |
 | NAS.R2 | Every 0.5 s (30 ticks) enemies within `400 + 0.8 × bonus size %` (424/428/432, center to edge) take `(AOEDamagePercent + 1% per 100 AP) × 0.5` of their max health as magic damage, capped at 120 per tick (240 per second) against every unit type. | 3/4/5% per s | CLIENT `DamageCalc`, `TickRate`, `MaxDamageCap`, `SizeIncreasePercent`; WIKI radius and cap |
 
+### Nasus open items (must all close before Nasus is registered)
+
+Live client is 16.20; Nasus's Rift gameplay data is byte-identical to 16.19 (diff of the CDragon 16.19 / 16.20 bins:
+only stat-stone event ids and an alternate-mode value block differ), so 16.20 measurements apply.
+
+Engineering (no new facts needed): cost and cooldown after the cast time, death cancels (WIKI Cast time: "most
+abilities incur their cooldown and resource cost after their cast time completes", "cannot be interrupted ... except
+by death"); Wither cancels without cost if the target dies, becomes untargetable or leaves sight during the cast
+(WIKI unit-targeted cancel conditions); spell shields block Wither (zero-damage spell carrier, blocked casts drop
+their CC); Wither interrupts the target's windup on application (WIKI bug note); Wither's cripple ends with its slow
+(cleanse, Garen Q); Q crit uses the attack's crit multiplier; Q stacks only when a Q-attack packet kills (turrets
+included); Q on wards; up to three concurrent Spirit Fires; Spirit Fire sight (200); Fury of the Sands size grows
+the gameplay radius (WIKI Unit size: Nasus 112 at rank 3 = 80 x 1.4) and the storm reaches 320 + gameplay radius,
+at least 400.
+
+Measurements (Practice Tool unless noted; OBS 60 fps, 1920x1080, cursor captured, camera locked on Nasus, HUD and
+damage numbers on; target dummies have gameplay radius 65 — do not use "Add 100 Max HP", it doubles their size):
+
+| ID | Question | Protocol |
+|---|---|---|
+| N1 | Spirit Fire: time from the start of the cast to the first damage, and to each tick. | Rank 1 E, dummy 300 away. Cast E with the cursor on the dummy's centre; refresh cooldowns; 10 casts. I read the cast-bar start, the initial number and the 5 tick numbers frame by frame. |
+| N2 | Spirit Fire radius (client 380, wiki 400). | Dummy fixed. Cast E at points moving away from the dummy in roughly 20-unit steps (about 10 px) until the initial hit stops landing; then repeat on the other side. Keep the camera locked so I can convert cursor pixels to world units. |
+| N3 | Spirit Fire sight duration (wiki "2.5 s, estimated") and radius 200. | Cast E into an unseen brush or fogged area within 650 where nothing else gives sight; 5 casts. |
+| N4 | Fury of the Sands: first storm tick after the cast, tick spacing, and radius at ranks 1 and 3. | Dummies at about 350, 420, 450 and 500 from Nasus (spawn them, then stand still). Cast R at level 6 and again at level 16 (refresh cooldowns). |
+| N5 | Can Siphoning Strike be pressed again while empowered, and does that change anything? | Press Q, wait 1 s, press Q again, then attack a dummy; also press Q twice and watch the Q icon. |
+| N6 | Does the halved Q cooldown from R keep applying after R ends (remaining time jumps or not)? | Level 16, R, then Q a dummy about 1 s before R ends; read the Q cooldown number before and after R expires. Also Q at 13 s into R. |
+| N7 | Wither's "too far away" cancel distance during its 0.25 s cast. | Custom game vs a bot (needs a moving target), with replay saved: cast W at the bot near max range while it walks away, about 15 times. Your replay extraction gives the bot's position and whether the cooldown started. |
+| N8 | Does Q need the attack to land the kill, or does any Nasus damage on that tick count? | Covered by the rule text ("If this attack kills the target"); no test. |
+
 ### Nasus approximations
 
 1. **Q on wards and structures.** Champion attacks on wards are ward hits that never reach the kit, so Q is not
