@@ -63,6 +63,7 @@ class KitCtx(NamedTuple):
     # Optional world inputs (defaults keep the kits self-contained):
     attack_target_kind: Any = None   # (C,) int32 world kind of the unit the holder attacks (KIND_NONE if none)
     rooted: Any = None               # (C,) bool (Jax Q cantCastWhileRooted)
+    tenacity: Any = None             # (C,) holders' tenacity (stats and kit sources); None = 0 (Nasus W ramp)
 
     @property
     def total_ad(self):

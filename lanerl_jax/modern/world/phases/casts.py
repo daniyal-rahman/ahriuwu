@@ -63,6 +63,10 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                  slow=caps["slow"][:c])
     units = U.units_view(s)
     kctx = V.kit_ctx(s, cfg, st, caps, now, dt)
+    # Kit attack-speed cripples (Nasus W) scale the composed attack speed; nothing in ``kctx`` depends on it.
+    cripple = K.debuffs(s.kits, kctx, units).attack_speed_cripple[:c]
+    st = compose(cfg.champion_base, level, summ_world, adaptive_physical=cfg.adaptive_physical,
+                 slow=caps["slow"][:c], cripple=cripple)
     ictx = V.item_ctx(s, cfg, st_static, now, dt)
     locked = now < champ.cast_lock_until
     item_casting = now < champ.item_cast_until

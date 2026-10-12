@@ -57,7 +57,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     units = U.units_view(s)
     # Champions: ordered target, else idle auto-acquisition, else attack-move.
     t_ok = (attack_order >= 0) & s.alive[jnp.clip(attack_order, 0, n - 1)]
-    acq = LA.champion_acquisition_range(sc.reach, cfg.champion_base.attack_range)
+    acq = LA.champion_acquisition_range(sc.reach, cfg.champion_base.attack_range, cfg.champion_base.acquisition_range)
     unit_c = jnp.arange(c, dtype=jnp.int32)
     auto = LA.idle_acquire(units, unit_c, vis_c, acq)
     idle = ~t_ok & ~moving & ~amove.active & s.alive[:c] & (auto >= 0)

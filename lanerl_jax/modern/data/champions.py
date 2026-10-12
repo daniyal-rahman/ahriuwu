@@ -1,4 +1,5 @@
-"""Pinned 26.19 Garen/Jax records extracted from Riot's shipped BIN files (no network at runtime).
+"""Pinned 26.19 champion records extracted from Riot's shipped BIN files (no network at runtime; regenerate with
+``build_champions``).
 
 Data Dragon reports zero AD growth in this patch; the BIN's ``damagePerLevelModifiable`` is used instead.
 """
@@ -7,7 +8,7 @@ from functools import lru_cache
 
 from . import PATCH_DIR
 
-IDS = {"Garen": 86, "Jax": 24}
+IDS = {"Garen": 86, "Jax": 24, "Nasus": 75}
 
 
 @lru_cache(None)
@@ -23,7 +24,8 @@ def stat(name, key):
 
 def spell(name, slot):
     """Spell record of ``slot`` (Q/W/E/R/Passive)."""
-    return next(v for k, v in champion(name)["spells"].items() if k.endswith(f"/{name}{slot}"))
+    rec = champion(name)
+    return rec["spells"][rec["slots"][slot]]
 
 
 def values(name, slot, key):

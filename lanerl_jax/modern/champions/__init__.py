@@ -16,10 +16,11 @@ from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
 from . import garen
 from . import jax as jax_kit
+from . import nasus
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit)
+KITS = (garen, jax_kit, nasus)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -42,14 +43,25 @@ def _all(fn_name, state, kctx, units, *args) -> tuple[ChampionState, KitOut]:
     return ChampionState(*(p[0] for p in pairs)), merge_out([p[1] for p in pairs], c, n)
 
 
-def unit_target_ranges(champion_ids) -> Any:
-    """(C, 4) center-to-edge cast range of each slot's unit-targeted spell (0: not unit-targeted);
-    the world walks a champion into this range before casting (``UNIT_TARGET_RANGE`` per kit)."""
+def _slot_table(champion_ids, attr) -> Any:
     ids = jnp.asarray(champion_ids, jnp.int32)
     out = jnp.zeros(ids.shape + (4,), jnp.float32)
     for k in KITS:
-        out = jnp.where((ids == k.ID)[:, None], jnp.asarray(k.UNIT_TARGET_RANGE, jnp.float32)[None, :], out)
+        row = jnp.asarray(getattr(k, attr, (0.0, 0.0, 0.0, 0.0)), jnp.float32)
+        out = jnp.where((ids == k.ID)[:, None], row[None, :], out)
     return out
+
+
+def unit_target_ranges(champion_ids) -> Any:
+    """(C, 4) center-to-edge cast range of each slot's unit-targeted spell (0: not unit-targeted);
+    the world walks a champion into this range before casting (``UNIT_TARGET_RANGE`` per kit)."""
+    return _slot_table(champion_ids, "UNIT_TARGET_RANGE")
+
+
+def point_target_ranges(champion_ids) -> Any:
+    """(C, 4) center-to-point cast range of each slot's location-targeted spell that walks into range
+    (0: none); ``POINT_TARGET_RANGE`` per kit (Nasus E)."""
+    return _slot_table(champion_ids, "POINT_TARGET_RANGE")
 
 
 def cast(state: ChampionState, kctx: KitCtx, units, order) -> tuple[ChampionState, KitOut]:

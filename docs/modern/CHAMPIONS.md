@@ -1,18 +1,21 @@
-# CHAMPIONS.md — Garen and Jax, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax and Nasus, 26.19 (client 16.19.8230722)
 
-**Status (2026-10-02).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, contract in
-`core.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`.
+**Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
+in `core.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, `test_nasus.py`, `test_nasus_world.py`.
+Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
 
-- **CLIENT**: the pinned BIN snapshots `lanerl_jax/modern/data/26.19/champions/{garen,jax}.json` (spell data values,
-  cooldowns, mana), and the full CDragon 16.19 records in
-  `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/{garen,jax}.bin.json`: spell calculations,
+- **CLIENT**: the pinned BIN snapshots `lanerl_jax/modern/data/26.19/champions/<name>.json` (spell data values,
+  cooldowns, mana, record radii and acquisition range), and the full CDragon 16.19 records in
+  `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/<name>.bin.json` (Nasus, Malphite, Renekton, Darius and
+  Tryndamere fetched 2026-10-12, checksums in `SHA256SUMS`): spell calculations,
   `mOverrideAttackTime`, `mRollForCriticalHit`, cast times, spell tags, plus the 16.19 string table tooltips.
   Calculation `mStat` numbers were checked against the item calculations: 2 is AD, 4 is attack speed, 6 is MR,
   7 is move speed, 8 is crit chance, 9 is crit damage and 12 is health.
 - **WIKI**: `Template:Data Garen/*` and `Template:Data Jax/*` ability data and the patch history pages,
-  fetched raw on 2026-10-02.
+  fetched raw on 2026-10-02; `Template:Data Nasus/*` and `Nasus/Patch history` cached raw in
+  `cdragon-16.19/wiki-2026-10-12-champions/`.
 - **PATCH**: Riot patch notes 26.1–26.19. These Summoner's Rift changes apply: 26.1 (Garen E crit is 30% of
   bonus crit damage; Jax passive gains a level-19 breakpoint), 26.5 (Garen Q MS duration, E AD ratio),
   26.12 (Jax Q costs 50 mana, Jax E deals 4% max HP) and 26.14 (Garen R base damage 125/200/275). The Garen
@@ -59,6 +62,40 @@
 | JAX.R2 | Only if the swing hits a champion: for 8 s, bonus armor equal to `BaseResists + 0.4 × bonus AD + (champions − 1) × (ResistsPerExtraTarget + 0.1 × bonus AD)`, and `MRMult` (0.6) × that as MR. The value is fixed when the swing lands. | 45/60/75, +20/25/30 | CLIENT `BaseArmor`/`BonusArmor`/`BaseMR`; WIKI "If this hits a champion". Snapshot: INFERRED-M |
 | JAX.R3 | Passive: each landed attack adds a stack (max 2, 2.5 s, refreshed). The attack that lands at 2 stacks (1 while R2 is active) consumes them and deals `PassiveBaseDamage + 0.6 × AP` magic damage as an on-hit proc, ×0.5 against structures. That attack's windup cannot be cancelled. Against wards the proc triggers but is not consumed and has no effect. Dodged attacks add no stacks. | 75/130/185 | CLIENT, WIKI |
 
+## Nasus (75)
+
+Patches that apply on the Rift (client values already include them): 26.16 (Q stacks 4, 10 on large kills), 26.17
+(passive 10/15/20%), 26.18 (Q stacks no longer crit; Wither steps every 1 s, scaled by tenacity, and no longer ramps
+twice as fast), 26.19 (Q base 30–110). The 26.16 "Nasus" block that also lists passive 14/17/20 ⇒ 10/15/20 and W mana
+80 ⇒ 100 is a non-Rift mode section; the client keeps W at 80 mana.
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| NAS.P1 | Soul Eater: life steal 10% at levels 1–6, 15% at 7–12, 20% from 13. | 10/15/20% | CLIENT `LifestealTooltip` breakpoints, PATCH 26.17 |
+| NAS.Q1 | The next basic attack within 10 s gains 50 range and an uncancellable windup. Q resets the attack timer, has no cast time and cannot be recast while the window is open. Cooldown starts post-effect: when the attack lands or is dodged, when the window expires, or on death. | 20 mana; 7.5–3.5 s | CLIENT `BuffDuration`, `BonusRange`, `Trait_AttackReset`; WIKI `cdstart = post-effect` |
+| NAS.Q2 | The attack deals `BonusDamage + stacks` bonus physical damage as a separate packet with life steal. The flat `BonusDamage` crits with the attack (× crit damage); the stacks never crit. | 30–110 | CLIENT `CritDamage` calculation; PATCH 26.18; WIKI ("basic damage … also spell damage") |
+| NAS.Q3 | If the empowered attack's target dies to Nasus on the tick it lands, Nasus gains 4 permanent stacks, or 10 for champions (killing blow only), siege and super minions, and large monsters (camp large monsters, Voidgrubs, Herald, Baron, drakes, Elder). | 4 / 10 | CLIENT `BasicStacks`, `BigStacks`; tooltip; PATCH 26.16 |
+| NAS.W1 | Targets an enemy champion within 700 (center to edge). After a 0.25 s cast time it slows by 35% for 5 s and cripples attack speed by 75% of the slow. The cooldown starts at cast. | 80 mana; 15–11 s | CLIENT `SlowBase`, `Duration`, `AttackSpeedSlowMult`; WIKI cast time |
+| NAS.W2 | The slow grows by `SlowPerTick` at 1, 2, 3 and 4 s (47–95% at 4 s). With target tenacity T the steps come every `(1 − T)` s and the slow ends at `5 (1 − T)` s; each step re-applies the slow with the remaining base duration so the world's tenacity rule gives that same end. The cripple uses the base slow value (slow resist does not reduce it). | +3/6/9/12/15% per s | CLIENT `SlowPerTick`, `MaxSlowTooltipOnly`; PATCH 26.18; WIKI notes |
+| NAS.E1 | Location within 650 (walks into range). After a 0.25 s cast time and a 0.25 s delay, deals `InitialHitDamage + 0.6 AP` magic damage to enemies within 380 of the point (center to edge). Dying during the cast time cancels it; the delay does not lock Nasus. | 60–100 mana; 12 s; 50–170 | CLIENT `castRange`, `castRadius`, `InitialDamage`; WIKI cast time and delay |
+| NAS.E2 | The fire then burns for 5 s: one tick per second (5 ticks) of `DamagePerTick + 0.12 AP` magic damage, and enemies inside lose `ArmorShredPercent` of their armor, lingering 1 s after they leave or the fire ends. | 10–34 per s; 30–50% | CLIENT `TotalDotDamage` = per tick × 5 s and tooltip "over 5 seconds"; WIKI V14.18 "per second", linger |
+| NAS.R1 | After a 0.2 s cast time, for 15 s: `BonusHealth` max health, `InitialResistGain` armor and MR, 50 attack range (adds to Q's 50), Siphoning Strike's base cooldown halved. Ends on death. The cooldown starts at cast. | 100 mana; 120/100/80 s; 300/450/600, 40/55/70 | CLIENT, PATCH V13.12 |
+| NAS.R2 | Every 0.5 s (30 ticks) enemies within `400 + 0.8 × bonus size %` (424/428/432, center to edge) take `(AOEDamagePercent + 1% per 100 AP) × 0.5` of their max health as magic damage, capped at 120 per tick (240 per second) against every unit type. | 3/4/5% per s | CLIENT `DamageCalc`, `TickRate`, `MaxDamageCap`, `SizeIncreasePercent`; WIKI radius and cap |
+
+### Nasus approximations
+
+1. **Q on wards and structures.** Champion attacks on wards are ward hits that never reach the kit, so Q is not
+   spent on a ward and gives no stacks. Turret kills give no stacks either, because the world's takedown matrix
+   (`Kills.killed_units`) has no structure columns.
+2. **Wither cleanse.** Cleanse or Garen Q end the world slow but the kit's cripple keeps running to the original
+   end (the client treats both as one debuff). Wither's first-application windup interrupt (a listed bug) is not
+   modelled. Holder tenacity from summoner Cleanse is not in `KitCtx.tenacity`.
+3. **Spirit Fire geometry.** One fire per Nasus: at extreme ability haste (cooldown under 5.5 s) a new cast replaces
+   the burning one. Sight of the area is not modelled. Radius is the client `castRadius` 380; the wiki lists 400.
+   The 0.25 s delay after the cast time is the wiki's reading (INFERRED-M).
+4. **Fury of the Sands size.** The size increase only widens the storm; Nasus's gameplay and pathing radii do not
+   grow.
+
 ## Approximations that remain
 
 1. **Garen passive inputs.** The kit sees only damage packets. Zero-damage enemy abilities and summoner spells
@@ -89,3 +126,10 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitAttackMods.uncancellable` | (C,) bool | The next attack's windup cannot be cancelled (Garen Q, Jax W, the Jax R passive proc). |
 | `KitAttackMods.extra_range` | (C,) | Already in the contract, but `world.tick` does not read it. Garen Q and Jax W each give +50. |
 | `ghosted(state, kctx)` | (C,) bool | Garen E ghosting, to be ORed into the collision `ghost` mask. |
+| `KitCtx.tenacity` | (C,) | Holders' tenacity (stats and kit sources, Garen W). Times the Nasus W steps. |
+| `POINT_TARGET_RANGE` | per slot | Walk-in range of a location-targeted spell (Nasus E 650); the world queues the cast and walks to the point. |
+| `debuffs(...).attack_speed_cripple` | (N,) | Kit attack-speed cripple (Nasus W), applied to the composed champion attack speed. |
+
+Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
+(`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
+and `acquisition_range` (Nasus 350).

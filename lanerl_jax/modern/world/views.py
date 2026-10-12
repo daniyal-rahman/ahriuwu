@@ -130,7 +130,7 @@ def static_stats(s: ModernState, cfg: WorldConfig, caps: dict, now, dt) -> tuple
     st0 = compose(cfg.champion_base, level, base_static, adaptive_physical=cfg.adaptive_physical)
     base_static = combine_stats(base_static, monster_buff_stats(s, cfg, st0, now))
     st0 = compose(cfg.champion_base, level, base_static, adaptive_physical=cfg.adaptive_physical)
-    static = combine_stats(base_static, K.stats(s.kits, kit_ctx(s, cfg, st0, caps, now, dt)))
+    static = combine_stats(base_static, K.stats(s.kits, _kit_ctx(s, cfg, st0, caps, now, dt)))
     return static, compose(cfg.champion_base, level, static, adaptive_physical=cfg.adaptive_physical)
 
 
@@ -142,7 +142,7 @@ def champion_stats(s: ModernState, cfg: WorldConfig) -> ChampionStats:
                    adaptive_physical=cfg.adaptive_physical, slow=caps["slow"][:N_CHAMPIONS])
 
 
-def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:
+def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:
     c = N_CHAMPIONS
     lv = s.econ.level
     return K.KitCtx(unit=jnp.arange(c, dtype=jnp.int32), champion_id=cfg.champion_ids, team=s.team[:c],
@@ -158,6 +158,13 @@ def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now
                                                  s.kind[jnp.clip(s.champ.attack_order, 0, s.kind.shape[0] - 1)],
                                                  W.KIND_NONE).astype(jnp.int32),
                     rooted=s.cc.root_until[:c] > now)
+
+
+def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:
+    """Holder context of the kit hooks; ``tenacity`` folds the kits' own tenacity (Garen W) into the stat."""
+    ctx = _kit_ctx(s, cfg, st, caps, now, dt)
+    bonus = K.defense(s.kits, ctx).tenacity_bonus
+    return ctx._replace(tenacity=(1.0 - (1.0 - st.tenacity) * (1.0 - bonus)).astype(jnp.float32))
 
 
 def item_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, now, dt) -> Ctx:

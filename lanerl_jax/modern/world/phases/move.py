@@ -95,7 +95,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     ghost = (jnp.zeros((n,), bool).at[:c].set(s_out.ghosted | (now < dash_until) | K.ghosted(sc.kits, sc.kctx))
              | LA.minion_ghosted(lane_ai, units, now))
     collide = s.alive & (s.kind != W.KIND_WARD) & ~W.is_structure(s.kind)
-    x, y = UC.resolve(s.x, s.y, x, y, radius=UC.pathing_radius(s.kind, s.sub, s.radius), collide=collide,
+    path_r = UC.pathing_radius(s.kind, s.sub, s.radius, cfg.champion_base.pathing_radius)
+    x, y = UC.resolve(s.x, s.y, x, y, radius=path_r, collide=collide,
                       ghosted=ghost, moving=active, goal_x=gx, goal_y=gy, team=team_mv,
                       clearance=jnp.minimum(s.radius, cfg.routes.radius), terrain=terrain, dt=dt,
                       movers=cfg.layout.ward0)

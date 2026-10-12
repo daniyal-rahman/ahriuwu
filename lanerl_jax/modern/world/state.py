@@ -214,7 +214,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         bonus_points=jnp.zeros((c,), jnp.int32), granted=jnp.zeros((c,), jnp.int32),
         last_cast=jnp.full((c, 4), -1e9, jnp.float32), cs=jnp.zeros((c,), jnp.int32),
         seen_cast=jnp.full((c, 4), -1e9, jnp.float32))
-    radius = jnp.where(kind == W.KIND_CHAMPION, 65.0, jnp.where(structure, towers.radius, 48.0)).astype(jnp.float32)
+    radius = jnp.where(structure, towers.radius, 48.0).astype(jnp.float32).at[:c].set(cfg.champion_base.gameplay_radius)
     alive = (kind == W.KIND_CHAMPION) | structure
     reveal = MV.init_reveal(c)
     trinkets = [next((i for i in lo.items if i in (3340, 3363, 3364)), 3340) for lo in cfg.loadouts]

@@ -36,7 +36,8 @@ TURRET_GLOBAL_GOLD = (50., 25., 25., 50.)
 INHIBITOR_RADIUS, NEXUS_RADIUS = 213.75, 304.0    # client pathfinding radii (TOWERS §1.4)
 FIRST_TURRET_GOLD = 300.
 INHIBITOR_LAST_HIT_GOLD = 50.
-CHAMPION_ACQUISITION_RANGE = 400.0      # Garen and Jax CharacterRecord acquisitionRange
+CHAMPION_ACQUISITION_RANGE = 400.0      # CharacterRecord acquisitionRange default (Garen, Jax; per champion in
+                                        # ChampionBase.acquisition_range)
 ATTACK_MOVE_ARRIVE = 10.0               # order point reached (INFERRED L)
 
 

@@ -25,7 +25,7 @@ from .data import PATCH_DIR
 from .jungle.camps import CHARACTERS
 from .map.terrain import is_walkable, team_view
 
-CHAMPION_PATHING_RADIUS = 35.0                               # client pathfindingCollisionRadius (Garen, Jax)
+CHAMPION_PATHING_RADIUS = 35.0                               # client pathfindingCollisionRadius default (Garen, Jax)
 MINION_PATHING_RADIUS = (35.7437, 35.7437, 55.7437, 55.5208)  # melee, caster, siege, super (MINIONS §1.1)
 _JUNGLE = PATCH_DIR / "jungle_client.json"
 
@@ -47,9 +47,10 @@ def monster_pathing_radii() -> tuple:
     return tuple(float(data[c]["pathing_radius"]) for c in CHARACTERS)
 
 
-def pathing_radius(kind: Any, sub: Any, gameplay_radius: Any) -> Any:
-    """(N,) collision radius: champions 35, minions by type, camp monsters by record; epic monsters and others keep
-    their gameplay radius (Baron's client pathing radius is 0, yet it blocks; INFERRED L)."""
+def pathing_radius(kind: Any, sub: Any, gameplay_radius: Any, champion_radius: Any = None) -> Any:
+    """(N,) collision radius: champions by record (``champion_radius`` (C,) for units 0..C-1, else 35), minions by
+    type, camp monsters by record; epic monsters and others keep their gameplay radius (Baron's client pathing
+    radius is 0, yet it blocks; INFERRED L)."""
     kind, sub = jnp.asarray(kind), jnp.asarray(sub, jnp.int32)
     r = jnp.asarray(gameplay_radius, jnp.float32)
     mon = jnp.asarray(monster_pathing_radii(), jnp.float32)
@@ -57,7 +58,10 @@ def pathing_radius(kind: Any, sub: Any, gameplay_radius: Any) -> Any:
     is_camp = (kind == W.KIND_MONSTER) & (sub >= 0) & (sub < mon.shape[0])
     r = jnp.where(is_camp, mon[jnp.clip(sub, 0, mon.shape[0] - 1)], r)
     r = jnp.where(kind == W.KIND_MINION, mtab[jnp.clip(sub, 0, 3)], r)
-    return jnp.where(kind == W.KIND_CHAMPION, CHAMPION_PATHING_RADIUS, r).astype(jnp.float32)
+    champ = jnp.full(r.shape, CHAMPION_PATHING_RADIUS, jnp.float32)
+    if champion_radius is not None:
+        champ = champ.at[:jnp.shape(champion_radius)[0]].set(jnp.asarray(champion_radius, jnp.float32))
+    return jnp.where(kind == W.KIND_CHAMPION, champ, r).astype(jnp.float32)
 
 
 def contact_distance(ri, rj):

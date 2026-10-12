@@ -41,6 +41,7 @@ from . import world as MS
 from .actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from, screen_usage
 from .actions import PROFILE as MA_PROFILE
 from .core import types as W
+from .data import loadouts as DL
 from .rl.learner import Transition, VecRunner, make_batch_fn, make_learner, ppo_learn
 from .rl.policy import LanePolicy, PolicyConfig
 from .rl.ppo import PPOConfig, factored_log_prob
@@ -92,11 +93,13 @@ class ModernEnvState(NamedTuple):
 
 
 def default_loadouts(names=("Garen", "Jax")):
-    """Doran's Blade + Health Potion, Garen's default rune page, a Precision/Resolve page for Jax."""
+    """Doran's Blade + Health Potion, Garen's default rune page, a Precision/Resolve page for Jax, Riot's
+    recommended top page for every other champion (``data.loadouts``)."""
     pages = {"Garen": RD.GAREN_DEFAULT_PAGE,
              "Jax": RD.RunePage(RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8451),
                                 (5005, 5008, 5001))}
-    return tuple(MS.Loadout(n, items=(1055, 2003), rune_page=pages[n]) for n in names)
+    return tuple(MS.Loadout(n, items=(1055, 2003), rune_page=pages[n] if n in pages else DL.rune_pages(n)[0])
+                 for n in names)
 
 
 def _outer_turrets(wcfg) -> np.ndarray:

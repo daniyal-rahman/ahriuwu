@@ -19,14 +19,16 @@ if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
 from lanerl_jax.modern import actions as MA  # noqa: E402
+from lanerl_jax.modern import champions as K  # noqa: E402
 from lanerl_jax.modern import obs as OB  # noqa: E402
 from lanerl_jax.modern import world as MS  # noqa: E402
 from lanerl_jax.modern.obs import GLOBAL_DIM, N_SLOTS, NORM_DIST  # noqa: E402
 from lanerl_jax.modern.screen import screen_to_lane  # noqa: E402
 
+_KITS = tuple(k.NAME.lower() for k in K.KITS)
 SELF = {name: i for i, name in enumerate((
     "s", "n", "hp", "level", "gold", "cs", "cd_q", "cd_w", "cd_e", "cd_r", "ad", "ap", "armor", "mr", "dead",
-    "recalling", "garen", "jax", "enemy_garen", "enemy_jax", "mana", "shield", "summ_d", "summ_f", "next_level",
+    "recalling", *_KITS, *(f"enemy_{k}" for k in _KITS), "mana", "shield", "summ_d", "summ_f", "next_level",
     "quest", "quest_done", "in_combat", "ms", "range"))}
 
 

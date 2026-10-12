@@ -42,6 +42,9 @@ class ChampionBase(NamedTuple):
     mana_per_level: Any = 0.0
     mana_regen: Any = 0.0
     mana_regen_per_level: Any = 0.0
+    gameplay_radius: Any = 65.0     # overrideGameplayCollisionRadius (champion default 65)
+    pathing_radius: Any = 35.0      # pathfindingCollisionRadius
+    acquisition_range: Any = 400.0  # acquisitionRange
 
 
 # AbilityResourceSlotInfo hashed fields: base mana, per level, regen, regen per level (identified on Jax's record).
@@ -53,6 +56,9 @@ def champion_base(names) -> ChampionBase:
     def field(name, key, default=0.0):
         rec = champion(name)["character"]
         return float(rec[key]["baseValue"]) if key in rec else default
+
+    def scalar(name, key, default):
+        return float(champion(name)["character"].get(key, default))
 
     def resource(name, key):
         par = champion(name)["character"].get("primaryAbilityResource", {})
@@ -75,7 +81,10 @@ def champion_base(names) -> ChampionBase:
             hp_regen=field(name, "baseStaticHPRegenModifiable"),
             hp_regen_per_level=field(name, "hpRegenPerLevelModifiable"),
             base_mana=resource(name, AR_BASE), mana_per_level=resource(name, AR_PER_LEVEL),
-            mana_regen=resource(name, AR_REGEN), mana_regen_per_level=resource(name, AR_REGEN_PER_LEVEL)))
+            mana_regen=resource(name, AR_REGEN), mana_regen_per_level=resource(name, AR_REGEN_PER_LEVEL),
+            gameplay_radius=scalar(name, "overrideGameplayCollisionRadius", 65.0),
+            pathing_radius=scalar(name, "pathfindingCollisionRadius", 35.0),
+            acquisition_range=scalar(name, "acquisitionRange", 400.0)))
     return ChampionBase(*(jnp.asarray([getattr(r, f) for r in rows], jnp.float32) for f in ChampionBase._fields))
 
 

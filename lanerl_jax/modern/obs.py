@@ -37,7 +37,7 @@ from .screen import target_on_screen
 from .world.views import champion_stats
 
 PROFILE = "modern-world-v1"
-MODERN_WORLD_SELF_DIM = 32
+MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion one-hots
 MODERN_ENTITY_DIM = 20
 N_SLOTS, GLOBAL_DIM = 32, 6
 NORM_DIST = NORM_XY = NORM_GOLD = 3000.0

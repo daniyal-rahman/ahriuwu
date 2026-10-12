@@ -1,0 +1,675 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "baseValue": 4.699999809265137,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 125.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.6380000114440918,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 3.4800000190734863,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.6380000114440918,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 34.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseDamageModifiable": {
+      "baseValue": 67.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseHPModifiable": {
+      "baseValue": 650.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 32.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 350.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.7999999523162842,
+      "__type": "ModifiableFloat"
+    },
+    "basicAttack": {
+      "mAttackDelayCastOffsetPercent": -0.09860365092754364,
+      "mAttackProbability": 0.5,
+      "__type": "AttackSlotData"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 4.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 104.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.18000000715255737,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 2.049999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "primaryAbilityResource": {
+      "arType": 0,
+      "{726ee5cd}": {
+        "baseValue": 326.0,
+        "__type": "ModifiableFloat"
+      },
+      "{6216bf7b}": {
+        "baseValue": 62.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 1.4900000095367432,
+        "__type": "ModifiableFloat"
+      },
+      "{3a509002}": {
+        "baseValue": 0.10000000149011612,
+        "__type": "ModifiableFloat"
+      },
+      "__type": "AbilityResourceSlotInfo"
+    },
+    "acquisitionRange": 350.0,
+    "pathfindingCollisionRadius": 50.0,
+    "overrideGameplayCollisionRadius": 80.0,
+    "selectionRadius": 135.0
+  },
+  "patch": "26.19",
+  "slots": {
+    "Q": "Characters/Nasus/Spells/NasusQAbility/NasusQ",
+    "W": "Characters/Nasus/Spells/NasusWAbility/NasusW",
+    "E": "Characters/Nasus/Spells/NasusEAbility/NasusE",
+    "R": "Characters/Nasus/Spells/NasusRAbility/NasusR",
+    "Passive": "Characters/Nasus/Spells/NasusPassiveAbility/NasusPassive"
+  },
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/nasus/nasus.bin.json",
+  "spells": {
+    "Characters/Nasus/Spells/NasusQAbility/NasusQ": {
+      "calculations": {
+        "TotalDamage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BonusDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            },
+            {
+              "mBuffName": "{1b1d7345}",
+              "mIconKey": "%i:nasusStackIcon%",
+              "mCoefficient": 1.0,
+              "__type": "BuffCounterByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "CritDamage": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mExpandedTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mPart1": {
+                "mStat": 9,
+                "mCoefficient": 1.0,
+                "__type": "StatByCoefficientCalculationPart"
+              },
+              "mPart2": {
+                "mSubparts": [
+                  {
+                    "mDataValue": "BonusDamage",
+                    "__type": "NamedDataValueCalculationPart"
+                  },
+                  {
+                    "mStat": 2,
+                    "mCoefficient": 1.0,
+                    "__type": "StatByCoefficientCalculationPart"
+                  }
+                ],
+                "__type": "SumOfSubPartsCalculationPart"
+              },
+              "__type": "ProductOfSubPartsCalculationPart"
+            },
+            {
+              "mBuffName": "{1b1d7345}",
+              "mIconKey": "%i:nasusStackIcon%",
+              "mCoefficient": 1.0,
+              "__type": "BuffCounterByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          8.5,
+          7.5,
+          6.5,
+          5.5,
+          4.5,
+          3.5,
+          2.5
+        ],
+        "{0a3e0478}": 8.5,
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          20.0,
+          20.0,
+          20.0,
+          20.0,
+          20.0,
+          20.0
+        ],
+        "{0a3e0478}": 20.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BonusRange",
+          "values": [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BonusDamage",
+          "values": [
+            10.0,
+            30.0,
+            50.0,
+            70.0,
+            90.0,
+            110.0,
+            130.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BasicStacks",
+          "values": [
+            4.0,
+            4.0,
+            4.0,
+            4.0,
+            4.0,
+            4.0,
+            4.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BigStacks",
+          "values": [
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BuffDuration",
+          "values": [
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Nasus/Spells/NasusWAbility/NasusW": {
+      "cooldown": {
+        "values": [
+          16.0,
+          15.0,
+          14.0,
+          13.0,
+          12.0,
+          11.0,
+          11.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0
+        ],
+        "{0a3e0478}": 80.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "SlowBase",
+          "values": [
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowPerTick",
+          "values": [
+            0.0,
+            3.0,
+            6.0,
+            9.0,
+            12.0,
+            15.0,
+            18.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MaxSlowTooltipOnly",
+          "values": [
+            35.0,
+            47.0,
+            59.0,
+            71.0,
+            83.0,
+            95.0,
+            107.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AttackSpeedSlowMult",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Duration",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Nasus/Spells/NasusEAbility/NasusE": {
+      "calculations": {
+        "TotalDotDamage": {
+          "mMultiplier": {
+            "mDataValue": "Duration",
+            "__type": "NamedDataValueCalculationPart"
+          },
+          "mSimpleTooltipCalculationDisplay": 6,
+          "tooltipOnly": true,
+          "mFormulaParts": [
+            {
+              "mDataValue": "DamagePerTick",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mCoefficient": 0.11999999731779099,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "InitialDamage": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "tooltipOnly": true,
+          "mFormulaParts": [
+            {
+              "mDataValue": "InitialHitDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mCoefficient": 0.6000000238418579,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          12.0,
+          12.0,
+          12.0,
+          12.0,
+          12.0,
+          12.0,
+          12.0
+        ],
+        "{0a3e0478}": 12.0,
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          60.0,
+          70.0,
+          80.0,
+          90.0,
+          100.0,
+          100.0
+        ],
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "DamagePerTick",
+          "values": [
+            10.0,
+            10.0,
+            16.0,
+            22.0,
+            28.0,
+            34.0,
+            34.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ArmorShredPercent",
+          "values": [
+            -0.30000001192092896,
+            -0.30000001192092896,
+            -0.3499999940395355,
+            -0.4000000059604645,
+            -0.44999998807907104,
+            -0.5,
+            -0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Duration",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "InitialHitDamage",
+          "values": [
+            50.0,
+            50.0,
+            80.0,
+            110.0,
+            140.0,
+            170.0,
+            170.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Nasus/Spells/NasusRAbility/NasusR": {
+      "calculations": {
+        "DamageCalc": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "AoeDamagePercent",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mCoefficient": 9.999999747378752e-05,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          120.0,
+          120.0,
+          100.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          100.0,
+          100.0,
+          100.0,
+          100.0,
+          100.0,
+          0.0
+        ],
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BonusHealth",
+          "values": [
+            150.0,
+            300.0,
+            450.0,
+            600.0,
+            750.0,
+            900.0,
+            1050.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AttackRangeIncrease",
+          "values": [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AOEDamagePercent",
+          "values": [
+            0.019999999552965164,
+            0.029999999329447746,
+            0.03999999910593033,
+            0.05000000074505806,
+            0.05999999865889549,
+            0.07000000029802322,
+            0.07999999821186066
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "TickRate",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "InitialResistGain",
+          "values": [
+            25.0,
+            40.0,
+            55.0,
+            70.0,
+            85.0,
+            100.0,
+            115.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MaxDamageCap",
+          "values": [
+            240.0,
+            240.0,
+            240.0,
+            240.0,
+            240.0,
+            240.0,
+            240.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Duration",
+          "values": [
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QCDR",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SizeIncreasePercent",
+          "values": [
+            0.25,
+            0.30000001192092896,
+            0.3499999940395355,
+            0.4000000059604645,
+            0.44999998807907104,
+            0.5,
+            0.550000011920929
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseAoERadius",
+          "values": [
+            376.0,
+            376.0,
+            376.0,
+            376.0,
+            376.0,
+            376.0,
+            376.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MinAoERadius",
+          "values": [
+            400.0,
+            400.0,
+            400.0,
+            400.0,
+            400.0,
+            400.0,
+            400.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Nasus/Spells/NasusPassiveAbility/NasusPassive": {
+      "calculations": {
+        "LifestealTooltip": {
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 10.0,
+              "mBreakpoints": [
+                {
+                  "mLevel": 7,
+                  "mAdditionalBonusAtThisLevel": 5.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 13,
+                  "mAdditionalBonusAtThisLevel": 5.0,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      }
+    }
+  }
+}

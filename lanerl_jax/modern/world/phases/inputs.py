@@ -68,30 +68,34 @@ def queue_casts(s: ModernState, cfg: WorldConfig, orders: ModernOrders, champ, s
     c, n = N_CHAMPIONS, cfg.n_units
     ar = jnp.arange(c)
     rng = KC.unit_target_ranges(cfg.champion_ids)                                   # (C, 4)
+    prng = KC.point_target_ranges(cfg.champion_ids)
 
-    def needs(slot, target):
+    def needs(slot, target, px, py):
         sl = jnp.clip(slot, 0, 3)
-        r = rng[ar, sl]
+        r, pr = rng[ar, sl], prng[ar, sl]
         t = jnp.clip(target, 0, n - 1)
         d = jnp.sqrt((s.x[:c] - s.x[t]) ** 2 + (s.y[:c] - s.y[t]) ** 2)
-        far = (slot >= 0) & (target >= 0) & (r > 0) & (d > r + s.radius[t] - CAST_RANGE_SLACK)
+        dp = jnp.sqrt((s.x[:c] - px) ** 2 + (s.y[:c] - py) ** 2)
+        far = (slot >= 0) & (((target >= 0) & (r > 0) & (d > r + s.radius[t] - CAST_RANGE_SLACK))
+                             | ((pr > 0) & (dp > pr - CAST_RANGE_SLACK)))
         cd = champ.cooldowns[ar, sl]
         blocked = (slot >= 0) & ((now < champ.cast_lock_until) | (now < champ.item_cast_until)
                                  | ((cd > 0) & (cd <= CAST_BUFFER_S)))
         return far, blocked
 
     incoming = orders.cast_slot >= 0
-    far_in, blocked_in = needs(orders.cast_slot, orders.cast_target)
+    far_in, blocked_in = needs(orders.cast_slot, orders.cast_target, orders.cast_x, orders.cast_y)
     hold_in = incoming & (far_in | blocked_in)
     q = champ.queued_cast
     keep = (q.slot >= 0) & ~incoming & ~new_order & (now < q.until) \
-        & ((q.target < 0) | (seen(q.target) & s.alive[jnp.clip(q.target, 0, n - 1)]))
+        & ((q.target < 0) | (prng[ar, jnp.clip(q.slot, 0, 3)] > 0)
+           | (seen(q.target) & s.alive[jnp.clip(q.target, 0, n - 1)]))
     q = QueuedCast(*(jnp.where(keep, a, b) for a, b in zip(q, no_queued_cast(c))))
     q = QueuedCast(jnp.where(hold_in, orders.cast_slot, q.slot).astype(jnp.int32),
                    jnp.where(hold_in, orders.cast_target, q.target).astype(jnp.int32),
                    jnp.where(hold_in, orders.cast_x, q.x), jnp.where(hold_in, orders.cast_y, q.y),
                    jnp.where(hold_in, jnp.where(far_in, jnp.inf, now + CAST_BUFFER_S), q.until))
-    far_q, blocked_q = needs(q.slot, q.target)
+    far_q, blocked_q = needs(q.slot, q.target, q.x, q.y)
     fire = (q.slot >= 0) & ~hold_in & ~far_q & ~blocked_q
     go_now = incoming & ~hold_in
     orders = orders._replace(
@@ -139,7 +143,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     moving = jnp.where(cast_chase, True, jnp.where(cast_fired, False, moving))
     attack_order = jnp.where(cast_chase, -1, attack_order)
     t_q = jnp.clip(queued.target, 0, n - 1)
-    goal = jnp.where(cast_chase[:, None], jnp.stack([s.x[t_q], s.y[t_q]], -1), goal)
+    to_point = KC.point_target_ranges(cfg.champion_ids)[jnp.arange(c), jnp.clip(queued.slot, 0, 3)] > 0
+    q_goal = jnp.where(to_point[:, None], jnp.stack([queued.x, queued.y], -1), jnp.stack([s.x[t_q], s.y[t_q]], -1))
+    goal = jnp.where(cast_chase[:, None], q_goal, goal)
     amove = s.amove
     amove = AttackMove(active=jnp.where(new_order, am_req, amove.active),
                        x=jnp.where(am_req, orders.move_x, amove.x), y=jnp.where(am_req, orders.move_y, amove.y),
