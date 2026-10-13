@@ -45,18 +45,22 @@ def spawn_minions(s: ModernState, cfg: WorldConfig, now) -> ModernState:
 
 
 def skill_up(s: ModernState, cfg: WorldConfig, orders: ModernOrders) -> Any:
-    """Spend available skill points: chosen slot, else the champion's default order."""
+    """Spend available skill points: chosen slot, else the champion's default order. Basic ranks are capped at
+    ceil(level / 2) and R at 6/11/16 (§8.3), each by the kit's rank count; innate ranks cost no point (Jayce)."""
     ranks = s.champ.ranks
     level = s.econ.level
     points = E.skill_points(level) + s.champ.bonus_points
-    spent = jnp.sum(ranks, axis=1)
+    max_r, innate = KC.rank_tables(cfg.champion_ids)
+    spent = jnp.sum(ranks - innate, axis=1)
     order = jnp.asarray([list(V.skill_order(cfg, c)) + [0] * (20 - len(V.skill_order(cfg, c)))
                          for c in range(N_CHAMPIONS)], jnp.int32)
     auto = jnp.take_along_axis(order, jnp.clip(spent, 0, 19)[:, None], axis=1)[:, 0]
     auto_on = jnp.asarray([lo.auto_skill for lo in cfg.loadouts])
     slot = jnp.where(orders.level_up >= 0, orders.level_up, auto)
-    cap = jnp.where(slot == 3, E.max_rank(level, ultimate=True), E.max_rank(level))
     slot = jnp.clip(slot, 0, 3)
+    lv = jnp.minimum(level, E.SKILL_POINT_LEVELS)
+    cap = jnp.where(slot == 3, E.max_rank(level, ultimate=True), (lv + 1) // 2)
+    cap = jnp.minimum(cap, jnp.take_along_axis(max_r, slot[:, None], axis=1)[:, 0])
     cur = jnp.take_along_axis(ranks, slot[:, None], axis=1)[:, 0]
     ok = (points > spent) & (cur < cap) & ((orders.level_up >= 0) | auto_on)
     return ranks + (jnp.arange(4)[None, :] == slot[:, None]) * ok[:, None]
@@ -67,7 +71,7 @@ def queue_casts(s: ModernState, cfg: WorldConfig, orders: ModernOrders, champ, s
     this tick's cast, queue, walking into range, walk-in cast fired)``. Any new order clears the queue."""
     c, n = N_CHAMPIONS, cfg.n_units
     ar = jnp.arange(c)
-    rng = KC.unit_target_ranges(cfg.champion_ids)                                   # (C, 4)
+    rng = KC.unit_target_ranges(cfg.champion_ids, s.kits)                           # (C, 4), per stance
     prng = KC.point_target_ranges(cfg.champion_ids)
 
     def needs(slot, target, px, py):

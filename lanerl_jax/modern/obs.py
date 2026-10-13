@@ -157,7 +157,8 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         summ_cd[0], summ_cd[1], nxt, jnp.clip(state.econ.quest.points[me] / THRESHOLD, 0.0, 1.0),
         state.econ.quest.complete[me].astype(jnp.float32), in_combat.astype(jnp.float32),
         st.move_speed[me] / 500.0, st.attack_range[me] / 600.0,
-        (E.skill_points(level[me]) + c.bonus_points[me] - jnp.sum(c.ranks[me])).astype(jnp.float32) / 4.0,
+        (E.skill_points(level[me]) + c.bonus_points[me]
+         - jnp.sum(c.ranks[me] - K.rank_tables(cid)[1][me])).astype(jnp.float32) / 4.0,
         state.wards.trinket.charges[me].astype(jnp.float32) / 2.0])
     assert self_vec.shape[0] == MODERN_WORLD_SELF_DIM
 

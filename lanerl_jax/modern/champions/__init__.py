@@ -4,7 +4,8 @@
 ``TRAITS`` (rune legality), ``UNIT_TARGET_RANGE``, ``State``/``init`` and the hooks ``cast``, ``periodic``,
 ``on_attack``, ``on_hit``, ``on_damage``, ``on_takedown``, ``stats``, ``defense``, ``attack_mods``, ``debuffs`` and
 optionally ``ghosted``, ``dodging``, ``immobile``, ``displacement``, ``displacement_immune``, ``hp_cap``,
-``mana_override``, ``size`` and ``resource`` (contract: ``core``). Every hook runs every kit for every holder and each kit
+``mana_override``, ``size``, ``resource``, ``attack_missile_speed`` and ``unit_target_range`` (contract: ``core``).
+``MAX_RANKS`` / ``INNATE_RANKS`` override the 5/5/5/3 rank-up table (Jayce). Every hook runs every kit for every holder and each kit
 gates itself on ``KitCtx.champion_id``, so shapes stay fixed.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ from . import darius
 from . import fiora
 from . import garen
 from . import jax as jax_kit
+from . import jayce
 from . import ksante
 from . import malphite
 from . import nasus
@@ -30,7 +32,7 @@ from . import yone
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille, ksante)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille, ksante, jayce)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -62,10 +64,39 @@ def _slot_table(champion_ids, attr) -> Any:
     return out
 
 
-def unit_target_ranges(champion_ids) -> Any:
+def unit_target_ranges(champion_ids, state: ChampionState | None = None) -> Any:
     """(C, 4) center-to-edge cast range of each slot's unit-targeted spell (0: not unit-targeted);
-    the world walks a champion into this range before casting (``UNIT_TARGET_RANGE`` per kit)."""
-    return _slot_table(champion_ids, "UNIT_TARGET_RANGE")
+    the world walks a champion into this range before casting (``UNIT_TARGET_RANGE`` per kit, or the kit's
+    ``unit_target_range`` hook given ``state``: Jayce's stance)."""
+    out = _slot_table(champion_ids, "UNIT_TARGET_RANGE")
+    if state is not None:
+        ids = jnp.asarray(champion_ids, jnp.int32)
+        for k, st in zip(KITS, state):
+            if hasattr(k, "unit_target_range"):
+                out = jnp.where((ids == k.ID)[:, None], k.unit_target_range(st, ids), out)
+    return out
+
+
+def rank_tables(champion_ids) -> tuple[Any, Any]:
+    """``(max_ranks, innate)`` (C, 4) int32: ranks per slot (default 5/5/5/3) and ranks held without a skill
+    point (Jayce's Transform)."""
+    ids = jnp.asarray(champion_ids, jnp.int32)
+    cap = jnp.broadcast_to(jnp.asarray([5, 5, 5, 3], jnp.int32), ids.shape + (4,))
+    innate = jnp.zeros(ids.shape + (4,), jnp.int32)
+    for k in KITS:
+        mine = (ids == k.ID)[:, None]
+        cap = jnp.where(mine, jnp.asarray(getattr(k, "MAX_RANKS", (5, 5, 5, 3)), jnp.int32)[None, :], cap)
+        innate = jnp.where(mine, jnp.asarray(getattr(k, "INNATE_RANKS", (0, 0, 0, 0)), jnp.int32)[None, :], innate)
+    return cap, innate
+
+
+def attack_missile_speed(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) champion attack missile speed from kits (Jayce's Mercury Cannon), 0 = melee."""
+    out = jnp.zeros(kctx.unit.shape, jnp.float32)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "attack_missile_speed"):
+            out = jnp.maximum(out, k.attack_missile_speed(st, kctx))
+    return out
 
 
 def point_target_ranges(champion_ids) -> Any:
@@ -261,4 +292,4 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
            "attack_mods", "cc_immune", "debuffs", "displacement_immune", "hp_cap", "mana_override", "dodging_units", "ghosted", "immobile", "leash", "on_parry", "untargetable", "resource_fraction", "point_target_ranges", "displacement", "size",
-           "unit_target_ranges"]
+           "unit_target_ranges", "rank_tables", "attack_missile_speed"]

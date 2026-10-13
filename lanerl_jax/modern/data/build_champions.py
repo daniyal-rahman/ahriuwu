@@ -3,8 +3,8 @@
 Reads ``RESEARCH/cdragon-16.19/<name>.bin.json`` (CommunityDragon ``game/data/characters/<name>/<name>.bin.json``,
 checksums in that directory's ``SHA256SUMS``). Each snapshot keeps the CharacterRecord stat fields plus the radii and
 acquisition range the world needs, the Q/W/E/R/Passive root spells (``spellNames`` order, passive from
-``mCharacterPassiveSpell``) with their calculations, cooldowns, mana and data values, and a ``slots`` map from slot
-to spell path. CLIENT data only; rules and wiki values live in the kit modules.
+``mCharacterPassiveSpell``) and any second-form spells (``EXTRA_SLOTS``) with their calculations, cooldowns, mana and
+data values, and a ``slots`` map from slot to spell path. CLIENT data only; rules and wiki values live in the kit modules.
 
     python -m lanerl_jax.modern.data.build_champions [--research DIR] [--out DIR] [NAME ...]
 """
@@ -25,6 +25,10 @@ CHARACTER_FIELDS = (
     "acquisitionRange", "pathfindingCollisionRadius", "overrideGameplayCollisionRadius", "selectionRadius")
 SPELL_FIELDS = (("calculations", "mSpellCalculations"), ("cooldown", "Cooldown"), ("mana", "manaValues"),
                 ("values", "DataValues"))
+# Second-form spells of shapeshifters, pinned under extra slot names (Jayce's Mercury Cannon; ``R2`` transforms back).
+EXTRA_SLOTS = {"Jayce": {"Q2": "JayceShockBlastAbility/JayceShockBlast", "W2": "JayceHyperChargeAbility/JayceHyperCharge",
+                         "E2": "JayceAccelerationGateAbility/JayceAccelerationGate",
+                         "R2": "JayceStanceHtGAbility/JayceStanceGtH"}}
 
 
 def snapshot(bin_path: Path, name: str) -> dict:
@@ -33,6 +37,7 @@ def snapshot(bin_path: Path, name: str) -> dict:
     prefix = f"Characters/{name}/Spells/"
     slots = {s: prefix + p for s, p in zip("QWER", root["spellNames"])}
     slots["Passive"] = root["mCharacterPassiveSpell"]
+    slots.update({s: prefix + p for s, p in EXTRA_SLOTS.get(name, {}).items()})
     spells = {}
     for path in slots.values():
         m = b[path]["mSpell"]

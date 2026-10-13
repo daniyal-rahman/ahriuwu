@@ -236,7 +236,8 @@ def compose(base: ChampionBase, level: Any, bonus: ItemStats, *, adaptive_physic
         lethality=bonus.lethality, percent_armor_pen=bonus.percent_armor_pen, magic_pen=bonus.magic_pen,
         percent_magic_pen=bonus.percent_magic_pen, hp_regen=hp_regen,
         max_mana=base.base_mana + base.mana_per_level * g + bonus.mana, mana_regen=mana_regen,
-        attack_range=base.attack_range, percent_bonus_armor_pen=bonus.percent_bonus_armor_pen)))
+        attack_range=base.attack_range + bonus.attack_range,
+        percent_bonus_armor_pen=bonus.percent_bonus_armor_pen)))
 
 
 def sync_max_health(hp: Any, old_max: Any, new_max: Any, heal_on_gain: Any = None) -> tuple[Any, Any]:

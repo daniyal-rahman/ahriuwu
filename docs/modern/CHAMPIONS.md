@@ -468,6 +468,53 @@ about 0.991x true (the replay clock); the values below are corrected.
    All Out doesn't move the threshold.
 7. **Cost and cooldown timing** and **spell shields**: shared (see below).
 
+## Jayce (126)
+
+Rift patches since 26.1 (client values include them): 26.03 (To the Skies! 60–310, Shock Blast 80–285 + 130% bonus
+AD, monster bonuses 10, Mercury Cannon shred 20–35%), 26.14 (Hextech Capacitor 30 move speed, Mercury Hammer
+resistances 5–26). Gameplay radius 65 (no override on the record), attack range 125 (Mercury Hammer) / 500 (Mercury
+Cannon), base attack speed 0.658, windup 0.095 of the attack time (`mAttackDelayCastOffsetPercent` −0.205) in both
+stances. The four Mercury Cannon spells are pinned as `Q2`/`W2`/`E2`/`R2` (`build_champions.EXTRA_SLOTS`). Replay
+measurements (6 games, 20 fps, all mid lane): `/mnt/nfs/shared/champ-expansion/jayce-measurements/`. The replays
+record Shock Blast, Thundering Blow and every basic attack (cannon, hammer, the empowered hammer hit); To the
+Skies!, Lightning Field, Hyper Charge, Acceleration Gate and Transform are not recorded and were measured from
+movement and HP.
+
+| ID | Rule | Value (ranks 1–6) | Evidence |
+|---|---|---|---|
+| JAY.R0 | Ranks: Transform starts at rank 1 and is never ranked (no skill point); Q/W/E have 6 ranks, rank k from level 2k−1; one rank each is shared by both stances. Default order Q > W > E. | 6/6/6/1 | CLIENT rank-up table (`SpellRankUpRequirements`: levels 1/3/5/7/9/11; R none); WIKI Transform |
+| JAY.R1 | Transform (no cast time, not an ability activation for on-cast effects): Jayce starts in Mercury Hammer; each cast swaps stance, starts the 6 s cooldown and swaps the Q/W/E cooldowns with the other stance's (both stances' cooldowns keep ticking, with the same haste, Actualizer rate and rune refunds). Not while stunned, silenced or in a cast time / leap. | 6 s | CLIENT `JayceStanceHtG` / `JayceStanceGtH` `Cooldown`; WIKI notes (on-cast) |
+| JAY.R2 | Mercury Hammer: melee, +5 (+7 at levels 6/11/16) + 7.5% bonus AD bonus armor and MR. Entering it arms the next landed attack: +25 (+35 at 6/11/16) + 30% bonus AD magic damage (structures included, not wards); a transform disarms it. | 5–26 / 25–130 | CLIENT `Resists`, `Damage` (`ByCharLevelBreakpoints`); WIKI notes |
+| JAY.R3 | Mercury Cannon: ranged, +375 attack range (500), attacks are 2000 u/s missiles (1800 under Hyper Charge). Entering it arms the next attack: on hit, the target's armor and MR are reduced by 20% (+5% at 6/11/16) for 5 s (not structures, not wards: the shred waits for the next attack); a transform disarms it. | 20–35% | CLIENT `RangedFormRangeIncrease`, `RangedFormShred`, `ShredDuration`, JayceRangedAttack / JayceHyperChargeRangedAttack `mSpeed`; WIKI notes |
+| JAY.P | Hextech Capacitor: each transform gives +30 move speed and ghosting for 0.75 s. | 30 | CLIENT `FlatMovementSpeed`, `MovementSpeedDuration` |
+| JAY.Q1 | To the Skies! (unit-targeted enemy, 600 center to edge, not while rooted): a straight leap to the point 225 short of the target's center, in 0.5 s whatever its length; on landing, 60–310 + 135% bonus AD physical (+10 vs monsters) and a 35–60% slow for 2 s to enemies within 300 of Jayce. Lightning Field can be cast during the leap. | cd 16–6, 40 mana | CLIENT `BaseDamage`, `Slow`, `SlowDuration`, `castRange`, `castRadiusSecondary` 225; WIKI 0.5 s, 300 (cr); replays: 50 leaps of 300–516 units in 0.5–0.6 s, landing a median 230 from the target |
+| JAY.W1 | Lightning Field: 4 ticks, one per second from 1 s after the cast, each (140–440 + 100% AP) / 4 magic to enemies within 350 of Jayce's center. Passive (Mercury Hammer): landed attacks restore 15–25 mana (structures included). | cd 10, 40 mana | CLIENT `BaseDamage`, `Duration`, `ManaGain`, castRange 285 from Jayce's edge = WIKI 350 (cr); no `Cooldown` on the record: the BIN default 10 s = WIKI 10 |
+| JAY.E1 | Thundering Blow (unit-targeted enemy, 240 edge to edge): the target is rooted over the 0.25 s cast time, then takes 8–22% of its max health + 100% bonus AD magic (capped 200–700 vs monsters) and is knocked straight away from Jayce, airborne 0.35 s, to max(475, its distance + 250) from Jayce's center. No Q in either stance for 0.4 s after. | cd 20–10, 55 mana | CLIENT `PercHPDamage`, `MonsterCap`, `KnockbackDuration`, `mCastTime`, castRangeUseBoundingBoxes; WIKI root, Q lock; replays: 46 knockbacks (see limitation 1) |
+| JAY.Q2 | Shock Blast (direction): after a 0.2143 s cast time, a 1450 u/s missile (half-width 70) flies 1050 and detonates on the first enemy it touches or at its range: 80–285 + 130% bonus AD physical (+10 vs monsters) to enemies within 170 of the detonation (the touched unit always). Through an active Acceleration Gate: 2350 u/s from the crossing, 1600 total range, 250 radius, ×1.4 damage. | cd 8, 55–80 mana | CLIENT `mCastTime`, missile `mSpeed` 1450 / 2350, `mMissileWidth`, `BaseDamage`, `ADRatio`, `EmpowerMultiplier`, castRangeDisplayOverride 1050; WIKI 1600 total, 170 / 250 (cr); replays: 20 ungated hits fit 1450 u/s and fly ≤ 944, 32 gated hits fly ≤ ~1650 (see limitation 2) |
+| JAY.W2 | Hyper Charge: attack reset; the next 3 attacks within 3.6 s gain +360% bonus attack speed and deal 70–110% of their damage (crits included). The cooldown starts when the third attack launches or the 3.6 s run out, on whichever stance holds Hyper Charge at that moment. | cd 13–5 (post-effect), 40 mana | CLIENT `NumAttacks`, `Duration` 3.6 (WIKI 4), `PercentIncreasedAS` (PATCH 25.04), `DamagePerc` |
+| JAY.E2 | Acceleration Gate (location, cast at most 685 away): a 750-wide, 200-thick gate across the cast direction for 4 s. Jayce touching it gains 35–60% bonus move speed, full while inside and decaying to 0 over 3 s after leaving. A Shock Blast crossing it is supercharged (JAY.Q2). | cd 16, 50 mana | CLIENT `MovementSpeed`, `Duration`, `GateWidth`, `HasteDuration`, `ShockBlastAmp`, castRangeDisplayOverride 685 (WIKI target range 650, unrevised since 2017), castRadius 100 = WIKI collision radius |
+
+### Jayce limitations
+
+1. Thundering Blow's knockback distance: client `KnockbackDistance` and the wiki both say 600, which would move a
+   target ~600 units. In the replays the victim ends at max(475, d + 250) from Jayce (46 knockbacks; median residual
+   −2, mean absolute 34 including three where the victim was dashing). The kit uses the replay rule; the rule behind
+   it is not known.
+2. Shock Blast ranges: the missile records' `castRange` (1300 / 2000) are rejected by the replays (no ungated hit
+   beyond 944 flown, none gated beyond ~1650). The blast radii 170 / 250 are the wiki's; the missile records'
+   `castRadius` 210 and the spell's 275 are not used, and the replays cannot measure them.
+3. Lightning Field's tick phase (first tick at 1 s) is inferred: the wiki gives 4 ticks over the 4 s field, the
+   client gives no timing and the replays do not record the cast. The total damage does not depend on it.
+4. To the Skies! is a straight leap to where the target was at the cast (not homing); the slam happens on landing
+   even if the target died or left. The 225 landing offset is the client's `castRadiusSecondary` (replay median 230).
+5. Hyper Charge's buff persists through a transform (no source says otherwise): the attack speed and the 70–110%
+   damage apply to Mercury Hammer attacks too. The third attack ends it at launch (the wiki checks it on hit).
+6. Allies: Acceleration Gate hastes only Jayce (the world has no allied champion).
+7. The observation shows the active stance's cooldowns only (through the 125 / 500 attack range); the inactive
+   stance's are not observed. Transform is not recorded as an enemy-witnessed R cast (`cast_started` is off).
+8. A ranged attack's on-hit effects resolve on the missile's own target; if a new attack launches in the same tick
+   the missile lands, the launch's target is used for both.
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -540,10 +587,17 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `CCOut.tenacity_free` | (C, N) bool | That stun / root ignores tenacity (All Out's root; Ambessa's suppression). |
 | `ItemStats.base_armor_loss` / `base_mr_loss` / `percent_bonus_armor_pen` | (C,) | Kit-only stat buckets: subtract from base resists without changing `bonus_*`; ignore a share of the target's bonus armor, added to percent penetration on that share (`Defense.bonus_armor`, `Offense.percent_bonus_armor_pen`). |
 | `mechanics.wall_exit` | (C,) × 3 | Terrain within a check distance along a ray with a walkable far side (All Out's pull over terrain). |
+| `MAX_RANKS` / `INNATE_RANKS` (`rank_tables`) | per slot | Ranks per slot (default 5/5/5/3) and ranks held without a skill point; skill-up caps basics at ceil(level / 2) and R at 6/11/16, each by the kit's count, and innate ranks are not spent points (Jayce: 6/6/6/1, R innate). `data.champions.cooldowns` returns that many ranks; a spell without a `Cooldown` record has the BIN default 10 s. |
+| `KitOut.swap_cooldowns` / `alt_cooldown_start` / `alt_base_cooldown` | (C,) / (C, 3) | `ChampionLayer.alt_cooldowns` holds the inactive form's Q/W/E cooldowns, ticked, started and refunded like the active ones; a swap exchanges them after this tick's starts (Jayce's stances). |
+| `KitOut.mana_gain` | (C,) | Mana restored this tick, not scaled by Actualizer's cost multiplier (Lightning Field on hit). |
+| `KitAttackMods.damage_mult` | (C,) | The next attack's damage times this, crits included (Hyper Charge). |
+| `ItemStats.attack_range` | (C,) | Kit-only bucket added to the record's attack range: `ChampionStats.attack_range`, hence reach, acquisition range and `is_ranged` (> 300; Mercury Cannon). |
+| `attack_missile_speed(state, kctx)` | (C,) | The champion's attacks are missiles of this speed (0 = melee); a missile's on-hit effects resolve on its own target (Mercury Cannon). |
+| `unit_target_range(state, champion_ids)` | (C, 4) | Replaces `UNIT_TARGET_RANGE` for walk-in casting (Jayce's stance). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600; K'Sante 80 / 50 / 400. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600; K'Sante 80 / 50 / 400; Jayce 65 / 35 / 200 (acquisition shifts with Mercury Cannon's +375). Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

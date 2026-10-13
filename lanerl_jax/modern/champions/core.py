@@ -119,6 +119,13 @@ class KitOut(NamedTuple):
                                      # (Fiora Lunge), -1 none; None = never
     on_attack_proc: Any = None       # (C,) bool: ... and on-attack effects too, as an attack launch (Yone Q)
     dash_stops_at_walls: Any = None  # (C,) bool: this tick's kit dash stops at terrain instead of crossing it
+    swap_cooldowns: Any = None       # (C,) bool: swap the Q/W/E cooldowns with the inactive form's (Jayce's
+                                     # Transform), after this tick's starts; None = never
+    alt_cooldown_start: Any = None   # (C, 3) bool: start an inactive-form Q/W/E cooldown (Hyper Charge ending in
+                                     # Mercury Hammer stance); None = never
+    alt_base_cooldown: Any = None    # (C, 3) its base cooldown before haste
+    mana_gain: Any = None            # (C,) mana restored (Jayce's Lightning Field on hit; not a negative cost, which
+                                     # Actualizer would scale); None = 0
 
 
 class KitDefense(NamedTuple):
@@ -141,6 +148,8 @@ class KitAttackMods(NamedTuple):
     crit_mult: Any = None            # (C,) the forced crit's damage multiplier (> 0), else the holder's crit damage
     magic_split: Any = None          # (C,) share of the next attack dealt as a second, magic packet (Yone)
     true_split: Any = None           # (C,) share of the next attack dealt as a second, true packet (Camille Q2)
+    damage_mult: Any = None          # (C,) the next attack's damage multiplied by this (> 0), crits included (Jayce's
+                                     # Hyper Charge); 0 / None = 1
 
 
 def f32(x: Any) -> Any:
@@ -266,6 +275,7 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
         oh = p.on_hit_target if p.on_hit_target is not None else jnp.full((c,), -1, jnp.int32)
         oa = p.on_attack_proc if p.on_attack_proc is not None else jnp.zeros((c,), bool)
         sw = p.dash_stops_at_walls if p.dash_stops_at_walls is not None else jnp.zeros((c,), bool)
+        prev = acc
         acc = KitOut(
             D.concat_packets(acc.packets, p.packets), merge_cc(acc.cc, p.cc),
             Dash(*(jnp.where(p.dash.active, b, a) for a, b in zip(acc.dash, p.dash))),
@@ -280,7 +290,24 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
             jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32), acc.strip_shields | ss,
             jnp.where(oh >= 0, oh, acc.on_hit_target).astype(jnp.int32), acc.on_attack_proc | oa,
             jnp.where(p.dash.active, sw, acc.dash_stops_at_walls))
+        acc = acc._replace(
+            swap_cooldowns=_or(prev.swap_cooldowns, p.swap_cooldowns),
+            alt_cooldown_start=_or(prev.alt_cooldown_start, p.alt_cooldown_start),
+            alt_base_cooldown=_last_pos(prev.alt_base_cooldown, p.alt_base_cooldown),
+            mana_gain=_add(prev.mana_gain, p.mana_gain))
     return acc
+
+
+def _or(a: Any, b: Any) -> Any:
+    return b if a is None else (a if b is None else a | b)
+
+
+def _add(a: Any, b: Any) -> Any:
+    return b if a is None else (a if b is None else a + b)
+
+
+def _last_pos(a: Any, b: Any) -> Any:
+    return b if a is None else (a if b is None else jnp.where(b > 0, b, a))
 
 
 def cc_matrix(mask: Any, duration: Any, cast_id: Any) -> tuple[Any, Any]:
@@ -312,7 +339,9 @@ def combine_attack_mods(a: KitAttackMods, b: KitAttackMods) -> KitAttackMods:
                          o(a.uncancellable, f) | o(b.uncancellable, f), o(a.force_crit, f) | o(b.force_crit, f),
                          jnp.maximum(o(a.crit_mult, z), o(b.crit_mult, z)),
                          jnp.maximum(o(a.magic_split, z), o(b.magic_split, z)),
-                         jnp.maximum(o(a.true_split, z), o(b.true_split, z)))
+                         jnp.maximum(o(a.true_split, z), o(b.true_split, z)),
+                         None if a.damage_mult is None and b.damage_mult is None
+                         else jnp.maximum(o(a.damage_mult, z), o(b.damage_mult, z)))
 
 
 def pulses(kctx: KitCtx, period: float) -> Any:

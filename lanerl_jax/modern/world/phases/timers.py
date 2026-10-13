@@ -42,8 +42,18 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cds = jnp.where(kit_all.cooldown_start, cooldown(kit_all.base_cooldown, haste), cds)
     ro = out.rune_outputs
     cds = cds.at[:, :3].multiply((1.0 - ro.basic_cd_refund)[:, None]).at[:, 3].multiply(1.0 - ro.ult_cd_refund)
+    alt = champ.alt_cooldowns
+    if alt is not None and kit_all.swap_cooldowns is not None:
+        # The inactive form's Q/W/E (Jayce's other stance) tick, start and are refunded like the active ones, then a
+        # transform swaps them in.
+        alt = jnp.maximum(alt - dt * cd_rate[:, :3], 0.0)
+        if kit_all.alt_cooldown_start is not None:
+            alt = jnp.where(kit_all.alt_cooldown_start, cooldown(kit_all.alt_base_cooldown, haste[:, :3]), alt)
+        alt = alt * (1.0 - ro.basic_cd_refund)[:, None]
+        sw = kit_all.swap_cooldowns[:, None]
+        cds, alt = cds.at[:, :3].set(jnp.where(sw, alt, cds[:, :3])), jnp.where(sw, cds[:, :3], alt)
     mana = jnp.clip(champ.mana - kit_all.mana_cost * aw.mana_cost_mult + out.effects.mana + sc.extra.mana
-                    + st.mana_regen * dt, 0.0, st.max_mana)
+                    + (0.0 if kit_all.mana_gain is None else kit_all.mana_gain) + st.mana_regen * dt, 0.0, st.max_mana)
     mana = jnp.where(respawn, st.max_mana, mana)
     m_on, m_val = K.mana_override(sc.kits, sc.kctx)                  # K'Sante's All Out
     mana = jnp.where(m_on & alive[:c] & ~respawn, jnp.clip(m_val, 0.0, st.max_mana), mana)
@@ -101,7 +111,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cast_now = kit_all.cast_started[:, None] & (jnp.arange(4)[None, :] == kit_all.cast_slot[:, None])
     last_dmg = jnp.where(sc.took_health[:c], now, champ.last_damaged)
     champ = champ._replace(
-        cooldowns=cds, mana=mana, cast_lock_until=lock, item_cast_until=item_lock, last_damaged=last_dmg, inventory=inv,
+        cooldowns=cds, alt_cooldowns=alt, mana=mana, cast_lock_until=lock, item_cast_until=item_lock, last_damaged=last_dmg, inventory=inv,
         dyn=out.dynamic_stats, homeguard_ms=eco.homeguard_ms, blinked=sc.s_out.blinked | sc.dstart,
         forbid=ro.forbid_purchase, reset_next=out.effects.attack_reset,
         bonus_points=champ.bonus_points + ro.skill_points, granted=jnp.where(can_grant, ro.grant_item, 0),

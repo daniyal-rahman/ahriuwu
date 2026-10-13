@@ -86,30 +86,36 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     vs_struct = W.is_structure(s.kind[atgt[:c]])
     struct_raw, struct_magic = LA.T.champion_structure_attack(st.base_ad, st.bonus_ad, st.ap)
     craw = jnp.where(vs_struct, struct_raw, (st.base_ad + st.bonus_ad) * jnp.where(crit, crit_mult, 1.0))
+    # A kit's modified attack damage (Jayce's Hyper Charge), crits included.
+    k_dmg = opt(kmods.damage_mult, jnp.zeros((c,), jnp.float32))
+    craw = craw * jnp.where(k_dmg > 0, k_dmg, 1.0)
+    # Champion attack missiles: the kit's (Jayce's Mercury Cannon), else the unit's own (0 = melee).
+    k_msl = K.attack_missile_speed(kits, kctx)
+    missile_speed = s.missile_speed.at[:c].set(jnp.where(k_msl > 0, k_msl, s.missile_speed[:c]))
     # Melee champions deal x1.2 to turrets (towers.json melee_champion_damage_multiplier).
     vs_turret = s.kind[atgt[:c]] == W.KIND_TURRET
-    craw = craw * jnp.where(vs_turret & (s.missile_speed[:c] <= 0), 1.2, 1.0)
+    craw = craw * jnp.where(vs_turret & (missile_speed[:c] <= 0), 1.2, 1.0)
     cdtype = jnp.where(vs_struct & struct_magic, D.MAGIC, D.PHYSICAL)
     assert n <= CAST_ID_STRIDE
     cast_ids = (s.tick * CAST_ID_STRIDE + jnp.arange(n)).astype(jnp.int32) + 1
-    ranged_c = s.missile_speed[:c] > 0
+    ranged_c = missile_speed[:c] > 0
     # Champion attacks on wards are ward hits, not packets or on-hit.
     on_ward = (s.kind[atgt] == W.KIND_WARD) & (att.target >= 0)
     hit_c = launched[:c] & ~ranged_c & ~on_ward[:c]
     attack = Attack(launched[:c], hit_c, att.target[:c], jnp.where(launched[:c], craw, 0.0), crit)
     push_bonus, push_div = minion_pushing(s, cfg, lane_ai, now)
     lane_pk = LA.attack_packets(units, W.AttackLaunch(launched & (s.kind != W.KIND_CHAMPION), att.target,
-                                                      s.missile_speed > 0, jnp.zeros((n,), bool), cast_ids),
+                                                      missile_speed > 0, jnp.zeros((n,), bool), cast_ids),
                                 now=now, ai=lane_ai, pushing_bonus=push_bonus, pushing_divisor=push_div)
     lane_pk = lane_pk._replace(cast_id=cast_ids)
-    msl_speed = s.missile_speed if mbuf is None else jnp.where(mbuf.missile_speed > 0, mbuf.missile_speed,
-                                                               s.missile_speed)
+    msl_speed = missile_speed if mbuf is None else jnp.where(mbuf.missile_speed > 0, mbuf.missile_speed,
+                                                             missile_speed)
     if mbuf is not None:                                              # empowered siege minions vs structures
         t_struct = W.is_structure(s.kind[atgt])
         lane_pk = lane_pk._replace(raw=lane_pk.raw * jnp.where(t_struct & mbuf.empowered,
                                                                mbuf.siege_structure_mult, 1.0))
     extra_atk = []
-    launch_all = W.AttackLaunch(launched, att.target, s.missile_speed > 0, jnp.zeros((n,), bool), cast_ids)
+    launch_all = W.AttackLaunch(launched, att.target, missile_speed > 0, jnp.zeros((n,), bool), cast_ids)
     if cfg.jungle is not None:
         j_main, j_bonus = J.monster_attack_packets(jungle, cfg.jungle, units, launch_all)
         jsl = cfg.jungle.slots
@@ -157,7 +163,12 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     arrived = D.packets(arrive, missiles.src, missiles.dst, missiles.raw, missiles.dtype, missiles.flags,
                         cast_id=missiles.cast_id)
     arrive_c = jnp.zeros((c,), bool).at[jnp.clip(missiles.src, 0, c - 1)].max(arrive & (missiles.src < c))
-    attack = attack._replace(hit=attack.hit | arrive_c)
+    # A champion's attack missile lands on its own target (the attack order may have moved on); a launch in the
+    # same tick keeps the launch's target.
+    arrive_dst = jnp.full((c,), -1, jnp.int32).at[jnp.clip(missiles.src, 0, c - 1)].max(
+        jnp.where(arrive & (missiles.src < c), missiles.dst, -1).astype(jnp.int32))
+    hit_target = jnp.where(arrive_c & ~launched[:c], arrive_dst, attack.target)
+    attack = attack._replace(hit=attack.hit | arrive_c, target=hit_target)
     launch_c = W.AttackLaunch(attack.launched, attack.target, ranged_c, crit, cast_ids[:c])
     kits, k_att = K.on_attack(kits, kctx, units, launch_c)
     kits, k_hit = K.on_hit(kits, kctx, units, launch_c._replace(launched=attack.hit))

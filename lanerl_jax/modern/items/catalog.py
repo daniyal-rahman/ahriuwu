@@ -70,6 +70,7 @@ class ItemStats(NamedTuple):
     percent_bonus_armor_pen: Any = 0.0  # ignores this share of the target's bonus armor (K'Sante All Out)
     base_armor_loss: Any = 0.0        # subtracted from base armor; ``bonus_*`` keeps its value (K'Sante All Out)
     base_mr_loss: Any = 0.0
+    attack_range: Any = 0.0           # added to the record's attack range (Jayce's Mercury Cannon)
 
 
 STAT_FIELDS = ItemStats._fields

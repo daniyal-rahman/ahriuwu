@@ -77,6 +77,7 @@ class ChampionLayer(NamedTuple):
     seen_cast: Any          # (C, 4) time each Q/W/E/R was last cast while visible to the enemy
     disp_ignored: Any = None  # (C,) bool: a forced movement that started while CC-immune is ignored to its end
     last_order_at: Any = None  # (C,) time of the last move or attack command (Ambessa's Drakehound's Step)
+    alt_cooldowns: Any = None  # (C, 3) the inactive form's Q/W/E remaining cooldowns (Jayce's other stance)
 
 
 class LastTick(NamedTuple):
@@ -201,7 +202,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
     hp = hp.at[:c].set(st.max_hp)
     zc = jnp.zeros((c,), jnp.float32)
     first = jnp.asarray([V.skill_order(cfg, i)[0] for i in range(c)])
-    ranks = jnp.zeros((c, 4), jnp.int32).at[jnp.arange(c), first].set(1)
+    ranks = jnp.zeros((c, 4), jnp.int32).at[jnp.arange(c), first].set(1) + K.rank_tables(cfg.champion_ids)[1]
     champ = ChampionLayer(
         ranks=ranks, cooldowns=jnp.zeros((c, 4), jnp.float32), mana=st.max_mana, cast_lock_until=zc,
         item_cast_until=zc, move_goal=cfg.fountain, moving=jnp.zeros((c,), bool),
@@ -216,7 +217,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         bonus_points=jnp.zeros((c,), jnp.int32), granted=jnp.zeros((c,), jnp.int32),
         last_cast=jnp.full((c, 4), -1e9, jnp.float32), cs=jnp.zeros((c,), jnp.int32),
         seen_cast=jnp.full((c, 4), -1e9, jnp.float32), disp_ignored=jnp.zeros((c,), bool),
-        last_order_at=jnp.full((c,), -1e9, jnp.float32))
+        last_order_at=jnp.full((c,), -1e9, jnp.float32), alt_cooldowns=jnp.zeros((c, 3), jnp.float32))
     radius = jnp.where(structure, towers.radius, 48.0).astype(jnp.float32).at[:c].set(cfg.champion_base.gameplay_radius)
     alive = (kind == W.KIND_CHAMPION) | structure
     reveal = MV.init_reveal(c)
