@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite and Aatrox, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox and Fiora, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
-`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite and Aatrox.
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox and Fiora.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -254,6 +254,47 @@ acquisition 475; no mana (the bar shows World Ender's remaining duration).
    pull's damage is blocked (live, a spell shield blocks only the chain's first hit; shared, see below).
 9. **Heals** read the main damage pass. Follow-up item procs are not counted toward Umbral Dash's healing.
 
+## Fiora (114)
+
+Rift patches since 26.1 (client values include them): 26.19 (health growth 105; Victory Zone 600 radius, 80–130
++ 70% bonus AD healing per second). Gameplay radius 65, pathing 35, acquisition 600; windup 0.2 / 1.45 (13.8%).
+Where the wiki text and the client data disagree, the client wins: Riposte slows 50% and cripples 25% (V14.4 "cripple
+reduced to 25%"; the wiki template still says 25% for both), the vital speed decays over 2 s (`MovementSpeedDuration`;
+wiki 1.85 s), Bladework's window is 3 s (`BuffDuration`; wiki 4 s).
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| FIO.P1 | Duelist's Dance: on each enemy champion within 1200 (centre range) Fiora identifies a vital: a direction (north, east, south or west of the target, a 90° arc). It becomes targetable 1.75 s later and lasts 13.25 s more while Fiora stays within 1350 (edge range); then, or when struck, a new one is identified. Directions alternate between the south/west and north/east pairs, starting with south/west, each side 50% (`KitCtx.rand`). | 1.75 + 13.25 s | WIKI notes, tooltip ("after 15 seconds or after striking one") |
+| FIO.P2 | Any damage Fiora deals (not reactive) to the target while she stands inside an open vital's arc strikes it: `3% + 4% per 100 bonus AD` of the target's max health as true damage (a proc, one tick later), Fiora heals 35 → 100 (by level) and gains Grand Challenge's `PercentMS` move speed, decaying to 0 over 2 s. | 20/30/40/50% MS (R rank 0–3) | CLIENT `PassiveDamageTotal`, `PassiveHealAmount`, `MovementSpeedDuration`, `PercentMS` |
+| FIO.Q1 | Lunge: not while rooted; dashes toward the cursor, 50–400, at 1100 + 350% bonus move speed (at most 1600), or + 300% of a negative bonus (at least 850), fixed at cast. All her abilities are castable during the dash. | 20 mana; 13/11.25/9.5/7.75/6 s | CLIENT `cooldownTime`, `mana`, `cantCastWhileRooted`; WIKI range, speed |
+| FIO.Q2 | At the end of the dash it stabs one unit within 420 (centre range), in this order: a challenged champion with a vital facing Fiora, any champion with one, a challenged champion, the lowest-health champion under 20%, the nearest unit within 252 that the stab kills, the nearest champion, a minion it kills, any minion or monster, a structure. `Damage + bADRatio × bonus AD` physical, tagged basic attack and spell (life steal, dodgeable, spell-shieldable) and applying on-hit effects (not on-attack). The cooldown starts when the stab resolves, halved if it struck an enemy. | 70–110 + 90–110% bonus AD | CLIENT `TotalDamage`, `CDRefundPercent`, `castRadiusSecondary`; WIKI priority, damage tags |
+| FIO.W1 | Riposte: 0.75 s in which Fiora cannot act and takes no damage from non-turret sources, and CC, slows and forced movement on her are dropped. A hostile stun, root or knock-up dropped this way arms the stun. | 50 mana; 24/22/20/18/16 s post-effect | CLIENT `ParryDuration`; WIKI notes, cdstart |
+| FIO.W2 | After 0.5 s the stab leaves from Fiora's position along the direction fixed at cast at 3200 units/s, 750 long, 70 half-width: `BaseDamage + 1.0 AP` magic to every enemy it passes until it reaches an enemy champion, which is slowed 50% and crippled 25% for 2 s, or stunned 2 s if the stun is armed. | 110–270 | CLIENT `StabDamage`, `MSSlowPercent`, `AttackSlowPercent`, `CCDuration`, missile speed/width; WIKI poise time |
+| FIO.E1 | Bladework: attack reset; the next two attacks within 3 s gain 25 range and `ASPercent` bonus attack speed. The first slows 30% for 1 s (even if dodged) and cannot crit; the second always crits for `AttackTwoPercentTAD` + the holder's bonus critical damage (an item's forced crit wins when higher). Cooldown after the second attack or the window. | 40 mana; 11/10/9/8/7 s; 50–90% AS; 160–200% | CLIENT `ASPercent`, `AttackTwoPercentTAD`, `SlowPercent`, `BuffDuration`; WIKI notes, cdstart |
+| FIO.R1 | Grand Challenge: an enemy champion within 500 (centre range), not one already challenged. Cooldown at cast. After 0.5 s all four of its vitals are open for 8 s regardless of range (no passive vital on it meanwhile); each strikes once as FIO.P2. While within 500 of it (edge range) Fiora has the full `PercentMS` move speed. | 100 mana; 110/90/70 s | CLIENT `MarkDuration`, `MSRingRadius`, `castRange`; WIKI |
+| FIO.R2 | Striking all four, or the target dying with at least one struck before the 8 s end, makes a Victory Zone at the target's position for 5 s that heals Fiora `HealPerSecond + 0.7 × bonus AD` per second, every 0.25 s, while she is within 600. | 80/105/130 per s | CLIENT `HealPerSecond`, `Ratio`, `HealRingRadius`, `HealDuration`; PATCH V25.14 (0.25 s ticks), 26.19 |
+
+### Fiora limitations
+
+1. **Vital identification** ignores sight: vitals appear whenever the champion is within 1200 (the wiki's
+   out-of-vision 250 estimate is not modelled). The vital's true damage lands one tick (33 ms) after the strike.
+2. **What strikes a vital.** Damage that is blocked or absorbed to zero (a spell shield, a parry) strikes
+   nothing here. Live, a block still strikes the vital (only spell shields and dodges stop it). The direction is
+   Fiora's position at the moment of the damage, including for Riposte's missile.
+3. **Lunge.** The "nearest champion in a rectangle behind Fiora" priority and stabbing wards are not modelled;
+   Flash stays usable during the dash. The cooldown starts at the stab, 0.36 s after the cast at base speed (0.47 s when slowed); live it
+   starts at cast and the stab refunds half.
+4. **Riposte.** Negated damage does not consume Fiora's shields, and the attacker's life steal on it does not
+   heal (live, both still happen). The immunity drops CC, slows and forced movement, but not Exhaust's damage
+   reduction, Ignite's Grievous Wounds, or kit cripples and armor shreds. A parry in the last 0.25 s after the
+   stab already struck does not convert its slow into a stun. Fiora stays selectable throughout. The stab's
+   range is 750 (the cast indicator). The missile record and the wiki give 900.
+5. **Bladework** uses the client's 3 s window (wiki: 4 s). The world ignores crits on structure hits for every
+   champion, so Bladework's second attack does not crit a turret (live it does).
+6. **Grand Challenge.** Recasting on the same target is simply refused (live: a 1 s cooldown). The Victory Zone
+   heals only Fiora, since the lane world has one champion per team.
+7. **Spell shields.** The Riposte slow or stun is not blocked by a spell shield (shared, see below).
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -302,10 +343,15 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
 | `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted (Darius E). |
 | `immobile(state, kctx)` | (C,) bool | The kit holds its champion in place without a world cast lock, so its other spells stay castable (Aatrox Q and W cast times, during which Umbral Dash works). |
+| `KitCtx.rand` | (C,) | Uniform [0, 1) folded from the world key each tick (Fiora vital directions). |
+| `KitDefense.parry` | (C,) bool | Non-turret damage packets to the holder are negated (`Defense.parry`; Fiora Riposte). |
+| `cc_immune(state, kctx)` / `on_parry(state, kctx, parried)` | (C,) bool | The holder's CC, slows and newly started forced movement are dropped this tick (`ChampionLayer.disp_ignored` holds a dropped movement off to its end); `parried` reports a dropped hostile stun, root or knock-up. |
+| `KitAttackMods.force_crit` / `crit_mult` | (C,) | The next attack crits for this multiplier (Fiora Bladework); an item's forced crit wins when higher. |
+| `KitOut.on_hit_target` | (C,) int32 | The holder's ability applies on-hit effects to this unit: items and runes see a landed hit, not a launch (Fiora Lunge). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475.
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

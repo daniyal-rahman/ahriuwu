@@ -225,6 +225,7 @@ class Defense(NamedTuple):
     dodge_basic: Any = None           # non-turret basic attacks dodged (Jax E); None = never
     aoe_received_mult: Any = None     # on AoE packets (Jax E); None = 1
     received_mult_all: Any = None     # on every type incl. true (turret backdoor); None = 1
+    parry: Any = None                 # every non-turret packet is negated (Fiora Riposte); None = never
 
 
 def default_defense(n: int, *, armor=0.0, magic_resist=0.0, unit_class=CLASS_MINION) -> Defense:
@@ -298,7 +299,8 @@ def premitigation_to_final(p: Packets, off: Offense, dfn: Defense) -> Any:
         post = post * jnp.where(has(p.flags, TAG_AOE), dfn.aoe_received_mult[d], 1.0)
     if dfn.received_mult_all is not None:
         post = post * dfn.received_mult_all[d]
-    return jnp.where(p.valid & ~dfn.invulnerable[d] & ~spell_blocked(p, off, dfn) & ~dodged(p, off, dfn),
+    parried = jnp.zeros(p.valid.shape, bool) if dfn.parry is None else dfn.parry[d] & ~off.is_turret[s]
+    return jnp.where(p.valid & ~dfn.invulnerable[d] & ~spell_blocked(p, off, dfn) & ~dodged(p, off, dfn) & ~parried,
                      jnp.maximum(post, 0.0), 0.0)
 
 

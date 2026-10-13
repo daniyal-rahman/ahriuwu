@@ -75,6 +75,7 @@ class ChampionLayer(NamedTuple):
     last_cast: Any          # (C, 4) time each Q/W/E/R was last cast (-1e9 never)
     cs: Any                 # (C,) int32 minions last-hit (creep score)
     seen_cast: Any          # (C, 4) time each Q/W/E/R was last cast while visible to the enemy
+    disp_ignored: Any = None  # (C,) bool: a forced movement that started while CC-immune is ignored to its end
 
 
 class LastTick(NamedTuple):
@@ -213,7 +214,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         forbid=jnp.zeros((c, len(catalog().ids)), bool), reset_next=jnp.zeros((c,), bool),
         bonus_points=jnp.zeros((c,), jnp.int32), granted=jnp.zeros((c,), jnp.int32),
         last_cast=jnp.full((c, 4), -1e9, jnp.float32), cs=jnp.zeros((c,), jnp.int32),
-        seen_cast=jnp.full((c, 4), -1e9, jnp.float32))
+        seen_cast=jnp.full((c, 4), -1e9, jnp.float32), disp_ignored=jnp.zeros((c,), bool))
     radius = jnp.where(structure, towers.radius, 48.0).astype(jnp.float32).at[:c].set(cfg.champion_base.gameplay_radius)
     alive = (kind == W.KIND_CHAMPION) | structure
     reveal = MV.init_reveal(c)

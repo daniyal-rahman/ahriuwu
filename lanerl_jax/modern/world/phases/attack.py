@@ -76,8 +76,13 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                            U.item_units(s), att.target[:c])
     no_crit = jnp.zeros((c,), bool) if kmods.cannot_crit is None else kmods.cannot_crit
     roll = jax.random.uniform(sc.k_crit, (c,)) < st.crit_chance
-    crit = launched[:c] & ~no_crit & (roll | imods.force_crit)
+    k_force = opt(kmods.force_crit, jnp.zeros((c,), bool))
+    crit = launched[:c] & ~no_crit & (roll | imods.force_crit | k_force)
     crit_mult = 1.0 + (st.crit_damage - 1.0) * jnp.where(imods.force_crit, imods.crit_scale, 1.0)
+    # A kit's forced crit (Fiora Bladework) sets its own multiplier; an item's forced crit wins when higher (wiki).
+    k_mult = opt(kmods.crit_mult, jnp.zeros((c,), jnp.float32))
+    crit_mult = jnp.where(k_force & (k_mult > 0), jnp.maximum(k_mult, jnp.where(imods.force_crit, crit_mult, 0.0)),
+                          crit_mult)
     vs_struct = W.is_structure(s.kind[atgt[:c]])
     struct_raw, struct_magic = LA.T.champion_structure_attack(st.base_ad, st.bonus_ad, st.ap)
     craw = jnp.where(vs_struct, struct_raw, (st.base_ad + st.bonus_ad) * jnp.where(crit, crit_mult, 1.0))
@@ -151,6 +156,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     towers, og_pk = LA.overgrowth_packets(s.towers, units, champ_hit, now=now,
                                           team_level=V.decimal_team_level(s))
     kit_all = merge_out([kit_out, k_att, k_hit], c, n)
+    # Abilities that apply on-hit effects (Fiora Lunge) reach items and runes as a landed hit, not an attack launch.
+    oh = kit_all.on_hit_target
+    attack = attack._replace(hit=attack.hit | (oh >= 0), target=jnp.where(oh >= 0, oh, attack.target))
     jfx = None
     if cfg.jungle is not None:
         # Scorchclaw reads last tick's damage matrix.

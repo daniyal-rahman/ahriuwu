@@ -1,0 +1,679 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "baseValue": 4.699999809265137,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 150.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.6899999976158142,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 3.200000047683716,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.6899999976158142,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 33.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseDamageModifiable": {
+      "baseValue": 66.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseHPModifiable": {
+      "baseValue": 620.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 32.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 345.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.7000000476837158,
+      "__type": "ModifiableFloat"
+    },
+    "basicAttack": {
+      "mAttackTotalTime": 1.4500000476837158,
+      "mAttackCastTime": 0.20000000298023224,
+      "mAttackProbability": 0.5,
+      "__type": "AttackSlotData"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 3.299999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 105.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.10999999940395355,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 2.049999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "primaryAbilityResource": {
+      "arType": 0,
+      "{726ee5cd}": {
+        "baseValue": 300.0,
+        "__type": "ModifiableFloat"
+      },
+      "{6216bf7b}": {
+        "baseValue": 60.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 1.600000023841858,
+        "__type": "ModifiableFloat"
+      },
+      "{3a509002}": {
+        "baseValue": 0.14000000059604645,
+        "__type": "ModifiableFloat"
+      },
+      "__type": "AbilityResourceSlotInfo"
+    },
+    "acquisitionRange": 600.0,
+    "pathfindingCollisionRadius": 35.0,
+    "selectionRadius": 100.0
+  },
+  "patch": "26.19",
+  "slots": {
+    "Q": "Characters/Fiora/Spells/FioraQAbility/FioraQ",
+    "W": "Characters/Fiora/Spells/FioraWAbility/FioraW",
+    "E": "Characters/Fiora/Spells/FioraEAbility/FioraE",
+    "R": "Characters/Fiora/Spells/FioraRAbility/FioraR",
+    "Passive": "Characters/Fiora/Spells/FioraPassiveAbility/FioraPassive"
+  },
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/fiora/fiora.bin.json",
+  "spells": {
+    "Characters/Fiora/Spells/FioraQAbility/FioraQ": {
+      "calculations": {
+        "TotalDamage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "Damage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mSubpart": {
+                "mDataValue": "BADRatio",
+                "__type": "NamedDataValueCalculationPart"
+              },
+              "__type": "StatBySubPartCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          13.0,
+          13.0,
+          11.25,
+          9.5,
+          7.75,
+          6.0,
+          6.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          20.0,
+          20.0,
+          20.0,
+          20.0,
+          20.0,
+          20.0
+        ],
+        "{0a3e0478}": 20.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "Damage",
+          "values": [
+            60.0,
+            70.0,
+            80.0,
+            90.0,
+            100.0,
+            110.0,
+            120.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "bADRatio",
+          "values": [
+            0.8500000238418579,
+            0.8999999761581421,
+            0.949999988079071,
+            1.0,
+            1.0499999523162842,
+            1.100000023841858,
+            1.149999976158142
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CDRefundPercent",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Fiora/Spells/FioraWAbility/FioraW": {
+      "calculations": {
+        "StabDamage": {
+          "tooltipOnly": true,
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          26.0,
+          24.0,
+          22.0,
+          20.0,
+          18.0,
+          16.0,
+          14.0
+        ],
+        "{0a3e0478}": 26.0,
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          50.0,
+          50.0,
+          50.0,
+          50.0,
+          50.0,
+          50.0
+        ],
+        "{0a3e0478}": 50.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            70.0,
+            110.0,
+            150.0,
+            190.0,
+            230.0,
+            270.0,
+            310.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ParryDuration",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CCDuration",
+          "values": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MSSlowPercent",
+          "values": [
+            -0.5,
+            -0.5,
+            -0.5,
+            -0.5,
+            -0.5,
+            -0.5,
+            -0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SmallBlockPercent",
+          "values": [
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BigBlockPercent",
+          "values": [
+            0.15000000596046448,
+            0.15000000596046448,
+            0.15000000596046448,
+            0.15000000596046448,
+            0.15000000596046448,
+            0.15000000596046448,
+            0.15000000596046448
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AttackSlowPercent",
+          "values": [
+            -0.25,
+            -0.25,
+            -0.25,
+            -0.25,
+            -0.25,
+            -0.25,
+            -0.25
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Fiora/Spells/FioraEAbility/FioraE": {
+      "cooldown": {
+        "values": [
+          11.0,
+          11.0,
+          10.0,
+          9.0,
+          8.0,
+          7.0,
+          7.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          40.0,
+          40.0
+        ],
+        "{0a3e0478}": 40.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BuffDuration",
+          "values": [
+            3.0,
+            3.0,
+            3.0,
+            3.0,
+            3.0,
+            3.0,
+            3.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowDuration",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowPercent",
+          "values": [
+            -0.30000001192092896,
+            -0.30000001192092896,
+            -0.30000001192092896,
+            -0.30000001192092896,
+            -0.30000001192092896,
+            -0.30000001192092896,
+            -0.30000001192092896
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ASPercent",
+          "values": [
+            0.4000000059604645,
+            0.5,
+            0.6000000238418579,
+            0.699999988079071,
+            0.800000011920929,
+            0.8999999761581421,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AttackOnePercentTAD",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "AttackTwoPercentTAD",
+          "values": [
+            1.5,
+            1.600000023841858,
+            1.7000000476837158,
+            1.7999999523162842,
+            1.899999976158142,
+            2.0,
+            2.0999999046325684
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Fiora/Spells/FioraRAbility/FioraR": {
+      "calculations": {
+        "HealPerSecondCalc": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "HealPerSecond",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 0.699999988079071,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          10.0,
+          110.0,
+          90.0,
+          70.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          100.0,
+          100.0,
+          100.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "MarkDuration",
+          "values": [
+            8.0,
+            8.0,
+            8.0,
+            8.0,
+            8.0,
+            8.0,
+            8.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "PassiveAS",
+          "values": [
+            0.20000000298023224,
+            0.30000001192092896,
+            0.4000000059604645,
+            0.5,
+            0.6000000238418579,
+            0.699999988079071,
+            0.800000011920929
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "PercentMS",
+          "values": [
+            0.20000000298023224,
+            0.30000001192092896,
+            0.4000000059604645,
+            0.5,
+            0.6000000238418579,
+            0.699999988079071,
+            0.800000011920929
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MSRingRadius",
+          "values": [
+            500.0,
+            500.0,
+            500.0,
+            500.0,
+            500.0,
+            500.0,
+            500.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealDuration",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealPerSecond",
+          "values": [
+            55.0,
+            80.0,
+            105.0,
+            130.0,
+            155.0,
+            180.0,
+            205.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealRingRadius",
+          "values": [
+            600.0,
+            600.0,
+            600.0,
+            600.0,
+            600.0,
+            600.0,
+            600.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MinHealDuration",
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealDurationExtension",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Ratio",
+          "values": [
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Fiora/Spells/FioraPassiveAbility/FioraPassive": {
+      "calculations": {
+        "PassiveHealAmount": {
+          "mFormulaParts": [
+            {
+              "mStartValue": 35.0,
+              "mEndValue": 100.0,
+              "__type": "ByCharLevelInterpolationCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "PassiveDamageTotal": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "PassiveDamageBase",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "PassiveDamageADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "mPrecision": 1,
+          "__type": "GameCalculation"
+        },
+        "RDamageTotal": {
+          "mMultiplier": {
+            "mNumber": 4.0,
+            "__type": "NumberCalculationPart"
+          },
+          "mSimpleTooltipCalculationDisplay": 5,
+          "mModifiedGameCalculation": "PassiveDamageTotal",
+          "__type": "GameCalculationModified"
+        }
+      },
+      "values": [
+        {
+          "name": "PassiveDamageADRatio",
+          "values": [
+            0.00039999998989515007,
+            0.00039999998989515007,
+            0.00039999998989515007,
+            0.00039999998989515007,
+            0.00039999998989515007,
+            0.00039999998989515007,
+            0.00039999998989515007
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "PassiveDamageBase",
+          "values": [
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MovementSpeedDuration",
+          "values": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    }
+  }
+}

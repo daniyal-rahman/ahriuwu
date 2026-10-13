@@ -82,8 +82,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     dash_target = jnp.where(dstart, dash.target, champ.dash_target)
     in_dash = now < dash_until
     ft = jnp.clip(dash_target, 0, n - 1)
-    fx = jnp.where(dash_target >= 0, s.x[ft], champ.dash_to[:, 0])
-    fy = jnp.where(dash_target >= 0, s.y[ft], champ.dash_to[:, 1])
+    # A point dash heads for its own end point from its first tick (the stored one is last tick's).
+    fx = jnp.where(dash_target >= 0, s.x[ft], jnp.where(dstart, dx, champ.dash_to[:, 0]))
+    fy = jnp.where(dash_target >= 0, s.y[ft], jnp.where(dstart, dy, champ.dash_to[:, 1]))
     fd = jnp.sqrt((fx - x[:c]) ** 2 + (fy - y[:c]) ** 2)
     speed = jnp.where(dstart, dash.speed, champ.dash_speed)            # the dash's own speed after its first tick
     step_d = jnp.minimum(jnp.where(speed > 0, speed, 1400.0) * dt, fd)
@@ -99,7 +100,11 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))
     # Kit displacements (Darius E): straight toward the kit's point at its speed, ignoring terrain and collision.
     disp, d_x, d_y, d_v = K.displacement(sc.kits, sc.kctx, n)
-    disp = disp & s.alive
+    # A displacement that starts while the unit is CC-immune (Fiora Riposte) is ignored until it ends.
+    imm = K.cc_immune(sc.kits, sc.kctx)
+    ignored = disp[:c] & (imm | champ.disp_ignored)
+    champ = champ._replace(disp_ignored=ignored)
+    disp = disp & s.alive & ~jnp.zeros((n,), bool).at[:c].set(ignored)
     ddx, ddy = d_x - s.x, d_y - s.y
     dd = jnp.sqrt(ddx * ddx + ddy * ddy)
     df = jnp.where(dd > 1e-6, jnp.minimum(d_v * dt, dd) / jnp.maximum(dd, 1e-6), 0.0)

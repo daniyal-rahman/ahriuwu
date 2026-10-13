@@ -16,6 +16,7 @@ from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
 from . import aatrox
 from . import darius
+from . import fiora
 from . import garen
 from . import jax as jax_kit
 from . import malphite
@@ -24,7 +25,7 @@ from . import renekton
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -112,9 +113,10 @@ def stats(state: ChampionState, kctx: KitCtx):
 def defense(state: ChampionState, kctx: KitCtx) -> KitDefense:
     out = neutral_defense(kctx.unit.shape[0])
     for d in (k.defense(st, kctx) for k, st in zip(KITS, state)):
+        parry = out.parry if d.parry is None else out.parry | d.parry
         out = KitDefense(out.received_mult * d.received_mult, out.dodge_basic | d.dodge_basic,
                          out.aoe_received_mult * d.aoe_received_mult,
-                         1.0 - (1.0 - out.tenacity_bonus) * (1.0 - d.tenacity_bonus))
+                         1.0 - (1.0 - out.tenacity_bonus) * (1.0 - d.tenacity_bonus), parry)
     return out
 
 
@@ -142,6 +144,22 @@ def immobile(state: ChampionState, kctx: KitCtx) -> Any:
         if hasattr(k, "immobile"):
             out = out | k.immobile(st, kctx)
     return out
+
+
+def cc_immune(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) bool: the holder ignores CC and slows applied this tick (Fiora Riposte's debuff immunity)."""
+    out = jnp.zeros(kctx.unit.shape, bool)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "cc_immune"):
+            out = out | k.cc_immune(st, kctx)
+    return out
+
+
+def on_parry(state: ChampionState, kctx: KitCtx, parried) -> ChampionState:
+    """``parried`` (C,) bool: a hostile immobilizing effect (stun, root, knock-up) was negated on the holder this
+    tick by ``cc_immune`` (Fiora Riposte's stun condition)."""
+    return ChampionState(*(k.on_parry(st, kctx, parried) if hasattr(k, "on_parry") else st
+                           for k, st in zip(KITS, state)))
 
 
 def resource_fraction(state: ChampionState, champion_ids, mana_fraction) -> Any:
@@ -184,5 +202,5 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "debuffs", "dodging_units", "ghosted", "immobile", "resource_fraction", "point_target_ranges", "displacement", "size",
+           "attack_mods", "cc_immune", "debuffs", "dodging_units", "ghosted", "immobile", "on_parry", "resource_fraction", "point_target_ranges", "displacement", "size",
            "unit_target_ranges"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from ... import champions as K
 from ... import mechanics as M
 from ...core import damage as D
 from ...core import types as W
@@ -48,12 +49,30 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
             + ([] if so is None else [so.champion_cc]):
         champ_cc = W.merge_cc(champ_cc, extra_cc)
     item_cleanse = A.world(out.state.items.actives, now)
+    # Kit debuff immunity (Fiora Riposte): this tick's CC and slows on the holder are dropped; a dropped hostile
+    # immobilizing effect (stun, root, knock-up) is reported back to the kits.
+    immune = jnp.zeros((n,), bool).at[:c].set(K.cc_immune(sc.kits, sc.kctx))
+    monster_cc = ([] if so is None else [so.cc]) + ([] if sc.obj_cc is None else [sc.obj_cc])
+    hostile = (s.team[:c][:, None] != s.team[None, :])
+    held = lambda x: (x.stun > 0) | (x.root > 0) | (x.knockup > 0)                 # noqa: E731
+    immobilized = jnp.any(held(champ_cc) & hostile, axis=0)
+    for mcc in monster_cc:
+        immobilized = immobilized | jnp.any(held(mcc), axis=0)
+    kits = K.on_parry(sc.kits, sc.kctx, (immune & immobilized)[:c])
+    champ_cc, slow_cc = _drop(champ_cc, immune), _drop(slow_cc, immune)
+    monster_cc = [_drop(x, immune) for x in monster_cc]
     cc = M.apply_cc(s.cc, champ_cc, ten, sres, now, source_is_champion=jnp.ones((c,), bool),
                     cleansed=jnp.zeros((n,), bool).at[:c].set(s_out.cleanse | item_cleanse.cleanse))
-    for mcc in ([] if so is None else [so.cc]) + ([] if sc.obj_cc is None else [sc.obj_cc]):
+    for mcc in monster_cc:
         cc = M.apply_cc(cc, mcc, ten, sres, now, source_is_champion=jnp.zeros((mcc.stun.shape[0],), bool))
     cc = M.apply_cc(cc, slow_cc, ten, sres, now, source_is_champion=jnp.ones((3,), bool))
     clean_slow = jnp.zeros((n,), bool) if kit_all.cleanse_slow is None else \
         jnp.zeros((n,), bool).at[:c].set(kit_all.cleanse_slow)
     cc = cc._replace(slow_until=jnp.where(clean_slow, now, cc.slow_until))
-    return s, sc._replace(extra=extra, hp=hp, shields=shields, status=status, item_cleanse=item_cleanse, cc=cc)
+    return s, sc._replace(extra=extra, hp=hp, shields=shields, status=status, item_cleanse=item_cleanse, cc=cc,
+                          kits=kits)
+
+
+def _drop(cc: W.CCOut, immune) -> W.CCOut:
+    """``cc`` without its columns on ``immune`` (N,) units."""
+    return W.CCOut(*(jnp.where(immune[None, :], jnp.zeros_like(x), x) for x in cc))

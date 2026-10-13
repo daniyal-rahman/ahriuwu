@@ -27,6 +27,7 @@ CODE_GAREN_E_TICK = 4
 CODE_JAX_R_PASSIVE = 5
 CODE_AATROX_P = 6          # one Deathbringer Stance bonus-damage packet
 CODE_AATROX_W2 = 7         # Infernal Chains' pull damage
+CODE_FIORA_VITAL = 4       # Duelist's Dance true damage (codes are unique per holder, so kits may share numbers)
 EPS = 1e-6
 NEVER = 1e9
 
@@ -70,6 +71,8 @@ class KitCtx(NamedTuple):
     dashing: Any = None              # (C,) bool: a dash is moving the holder (ends where terrain stops it)
     kit_shield: Any = None           # (C,) remaining absorb of the holder's kit-sourced shield (Malphite
                                      # Granite Shield); None = 0
+    rand: Any = None                 # (C,) uniform [0, 1) drawn from the world key each tick (Fiora vital
+                                     # directions); None = 0
 
     @property
     def total_ad(self):
@@ -95,6 +98,8 @@ class KitOut(NamedTuple):
                                      # on an enemy champion); None = never
     strip_shields: Any = None        # (C, N) bool: destroy the unit's shields before this tick's damage (Renekton
                                      # empowered W); None = never
+    on_hit_target: Any = None        # (C,) int32: the holder's ability applies on-hit effects to this unit this tick
+                                     # (Fiora Lunge), -1 none; None = never
 
 
 class KitDefense(NamedTuple):
@@ -102,6 +107,7 @@ class KitDefense(NamedTuple):
     dodge_basic: Any                 # (C,) bool (Jax E)
     aoe_received_mult: Any           # (C,) (Jax E 0.75)
     tenacity_bonus: Any              # (C,) multiplicative tenacity source (Garen W 0.6)
+    parry: Any = None                # (C,) bool: non-turret damage to the holder is negated (Fiora Riposte)
 
 
 class KitAttackMods(NamedTuple):
@@ -112,6 +118,8 @@ class KitAttackMods(NamedTuple):
     windup: Any = None               # (C,) seconds: override the next attack's windup (> 0), else the stat windup
     period: Any = None               # (C,) seconds: override the next attack's total attack time (> 0)
     uncancellable: Any = None        # (C,) bool: the next attack's windup cannot be cancelled
+    force_crit: Any = None           # (C,) bool: the next attack critically strikes (Fiora Bladework)
+    crit_mult: Any = None            # (C,) the forced crit's damage multiplier (> 0), else the holder's crit damage
 
 
 def f32(x: Any) -> Any:
@@ -220,7 +228,8 @@ def no_out(c: int, n: int) -> KitOut:
                   ShieldGrant(zs, zs.astype(jnp.int32), zs, zs), zc,
                   jnp.zeros((c, 4), bool), jnp.zeros((c, 4), jnp.float32), jnp.zeros((c,), bool),
                   jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32), zc,
-                  jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c, n), bool))
+                  jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c, n), bool),
+                  jnp.full((c,), -1, jnp.int32))
 
 
 def out(c: int, n: int, **fields) -> KitOut:
@@ -233,6 +242,7 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
         cs = p.cleanse_slow if p.cleanse_slow is not None else jnp.zeros((c,), bool)
         at = p.attack_target if p.attack_target is not None else jnp.full((c,), -1, jnp.int32)
         ss = p.strip_shields if p.strip_shields is not None else jnp.zeros((c, n), bool)
+        oh = p.on_hit_target if p.on_hit_target is not None else jnp.full((c,), -1, jnp.int32)
         acc = KitOut(
             D.concat_packets(acc.packets, p.packets), merge_cc(acc.cc, p.cc),
             Dash(*(jnp.where(p.dash.active, b, a) for a, b in zip(acc.dash, p.dash))),
@@ -244,7 +254,8 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
             jnp.where(p.cast_started, p.cast_slot, acc.cast_slot),
             jnp.where(p.cast_started, p.cast_id, acc.cast_id),
             jnp.maximum(acc.cast_lockout, p.cast_lockout), acc.cleanse_slow | cs,
-            jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32), acc.strip_shields | ss)
+            jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32), acc.strip_shields | ss,
+            jnp.where(oh >= 0, oh, acc.on_hit_target).astype(jnp.int32))
     return acc
 
 
@@ -257,13 +268,13 @@ def cc_matrix(mask: Any, duration: Any, cast_id: Any) -> tuple[Any, Any]:
 
 def neutral_defense(c: int) -> KitDefense:
     o, z = jnp.ones((c,), jnp.float32), jnp.zeros((c,), jnp.float32)
-    return KitDefense(o, jnp.zeros((c,), bool), o, z)
+    return KitDefense(o, jnp.zeros((c,), bool), o, z, jnp.zeros((c,), bool))
 
 
 def neutral_attack_mods(c: int) -> KitAttackMods:
     f = jnp.zeros((c,), bool)
     z = jnp.zeros((c,), jnp.float32)
-    return KitAttackMods(z, f, f, f, z, z, f)
+    return KitAttackMods(z, f, f, f, z, z, f, f, z)
 
 
 def combine_attack_mods(a: KitAttackMods, b: KitAttackMods) -> KitAttackMods:
@@ -274,7 +285,8 @@ def combine_attack_mods(a: KitAttackMods, b: KitAttackMods) -> KitAttackMods:
     return KitAttackMods(a.extra_range + b.extra_range, a.attack_reset | b.attack_reset,
                          a.cannot_attack | b.cannot_attack, o(a.cannot_crit, f) | o(b.cannot_crit, f),
                          jnp.maximum(o(a.windup, z), o(b.windup, z)), jnp.maximum(o(a.period, z), o(b.period, z)),
-                         o(a.uncancellable, f) | o(b.uncancellable, f))
+                         o(a.uncancellable, f) | o(b.uncancellable, f), o(a.force_crit, f) | o(b.force_crit, f),
+                         jnp.maximum(o(a.crit_mult, z), o(b.crit_mult, z)))
 
 
 def pulses(kctx: KitCtx, period: float) -> Any:

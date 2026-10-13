@@ -28,7 +28,7 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 - Walkability (`terrain.row_gaps`): exact `is_walkable` from per-row nearest-blocked gaps, golden-identical;
   +54% top lane / +25% full map on the GTX 1060.
 
-**Champions (2026-10-13, MODERN-027..033).** Garen, Jax, Nasus, Renekton, Darius, Malphite and Aatrox are registered (any pairing); Fiora, Yone, Ambessa, Camille, Jayce, K'Sante and Ornn are next (client bins and wiki pages cached 2026-10-13). Every known difference from the live game is listed per kit in docs/modern/CHAMPIONS.md; the interaction-level ones were fixed (Darius pull measured from replays, dash terrain rule, size -> gameplay radius, dash speed). Golden-identical for Garen vs Jax. No training run with the new champions yet.
+**Champions (2026-10-13, MODERN-027..034).** Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox and Fiora are registered (any pairing); Yone, Ambessa, Camille, Jayce, K'Sante and Ornn are next (client bins and wiki pages cached 2026-10-13). Every known difference from the live game is listed per kit in docs/modern/CHAMPIONS.md; the interaction-level ones were fixed (Darius pull measured from replays, dash terrain rule, size -> gameplay radius, dash speed). Golden-identical for Garen vs Jax. No training run with the new champions yet.
 
 **Open.**
 - GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.

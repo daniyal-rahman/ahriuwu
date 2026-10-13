@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import jax
 import jax.numpy as jnp
 
 from .. import champions as K
@@ -143,6 +144,9 @@ def champion_stats(s: ModernState, cfg: WorldConfig) -> ChampionStats:
                    adaptive_physical=cfg.adaptive_physical, slow=caps["slow"][:N_CHAMPIONS])
 
 
+KIT_RAND_STREAM = 0x4b17                 # ``KitCtx.rand`` folds this into the state key; the world's draws split it
+
+
 def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:
     c = N_CHAMPIONS
     lv = s.econ.level
@@ -161,7 +165,8 @@ def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, no
                     rooted=s.cc.root_until[:c] > now, move_speed=st.move_speed,
                     dashing=now < s.champ.dash_until,
                     kit_shield=jnp.sum(jnp.where(s.shields.source[:c] == D.SOURCE_KIT,
-                                                 D.shield_value(s.shields, now)[:c], 0.0), axis=1))
+                                                 D.shield_value(s.shields, now)[:c], 0.0), axis=1),
+                    rand=jax.random.uniform(jax.random.fold_in(s.key, KIT_RAND_STREAM), (c,)))
 
 
 def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:

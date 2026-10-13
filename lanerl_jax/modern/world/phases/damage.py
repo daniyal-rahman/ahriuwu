@@ -52,7 +52,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         invulnerable=t_invuln | jnp.zeros((n,), bool).at[:c].set(s_out.teleport_dash | in_stasis),
         percent_armor_reduction=kdeb.percent_armor_reduction,
         dodge_basic=jnp.zeros((n,), bool).at[:c].set(kdef.dodge_basic),
-        aoe_received_mult=jnp.ones((n,), jnp.float32).at[:c].set(kdef.aoe_received_mult))
+        aoe_received_mult=jnp.ones((n,), jnp.float32).at[:c].set(kdef.aoe_received_mult),
+        parry=jnp.zeros((n,), bool).at[:c].set(kdef.parry))
     off = LA.turret_offense(units, D.default_offense(n)._replace(unit_class=W.damage_class(s.kind),
                                                                 dealt_reduction=s_out.exhaust_reduction))
     cc_now = kit_all.cc

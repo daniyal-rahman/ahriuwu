@@ -83,7 +83,7 @@ def test_umbral_dash_mid_wind_up_moves_the_blade():
     s = run(s, MS.no_orders(), 3)
     s = step(s, orders(cast_slot=[2, -1], cast_x=[SX + 1000.0, 0.0], cast_y=[SY, 0.0]))
     s = run(s, MS.no_orders(), 20)
-    assert float(s.x[0]) > SX + 280.0                                 # the 300 dash
+    assert float(s.x[0]) > SX + 295.0                                 # the 300 dash
     assert float(s.hp[1]) < hp                                         # 900 away: only reachable after the dash
 
 
