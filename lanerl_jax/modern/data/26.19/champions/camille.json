@@ -1,0 +1,830 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "baseValue": 4.5,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 125.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.6439999938011169,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 2.5,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.6439999938011169,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 35.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseDamageModifiable": {
+      "baseValue": 68.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseHPModifiable": {
+      "baseValue": 650.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 32.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 340.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.7000000476837158,
+      "__type": "ModifiableFloat"
+    },
+    "basicAttack": {
+      "mAttackTotalTime": 1.5520000457763672,
+      "mAttackCastTime": 0.30000001192092896,
+      "mAttackProbability": 1.0,
+      "__type": "AttackSlotData"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 3.799999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 99.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.1599999964237213,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 2.049999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "primaryAbilityResource": {
+      "arType": 0,
+      "{726ee5cd}": {
+        "baseValue": 375.0,
+        "__type": "ModifiableFloat"
+      },
+      "{6216bf7b}": {
+        "baseValue": 52.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 1.6299999952316284,
+        "__type": "ModifiableFloat"
+      },
+      "{3a509002}": {
+        "baseValue": 0.15000000596046448,
+        "__type": "ModifiableFloat"
+      },
+      "__type": "AbilityResourceSlotInfo"
+    },
+    "acquisitionRange": 600.0,
+    "pathfindingCollisionRadius": 35.0,
+    "selectionRadius": 100.0
+  },
+  "patch": "26.19",
+  "slots": {
+    "Q": "Characters/Camille/Spells/CamilleQAbility/CamilleQ",
+    "W": "Characters/Camille/Spells/CamilleWAbility/CamilleW",
+    "E": "Characters/Camille/Spells/CamilleEAbility/CamilleE",
+    "R": "Characters/Camille/Spells/CamilleRAbility/CamilleR",
+    "Passive": "Characters/Camille/Spells/CamillePassiveAbility/CamillePassive"
+  },
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/camille/camille.bin.json",
+  "spells": {
+    "Characters/Camille/Spells/CamilleQAbility/CamilleQ": {
+      "calculations": {
+        "DamageConversionPercentage": {
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 0.4000000059604645,
+              "mInitialBonusPerLevel": 0.03999999910593033,
+              "mBreakpoints": [
+                {
+                  "mLevel": 17,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "__type": "GameCalculation"
+        },
+        "BonusDamage": {
+          "mFormulaParts": [
+            {
+              "mStat": 2,
+              "mDataValue": "tADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "EmpoweredBonusDamage": {
+          "mMultiplier": {
+            "mDataValue": "QEmpoweredAmp",
+            "__type": "NamedDataValueCalculationPart"
+          },
+          "mModifiedGameCalculation": "BonusDamage",
+          "__type": "GameCalculationModified"
+        }
+      },
+      "cooldown": {
+        "values": [
+          9.0,
+          9.0,
+          8.0,
+          7.0,
+          6.0,
+          5.0,
+          5.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          25.0,
+          25.0,
+          25.0,
+          25.0,
+          25.0,
+          25.0
+        ],
+        "{0a3e0478}": 25.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "QRampUpTime",
+          "values": [
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BonusAARange",
+          "values": [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "TADRatio",
+          "values": [
+            0.15000000596046448,
+            0.20000000298023224,
+            0.25,
+            0.30000001192092896,
+            0.3499999940395355,
+            0.4000000059604645,
+            0.44999998807907104
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MSBonus",
+          "values": [
+            0.20000000298023224,
+            0.25,
+            0.30000001192092896,
+            0.3499999940395355,
+            0.4000000059604645,
+            0.44999998807907104,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MSDuration",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QEmpoweredAmp",
+          "values": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q2Duration",
+          "values": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QTotalRecastTime",
+          "values": [
+            3.5,
+            3.5,
+            3.5,
+            3.5,
+            3.5,
+            3.5,
+            3.5
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Camille/Spells/CamilleWAbility/CamilleW": {
+      "calculations": {
+        "OuterEdgeTooltip": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "OuterConeMaxHPDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "ADRequiredTooltipOnly",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "__type": "GameCalculation"
+        },
+        "BaseDamageTotal": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "BADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "MonsterHealthDamageCap": {
+          "mExpandedTooltipCalculationDisplay": 5,
+          "mFormulaParts": [
+            {
+              "mNumber": 300.0,
+              "__type": "NumberCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          12.5,
+          12.0,
+          11.5,
+          11.0,
+          10.5,
+          10.0,
+          9.5
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          50.0,
+          55.0,
+          60.0,
+          65.0,
+          70.0,
+          75.0
+        ],
+        "{0a3e0478}": 50.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            35.0,
+            60.0,
+            85.0,
+            110.0,
+            135.0,
+            160.0,
+            185.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BADRatio",
+          "values": [
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowDuration",
+          "values": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ChargeDuration",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SlowPercentage",
+          "values": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "OuterConeMaxHPDamage",
+          "values": [
+            0.06499999761581421,
+            0.07000000029802322,
+            0.07500000298023224,
+            0.07999999821186066,
+            0.08500000089406967,
+            0.09000000357627869,
+            0.0949999988079071
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ADRequiredFor1PercentDamage",
+          "values": [
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ADRequiredTooltipOnly",
+          "values": [
+            0.0002500000118743628,
+            0.0002500000118743628,
+            0.0002500000118743628,
+            0.0002500000118743628,
+            0.0002500000118743628,
+            0.0002500000118743628,
+            0.0002500000118743628
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MonsterDamageReduction",
+          "values": [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "OuterConeHealingRatio",
+          "values": [
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BlastLength",
+          "values": [
+            650.0,
+            650.0,
+            650.0,
+            650.0,
+            650.0,
+            650.0,
+            650.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ConeAngle",
+          "values": [
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+            35.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Camille/Spells/CamilleEAbility/CamilleE": {
+      "calculations": {
+        "TotalDamage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "BADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          16.0,
+          16.0,
+          15.0,
+          14.0,
+          13.0,
+          12.0,
+          12.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          70.0,
+          70.0,
+          70.0,
+          70.0,
+          70.0,
+          70.0
+        ],
+        "{0a3e0478}": 70.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "EMinionMonsterGhostDuration",
+          "values": [
+            3.0,
+            3.0,
+            3.0,
+            3.0,
+            3.0,
+            3.0,
+            3.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "KnockupDuration",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ASBuff",
+          "values": [
+            0.3499999940395355,
+            0.4000000059604645,
+            0.44999998807907104,
+            0.5,
+            0.550000011920929,
+            0.6000000238418579,
+            0.6499999761581421
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseDamage",
+          "values": [
+            30.0,
+            60.0,
+            90.0,
+            120.0,
+            150.0,
+            180.0,
+            210.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "DashSpeed",
+          "values": [
+            1050.0,
+            1050.0,
+            1050.0,
+            1050.0,
+            1050.0,
+            1050.0,
+            1050.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ASDuration",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WallHangDuration",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "E2LongDashRange",
+          "values": [
+            800.0,
+            800.0,
+            800.0,
+            800.0,
+            800.0,
+            800.0,
+            800.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "E2ShortDashRange",
+          "values": [
+            400.0,
+            400.0,
+            400.0,
+            400.0,
+            400.0,
+            400.0,
+            400.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ECollisionRange",
+          "values": [
+            130.0,
+            130.0,
+            130.0,
+            130.0,
+            130.0,
+            130.0,
+            130.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BADRatio",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Camille/Spells/CamilleRAbility/CamilleR": {
+      "cooldown": {
+        "values": [
+          140.0,
+          140.0,
+          115.0,
+          90.0,
+          0.0,
+          0.0,
+          70.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          100.0,
+          100.0,
+          100.0,
+          100.0,
+          100.0,
+          100.0
+        ],
+        "{0a3e0478}": 100.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "RPercentCurrentHPDamage",
+          "values": [
+            2.0,
+            4.0,
+            6.0,
+            8.0,
+            10.0,
+            12.0,
+            14.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ROnHitDamage",
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RDuration",
+          "values": [
+            1.75,
+            2.5,
+            3.25,
+            4.0,
+            4.75,
+            5.5,
+            6.25
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RCircleRadius",
+          "values": [
+            425.0,
+            425.0,
+            425.0,
+            425.0,
+            425.0,
+            425.0,
+            425.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Camille/Spells/CamillePassiveAbility/CamillePassive": {
+      "calculations": {
+        "PassiveCooldown": {
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 14.0,
+              "mBreakpoints": [
+                {
+                  "mLevel": 7,
+                  "mAdditionalBonusAtThisLevel": -3.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 13,
+                  "mAdditionalBonusAtThisLevel": -3.0,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "ShieldAmount": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mStat": 12,
+              "mSubpart": {
+                "mLevel1Value": 0.10000000149011612,
+                "mBreakpoints": [
+                  {
+                    "mLevel": 7,
+                    "mAdditionalBonusAtThisLevel": 0.05000000074505806,
+                    "__type": "Breakpoint"
+                  },
+                  {
+                    "mLevel": 13,
+                    "mAdditionalBonusAtThisLevel": 0.05000000074505806,
+                    "__type": "Breakpoint"
+                  },
+                  {
+                    "mLevel": 19,
+                    "mAdditionalBonusAtThisLevel": 0.05000000074505806,
+                    "__type": "Breakpoint"
+                  }
+                ],
+                "__type": "ByCharLevelBreakpointsCalculationPart"
+              },
+              "__type": "StatBySubPartCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "values": [
+        {
+          "name": "ShieldDuration",
+          "values": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    }
+  }
+}

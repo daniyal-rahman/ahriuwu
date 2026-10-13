@@ -159,7 +159,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     s = spawn_minions(s, cfg, now)
     caps = M.capabilities(s.cc, now)
     stasis_n = jnp.zeros((n,), bool).at[:c].set(in_stasis)
-    s = s._replace(targetable=s.targetable.at[:c].set(~in_stasis))
+    untarget = in_stasis | KC.untargetable(s.kits, cfg.champion_ids, now)               # kit untargetability (Camille R)
+    s = s._replace(targetable=s.targetable.at[:c].set(~untarget))
     caps = {k: (v & ~stasis_n if k.startswith("can_") else v) for k, v in caps.items()}
     terrain = cfg.terrain
     if cfg.rift is not None:

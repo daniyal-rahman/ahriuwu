@@ -268,6 +268,22 @@ def dash_end(x0: Any, y0: Any, x1: Any, y1: Any, team: Any, radius: Any, terrain
     return jax.vmap(one)(x0, y0, x1, y1, team, radius, cross)
 
 
+def first_wall(x0: Any, y0: Any, ux: Any, uy: Any, max_dist: Any, team: Any, terrain: tuple,
+               samples: int = 33) -> tuple[Any, Any, Any]:
+    """``(hit, x, y)``: the first terrain along the ray from ``(x0, y0)`` in direction ``(ux, uy)`` within
+    ``max_dist``; ``(x, y)`` is the last walkable sample before it (where a grapple attaches; Camille Hookshot)."""
+    def one(ax, ay, dx, dy, md, tm):
+        ter = team_terrain(terrain, tm)
+        f = jnp.linspace(0.0, 1.0, samples)
+        px, py = ax + dx * md * f, ay + dy * md * f
+        ok = jax.vmap(lambda u, v: is_walkable(u, v, 0.0, ter))(px, py)
+        blocked = ~ok & (jnp.arange(samples) > 0)
+        hit = jnp.any(blocked)
+        last = jnp.maximum(jnp.argmax(blocked) - 1, 0)
+        return hit, jnp.where(hit, px[last], ax), jnp.where(hit, py[last], ay)
+    return jax.vmap(one)(x0, y0, ux, uy, max_dist, team)
+
+
 def blink_point(x0: Any, y0: Any, x1: Any, y1: Any, max_range: Any, team: Any, radius: Any, terrain: tuple,
                 samples: int = 16) -> tuple[Any, Any]:
     """Flash landing: clamp to ``max_range``, then the farthest walkable point on the segment, so Flash crosses

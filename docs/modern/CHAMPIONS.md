@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone and Ambessa, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa and Camille, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`, `ambessa.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
-`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone and Ambessa.
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`, `ambessa.py`, `camille.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa and Camille.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -373,6 +373,45 @@ was cut to 5–25 + 20% bonus AD there, so the 26.19 client values (5–30 + 25%
    the target's radius + 65 behind it.
 7. **Cost and cooldown timing** and **spell shields**: shared (see below).
 
+## Camille (164)
+
+Rift patches since 26.1 (client values include them): 26.4 (Wall Dive's attack speed after any dash), 26.16 (passive
+shield 10/15/20/25% max health, cooldown 14/11/8 s; Tactical Sweep cooldown 12–10 s, outer 7–9%). The record's legacy
+`cooldownTime` for Tactical Sweep still shows the old 15–11 s; the `Cooldown` values the kits read have the new ones.
+The 26.8 Hookshot/Tactical Sweep changes are an ARAM section. Gameplay radius 65, pathing 35, acquisition 600; windup
+0.3 / 1.552 (19.3%).
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| CAM.P1 | Adaptive Defenses: when ready, an attack landing on an enemy champion gives a shield of 10/15/20/25% max health (levels 1/7/13/19) for 2 s, physical or magic: whichever damage that champion has dealt to champions this game threatens more after Camille's current armor / MR. The cooldown (14/11/8 s, levels 1/7/13, static) starts when the shield ends or breaks. | | CLIENT `ShieldAmount`, `PassiveCooldown`, `ShieldDuration`; WIKI typing, cooldown start; PATCH 26.16 |
+| CAM.Q1 | Precision Protocol: attack reset; the next attack within 4 s gains 50 range, an uncancellable windup and no crit, deals `TADRatio × AD` bonus physical damage on hit and grants 25–45% move speed for 1 s. The cooldown starts with that attack (or when the window lapses). | 25 mana; 9–5 s; 20–40% AD | CLIENT `TADRatio`, `MSBonus`, `MSDuration`, `BonusAARange`; WIKI window, cdstart |
+| CAM.Q2 | The recast (free) is available from 0.25 s to 3.5 s after the first empowered attack. Its attack is empowered the same way; if it starts at least 1.5 s after the first, the bonus is doubled and `40% + 4% per level after 1` (100% from level 16) of the attack's total damage is true damage (not against structures). | | CLIENT `QTotalRecastTime`, `QRampUpTime`, `QEmpoweredAmp`, `DamageConversionPercentage`; WIKI |
+| CAM.W1 | Tactical Sweep: 1.1 s wind-up in the direction fixed at cast (ghosted, no attacks; she may move and cast), then a 70° cone 650 long (centre range; centres behind her are not hit): `BaseDamage + 0.6 bonus AD`; beyond 325 also `(7–9% + 1% per 40 bonus AD)` max health (at most 300 against monsters), an 80% slow decaying over 2 s, and Camille heals that bonus's post-mitigation damage dealt to champions. Non-epic monsters take 50%. Cooldown at cast. | 50–70 mana; 12–10 s; 60–160 | CLIENT `BaseDamageTotal`, `OuterEdgeTooltip`, `ConeAngle`, `BlastLength`, `SlowPercentage`, `OuterConeHealingRatio`, `MonsterDamageReduction`; WIKI timings, radii |
+| CAM.E1 | Hookshot: a grapple toward the cursor flies at 1400 to the first wall within 800; Camille is pulled to it at `1050 + move speed` and hangs for 1 s. No wall: nothing, cooldown starts. | 70 mana; 16–12 s | CLIENT `DashSpeed`, `WallHangDuration`; WIKI range, grapple speed; pull speed checked on the 16.9 replays (see limitation 2) |
+| CAM.E2 | Wall Dive (recast, or a move / attack command while hanging): not while rooted; dashes 400 toward the cursor, 800 if the line passes an enemy champion within 800, at `1050 + move speed`, through walls. It stops on touching an enemy champion (within 130), stunning nearby enemy champions 0.75 s. On landing: `BaseDamage + 0.75 bonus AD` physical within 130 and 40–60% attack speed for 5 s. The cooldown starts when the dive (or the hang) ends. | 60–180; 40–60% AS | CLIENT `TotalDamage`, `E2*DashRange`, `ECollisionRange`, `KnockupDuration`, `ASBuff`, `ASDuration`; WIKI |
+| CAM.R1 | The Hextech Ultimatum: an enemy champion within 475 (centre range); not while rooted or hanging. Camille leaps to it over 0.5 s, untargetable. On landing a zone of radius 425 around her lasts 2.5/3.25/4 s: the target cannot leave it by any means, other enemies inside are knocked to its edge at 1000 units/s, and her attacks on the target deal `RPercentCurrentHPDamage` % of its current health as bonus magic damage. It ends if the target dies or Camille is outside the zone for 1 s. Cooldown at cast. | 100 mana; 140/115/90 s; 4/6/8% | CLIENT `RDuration`, `RCircleRadius`, `RPercentCurrentHPDamage`; WIKI leap, knock-away speed, leaving rule |
+
+### Camille limitations
+
+1. **Tactical Sweep's wind-up** is the wiki's 1.1 s (stated since 2020); the client's `ChargeDuration` is 0.75 s,
+   probably only the charge part (INFERRED-M). The decaying slow is re-applied each tick, so tenacity doesn't
+   shorten its decay.
+2. **Hookshot.** Walls are found by sampling the base terrain along the ray at cast. Structures, player-made
+   terrain and the grapple's flight while Camille moves are not modelled. The pull speed `1050 + move speed` is
+   checked on two hookshots in the 16.9 replays (1378 vs 1391 and 1518 vs 1532 u/s;
+   `/mnt/nfs/shared/champ-expansion/camille-measurements/`). The hang is the client's 1 s (wiki: 0.75 s). If she
+   doesn't dive, she stays at the wall when the hang ends (INFERRED-L), and CC on the wall does not trigger the
+   automatic dive.
+3. **Wall Dive** extends to 800 when the dive line passes an enemy champion within 800 (the wiki's "toward
+   enemy champions within 1400"). The knock-back on collision and ghosting the minions she passes through are not
+   modelled.
+4. **Adaptive Defenses** uses each champion's recorded damage this game from the damage reports. The shield's
+   absorb priority over other shields is not modelled.
+5. **The Hextech Ultimatum.** The zone is a circle (a hexagon live). The leap is a target-following dash at the
+   initial distance ÷ 0.5 s. Displacement immunity and disrupting channels are not modelled. Knocked-away units
+   can walk back into the zone.
+6. **Cost and cooldown timing** and **spell shields**: shared (see below).
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -433,10 +472,14 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitCtx.move_goal` / `moving` / `attack_order` / `last_order_at` | (C,) | The champion's move and attack commands and the time of the last one (`ChampionLayer.last_order_at`; Ambessa's Drakehound's Step). |
 | `KitCtx.life_steal` | (C,) | Life steal stat (Ambessa's Public Execution healing). |
 | `KitOut.dash_stops_at_walls` | (C,) bool | This tick's kit dash stops at terrain instead of crossing it (Drakehound's Step). |
+| `KitCtx.terrain` | masks | The world's base terrain; `mechanics.first_wall` finds the first wall along a ray (Hookshot). |
+| `leash(state, kctx, n)` | (N,) × 4 | `(active, cx, cy, radius)`: the move phase keeps the unit inside the circle after all movement (The Hextech Ultimatum). |
+| `untargetable(state, champion_ids, now)` | (C,) bool | The holder is untargetable this tick (Camille's leap). |
+| `KitAttackMods.true_split` | (C,) | Share of the next melee attack dealt as a second, true packet (Precision Protocol's recast; not against structures). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

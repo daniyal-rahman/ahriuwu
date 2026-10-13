@@ -169,7 +169,7 @@ def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, no
                     rand=jax.random.uniform(jax.random.fold_in(s.key, KIT_RAND_STREAM), (c,)),
                     rand_n=jax.random.uniform(jax.random.fold_in(s.key, KIT_RAND_STREAM + 1), (c, s.x.shape[0])),
                     move_goal=s.champ.move_goal, moving=s.champ.moving, attack_order=s.champ.attack_order,
-                    last_order_at=s.champ.last_order_at, life_steal=st.life_steal)
+                    last_order_at=s.champ.last_order_at, life_steal=st.life_steal, terrain=cfg.terrain)
 
 
 def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:

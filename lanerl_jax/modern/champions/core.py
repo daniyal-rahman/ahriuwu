@@ -32,6 +32,7 @@ CODE_YONE_Q3 = 4           # Mortal Steel's empowered dash and whirlwind after t
 CODE_YONE_E = 5            # Soul Unbound's mark detonation
 CODE_AMBESSA_P = 4         # Medarda Maxim's bonus damage on an empowered attack
 CODE_AMBESSA_SPIN2 = 5     # Lacerate's second spin at the end of a Drakehound's Step dash
+CODE_CAMILLE_W_OUTER = 4   # Tactical Sweep's outer-cone bonus (its post-mitigation damage heals)
 EPS = 1e-6
 NEVER = 1e9
 
@@ -83,6 +84,7 @@ class KitCtx(NamedTuple):
     attack_order: Any = None         # (C,) int32 attack-order unit, -1 none
     last_order_at: Any = None        # (C,) time of the last move or attack command
     life_steal: Any = None           # (C,) life steal stat (Ambessa's Public Execution healing)
+    terrain: Any = None              # the world's terrain masks (Camille's Hookshot finds walls); None = no walls
 
     @property
     def total_ad(self):
@@ -133,6 +135,7 @@ class KitAttackMods(NamedTuple):
     force_crit: Any = None           # (C,) bool: the next attack critically strikes (Fiora Bladework)
     crit_mult: Any = None            # (C,) the forced crit's damage multiplier (> 0), else the holder's crit damage
     magic_split: Any = None          # (C,) share of the next attack dealt as a second, magic packet (Yone)
+    true_split: Any = None           # (C,) share of the next attack dealt as a second, true packet (Camille Q2)
 
 
 def f32(x: Any) -> Any:
@@ -290,7 +293,7 @@ def neutral_defense(c: int) -> KitDefense:
 def neutral_attack_mods(c: int) -> KitAttackMods:
     f = jnp.zeros((c,), bool)
     z = jnp.zeros((c,), jnp.float32)
-    return KitAttackMods(z, f, f, f, z, z, f, f, z, z)
+    return KitAttackMods(z, f, f, f, z, z, f, f, z, z, z)
 
 
 def combine_attack_mods(a: KitAttackMods, b: KitAttackMods) -> KitAttackMods:
@@ -303,7 +306,8 @@ def combine_attack_mods(a: KitAttackMods, b: KitAttackMods) -> KitAttackMods:
                          jnp.maximum(o(a.windup, z), o(b.windup, z)), jnp.maximum(o(a.period, z), o(b.period, z)),
                          o(a.uncancellable, f) | o(b.uncancellable, f), o(a.force_crit, f) | o(b.force_crit, f),
                          jnp.maximum(o(a.crit_mult, z), o(b.crit_mult, z)),
-                         jnp.maximum(o(a.magic_split, z), o(b.magic_split, z)))
+                         jnp.maximum(o(a.magic_split, z), o(b.magic_split, z)),
+                         jnp.maximum(o(a.true_split, z), o(b.true_split, z)))
 
 
 def pulses(kctx: KitCtx, period: float) -> Any:

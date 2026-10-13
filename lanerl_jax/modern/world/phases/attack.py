@@ -134,7 +134,12 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     split_pk = D.packets(launched[:c] & ~ranged_c & ~on_ward[:c] & (att.target[:c] >= 0) & (split > 0), jnp.arange(c),
                          jnp.maximum(att.target[:c], 0), craw * split, D.MAGIC, flags_c, cast_id=cast_ids[:c])
     extra_atk.append(split_pk)
-    raw_all = lane_pk.raw.at[:c].set(craw * jnp.where(ranged_c, 1.0, 1.0 - split))
+    # ... and a true share (Camille's Precision Protocol recast), structures excepted.
+    tsplit = jnp.where(vs_struct, 0.0, opt(kmods.true_split, jnp.zeros((c,), jnp.float32)))
+    true_pk = D.packets(launched[:c] & ~ranged_c & ~on_ward[:c] & (att.target[:c] >= 0) & (tsplit > 0), jnp.arange(c),
+                        jnp.maximum(att.target[:c], 0), craw * tsplit, D.TRUE, flags_c, cast_id=cast_ids[:c])
+    extra_atk.append(true_pk)
+    raw_all = lane_pk.raw.at[:c].set(craw * jnp.where(ranged_c, 1.0, 1.0 - split - tsplit))
     dtype_all = lane_pk.dtype.at[:c].set(cdtype)
     flags_all = lane_pk.flags.at[:c].set(flags_c)
     lay = cfg.layout

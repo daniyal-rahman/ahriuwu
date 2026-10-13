@@ -16,6 +16,7 @@ from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
 from . import aatrox
 from . import ambessa
+from . import camille
 from . import darius
 from . import fiora
 from . import garen
@@ -27,7 +28,7 @@ from . import yone
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -164,6 +165,27 @@ def on_parry(state: ChampionState, kctx: KitCtx, parried) -> ChampionState:
                            for k, st in zip(KITS, state)))
 
 
+def untargetable(state: ChampionState, champion_ids, now) -> Any:
+    """(C,) bool: the holder cannot be targeted (Camille's leap); read before the tick's orders are filtered."""
+    out = jnp.zeros(jnp.shape(champion_ids), bool)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "untargetable"):
+            out = out | k.untargetable(st, jnp.asarray(champion_ids, jnp.int32), now)
+    return out
+
+
+def leash(state: ChampionState, kctx: KitCtx, n_units: int) -> tuple[Any, Any, Any, Any]:
+    """(N,) ``(active, cx, cy, radius)``: units that cannot leave a circle this tick (The Hextech Ultimatum)."""
+    active = jnp.zeros((n_units,), bool)
+    cx = cy = rr = jnp.zeros((n_units,), jnp.float32)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "leash"):
+            a, x, y, r = k.leash(st, kctx, n_units)
+            cx, cy, rr = jnp.where(a, x, cx), jnp.where(a, y, cy), jnp.where(a, r, rr)
+            active = active | a
+    return active, cx, cy, rr
+
+
 def resource_fraction(state: ChampionState, champion_ids, mana_fraction) -> Any:
     """(C,) resource bar: a kit's own resource where it has one (Renekton Fury), else ``mana_fraction``."""
     out = jnp.asarray(mana_fraction, jnp.float32)
@@ -204,5 +226,5 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "cc_immune", "debuffs", "dodging_units", "ghosted", "immobile", "on_parry", "resource_fraction", "point_target_ranges", "displacement", "size",
+           "attack_mods", "cc_immune", "debuffs", "dodging_units", "ghosted", "immobile", "leash", "on_parry", "untargetable", "resource_fraction", "point_target_ranges", "displacement", "size",
            "unit_target_ranges"]

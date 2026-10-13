@@ -127,6 +127,14 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                       ghosted=ghost, moving=active, goal_x=gx, goal_y=gy, team=team_mv,
                       clearance=jnp.minimum(s.radius, cfg.routes.radius), terrain=terrain, dt=dt,
                       movers=cfg.layout.ward0)
+    # Leashed units cannot leave their circle by any means (The Hextech Ultimatum).
+    la, lx, ly, lr = K.leash(sc.kits, sc.kctx, n)
+    ldx, ldy = x - lx, y - ly
+    ld = jnp.sqrt(ldx * ldx + ldy * ldy)
+    out_ = la & s.alive & (ld > lr)
+    lf = jnp.where(out_, lr / jnp.maximum(ld, 1e-6), 1.0)
+    x = jnp.where(out_, lx + ldx * lf, x).astype(x.dtype)
+    y = jnp.where(out_, ly + ldy * lf, y).astype(y.dtype)
     facing = jnp.stack([x[:c] - s.x[:c], y[:c] - s.y[:c]], -1)
     norm = jnp.linalg.norm(facing, axis=-1, keepdims=True)
     facing = jnp.where(norm > 1e-3, facing / jnp.maximum(norm, 1e-6), champ.facing)
