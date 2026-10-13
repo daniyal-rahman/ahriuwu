@@ -106,9 +106,15 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cy = jnp.where(s_out.teleport_arrive, s_out.teleport_y, cy)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))
     # Kit displacements (Darius E): straight toward the kit's point at its speed, ignoring terrain and collision.
+    # Static per match: only matches with a displacing kit trace the terrain override below (Garen vs Jax compiles as
+    # before, golden-identical).
+    kits_here = [K.kit(lo.champion) for lo in cfg.loadouts]
+    can_displace = any(hasattr(k, "displacement") for k in kits_here)
     disp, d_x, d_y, d_v = K.displacement(sc.kits, sc.kctx, n)
     # A displacement that starts while the unit is CC-immune (Fiora Riposte) is ignored until it ends.
     imm = K.cc_immune(sc.kits, sc.kctx)
+    if any(hasattr(k, "displacement_immune") for k in kits_here):
+        imm = imm | K.displacement_immune(sc.kits, sc.kctx)                         # (K'Sante's charge)
     ignored = disp[:c] & (imm | champ.disp_ignored)
     champ = champ._replace(disp_ignored=ignored)
     disp = disp & s.alive & ~jnp.zeros((n,), bool).at[:c].set(ignored)
@@ -123,10 +129,15 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
              | LA.minion_ghosted(lane_ai, units, now) | disp)
     collide = s.alive & (s.kind != W.KIND_WARD) & ~W.is_structure(s.kind)
     path_r = UC.pathing_radius(s.kind, s.sub, s.radius, cfg.champion_base.pathing_radius)
+    dx_, dy_ = x, y
     x, y = UC.resolve(s.x, s.y, x, y, radius=path_r, collide=collide,
                       ghosted=ghost, moving=active, goal_x=gx, goal_y=gy, team=team_mv,
                       clearance=jnp.minimum(s.radius, cfg.routes.radius), terrain=terrain, dt=dt,
                       movers=cfg.layout.ward0)
+    # Kit displacements ignore terrain and collision (K'Sante's All Out over terrain); a unit left inside terrain
+    # is ejected once its displacement ends (TIMERS).
+    if can_displace:
+        x, y = jnp.where(disp, dx_, x).astype(x.dtype), jnp.where(disp, dy_, y).astype(y.dtype)
     # Leashed units cannot leave their circle by any means (The Hextech Ultimatum).
     la, lx, ly, lr = K.leash(sc.kits, sc.kctx, n)
     ldx, ldy = x - lx, y - ly
@@ -151,4 +162,4 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                                    attack_speed=s.attack_speed.at[:c].set(st.attack_speed))
     ictx = ictx._replace(x=x[:c], y=y[:c], facing_x=facing[:, 0], facing_y=facing[:, 1], moved=moved)
     return s, sc._replace(champ=champ, tp_lock=tp_lock, sres=sres, ms=ms, dstart=dstart, in_dash=in_dash,
-                          units=units, ictx=ictx)
+                          displaced=disp if can_displace else None, units=units, ictx=ictx)

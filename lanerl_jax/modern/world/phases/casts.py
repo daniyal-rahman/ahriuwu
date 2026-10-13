@@ -73,6 +73,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     can_cast = caps["can_cast"][:c] & s.alive[:c] & ~locked & ~item_casting
     order = W.CastOrder(jnp.where(can_cast, orders.cast_slot, -1).astype(jnp.int32), orders.cast_target,
                         orders.cast_x, orders.cast_y)
+    am = jnp.zeros((c,), bool) if orders.attack_move is None else orders.attack_move
+    kctx = kctx._replace(raw_cast_slot=jnp.where(s.alive[:c], orders.cast_slot, -1).astype(jnp.int32),
+                         attack_move_cmd=am & s.alive[:c])
     kits, k_cast = K.cast(s.kits, kctx, units, order)
     kits, k_per = K.periodic(kits, kctx, units)
     kit_out = merge_out([k_cast, k_per], c, n)

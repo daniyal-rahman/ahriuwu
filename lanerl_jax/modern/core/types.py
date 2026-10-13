@@ -133,6 +133,8 @@ class CCOut(NamedTuple):
     slow: Any               # strength 0..1
     slow_duration: Any
     cast_id: Any            # int32 instance that applied it (Cheap Shot / Electrocute pairing)
+    tenacity_free: Any = None   # (C, N) bool: this entry's stun / root ignore tenacity (K'Sante All Out's root,
+                                # Ambessa's suppression); None = never
 
 
 def no_cc(c: int, n: int) -> CCOut:
@@ -142,10 +144,12 @@ def no_cc(c: int, n: int) -> CCOut:
 
 def merge_cc(a: CCOut, b: CCOut) -> CCOut:
     stronger = b.slow > a.slow
+    free = a.tenacity_free if b.tenacity_free is None else (
+        b.tenacity_free if a.tenacity_free is None else jnp.where(b.tenacity_free, True, a.tenacity_free))
     return CCOut(jnp.maximum(a.stun, b.stun), jnp.maximum(a.root, b.root), jnp.maximum(a.silence, b.silence),
                  jnp.maximum(a.knockup, b.knockup), jnp.maximum(a.slow, b.slow),
                  jnp.where(stronger, b.slow_duration, jnp.maximum(a.slow_duration, b.slow_duration)),
-                 jnp.where(b.cast_id != 0, b.cast_id, a.cast_id))
+                 jnp.where(b.cast_id != 0, b.cast_id, a.cast_id), free)
 
 
 class Dash(NamedTuple):

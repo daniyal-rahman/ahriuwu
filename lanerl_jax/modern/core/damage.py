@@ -226,6 +226,7 @@ class Defense(NamedTuple):
     aoe_received_mult: Any = None     # on AoE packets (Jax E); None = 1
     received_mult_all: Any = None     # on every type incl. true (turret backdoor); None = 1
     parry: Any = None                 # every non-turret packet is negated (Fiora Riposte); None = never
+    bonus_armor: Any = None           # the bonus part of ``armor`` (bonus-armor penetration); None = 0
 
 
 def default_defense(n: int, *, armor=0.0, magic_resist=0.0, unit_class=CLASS_MINION) -> Defense:
@@ -249,6 +250,7 @@ class Offense(NamedTuple):
     dealt_reduction: Any              # Exhaust (not on true damage)
     unit_class: Any
     is_turret: Any                    # turret attacks bypass basic-attack reductions
+    percent_bonus_armor_pen: Any = None   # share of the target's bonus armor ignored (K'Sante All Out); None = 0
 
 
 def default_offense(n: int, *, unit_class=CLASS_MINION) -> Offense:
@@ -275,8 +277,14 @@ def premitigation_to_final(p: Packets, off: Offense, dfn: Defense) -> Any:
     reduction = jnp.where(is_true, 0.0, off.dealt_reduction[s])
     dealt = jnp.where(no_mod, 1.0, jnp.maximum(1.0 + p.amp - reduction, 0.0))
     raw = p.raw * dealt * ratio
+    # Bonus-armor penetration takes the bonus share of the (reduced) armor; it adds to percent penetration
+    # (wiki All Out: "stacks additively with other sources of percentage armor penetration").
+    pct_pen = off.percent_armor_pen[s]
+    if off.percent_bonus_armor_pen is not None and dfn.bonus_armor is not None:
+        share = jnp.clip(dfn.bonus_armor[d] / jnp.maximum(dfn.armor[d], 1e-6), 0.0, 1.0)
+        pct_pen = jnp.minimum(pct_pen + off.percent_bonus_armor_pen[s] * share, 1.0)
     armor = effective_resist(dfn.armor[d], dfn.flat_armor_reduction[d], dfn.percent_armor_reduction[d],
-                             off.percent_armor_pen[s], off.lethality[s])
+                             pct_pen, off.lethality[s])
     mr = effective_resist(dfn.magic_resist[d], dfn.flat_mr_reduction[d], dfn.percent_mr_reduction[d],
                           off.percent_magic_pen[s], off.magic_pen[s])
     mult = jnp.where(p.dtype == PHYSICAL, mitigation_multiplier(armor, jnp),

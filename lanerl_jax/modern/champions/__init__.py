@@ -3,7 +3,8 @@
 ``KITS`` holds one module per champion. A kit defines ``NAME``, ``ID``, ``SKILL_ORDER`` (default rank per level),
 ``TRAITS`` (rune legality), ``UNIT_TARGET_RANGE``, ``State``/``init`` and the hooks ``cast``, ``periodic``,
 ``on_attack``, ``on_hit``, ``on_damage``, ``on_takedown``, ``stats``, ``defense``, ``attack_mods``, ``debuffs`` and
-optionally ``ghosted``, ``dodging``, ``immobile``, ``displacement``, ``size`` and ``resource`` (contract: ``core``). Every hook runs every kit for every holder and each kit
+optionally ``ghosted``, ``dodging``, ``immobile``, ``displacement``, ``displacement_immune``, ``hp_cap``,
+``mana_override``, ``size`` and ``resource`` (contract: ``core``). Every hook runs every kit for every holder and each kit
 gates itself on ``KitCtx.champion_id``, so shapes stay fixed.
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ from . import darius
 from . import fiora
 from . import garen
 from . import jax as jax_kit
+from . import ksante
 from . import malphite
 from . import nasus
 from . import renekton
@@ -28,7 +30,7 @@ from . import yone
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille, ksante)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -158,6 +160,38 @@ def cc_immune(state: ChampionState, kctx: KitCtx) -> Any:
     return out
 
 
+def displacement_immune(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) bool: the holder ignores displacements and knock-ups but still takes other CC (K'Sante's Path Maker
+    charge and All Out cast)."""
+    out = jnp.zeros(kctx.unit.shape, bool)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "displacement_immune"):
+            out = out | k.displacement_immune(st, kctx)
+    return out
+
+
+def hp_cap(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) the holder's current health cannot exceed this (K'Sante's All Out threshold); +inf = none."""
+    out = jnp.full(kctx.unit.shape, jnp.inf, jnp.float32)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "hp_cap"):
+            out = jnp.minimum(out, k.hp_cap(st, kctx))
+    return out
+
+
+def mana_override(state: ChampionState, kctx: KitCtx) -> tuple[Any, Any]:
+    """(C,) ``(active, mana)``: the holder's mana is set to ``mana`` after this tick's costs and regeneration
+    (K'Sante's All Out refill, decay and restore)."""
+    active = jnp.zeros(kctx.unit.shape, bool)
+    value = jnp.zeros(kctx.unit.shape, jnp.float32)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "mana_override"):
+            a, v = k.mana_override(st, kctx)
+            value = jnp.where(a, v, value)
+            active = active | a
+    return active, value
+
+
 def on_parry(state: ChampionState, kctx: KitCtx, parried) -> ChampionState:
     """``parried`` (C,) bool: a hostile immobilizing effect (stun, root, knock-up) was negated on the holder this
     tick by ``cc_immune`` (Fiora Riposte's stun condition)."""
@@ -226,5 +260,5 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "cc_immune", "debuffs", "dodging_units", "ghosted", "immobile", "leash", "on_parry", "untargetable", "resource_fraction", "point_target_ranges", "displacement", "size",
+           "attack_mods", "cc_immune", "debuffs", "displacement_immune", "hp_cap", "mana_override", "dodging_units", "ghosted", "immobile", "leash", "on_parry", "untargetable", "resource_fraction", "point_target_ranges", "displacement", "size",
            "unit_target_ranges"]

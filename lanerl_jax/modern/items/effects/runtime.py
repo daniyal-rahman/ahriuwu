@@ -76,7 +76,9 @@ def fold_offense(base: D.Offense, ctx: Ctx, stats: ItemStats) -> D.Offense:
         lethality=base.lethality.at[u].add(stats.lethality),
         percent_armor_pen=combine(base.percent_armor_pen, stats.percent_armor_pen),
         magic_pen=base.magic_pen.at[u].add(stats.magic_pen),
-        percent_magic_pen=combine(base.percent_magic_pen, stats.percent_magic_pen))
+        percent_magic_pen=combine(base.percent_magic_pen, stats.percent_magic_pen),
+        percent_bonus_armor_pen=combine(jnp.zeros_like(base.percent_armor_pen) if base.percent_bonus_armor_pen is None
+                                        else base.percent_bonus_armor_pen, stats.percent_bonus_armor_pen))
 
 
 def resolve_tick(p: D.Packets, off: D.Offense, dfn: D.Defense, hp: Any, max_hp: Any,

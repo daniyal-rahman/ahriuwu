@@ -368,7 +368,8 @@ was cut to 5–25 + 20% bonus AD there, so the 26.19 client values (5–30 + 25%
 4. **Repudiation** reads absorption from any of her shields in the damage report during the brace.
 5. **Lacerate's slow** is re-applied every tick at its decayed strength (the world keeps the strongest slow), so
    tenacity does not shorten its decay.
-6. **Public Execution.** Suppression is a stun here, so tenacity shortens it (live, it ignores tenacity). Her
+6. **Public Execution.** Suppression is a stun here that ignores tenacity (`CCOut.tenacity_free`; summoner Cleanse
+   still ends it, which live suppression does not allow). Her
    displacement immunity and the rule that keeps her blink out of turret range are not modelled. The blink lands
    the target's radius + 65 behind it.
 7. **Cost and cooldown timing** and **spell shields**: shared (see below).
@@ -411,6 +412,61 @@ The 26.8 Hookshot/Tactical Sweep changes are an ARAM section. Gameplay radius 65
    initial distance ÷ 0.5 s. Displacement immunity and disrupting channels are not modelled. Knocked-away units
    can walk back into the zone.
 6. **Cost and cooldown timing** and **spell shields**: shared (see below).
+
+## K'Sante (897)
+
+Rift patches since 26.1 (client values include them): 26.13 (Footwork shield
+70–240 + 13.5% bonus health). 26.20 (after our 26.19 data) changes Path Maker: mana 45–65, damage reduction 25% and
+70% in All Out; the kit keeps the 26.19 client values (40–60, 30%, 75%), which the wiki showed until 2026-10-06.
+Gameplay radius 80, attack range 150, base attack speed 0.688. The live wiki patch-history page was vandalised on
+2026-10-10; the intact revision 4078187 is cached as `KSante_Patch_history.txt`. Replay measurements (2 games,
+NA1_5551013247 and NA1_5551044970, 20 fps): `/mnt/nfs/shared/champ-expansion/ksante-measurements/`. Replay speeds read
+about 0.991x true (the replay clock); the values below are corrected.
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| KSA.P1 | Dauntless Instinct: ability hits mark enemies for 4 s. An attack started on a marked target consumes the mark when it lands (even if the mark has run out by then; not if dodged): a proc after the attack of `12 + (1% → 2% over levels 1–18) max health` physical; the health part is at least `10 + 5 × level` against minions and at most `15 + 5 × level` against monsters. The strike after a pull over terrain does not mark. | | CLIENT `MarkDuration`, `FlatDamage`, `MarkDamagePercentMin/Max`; WIKI floor / cap (tooltip 15–100 / 20–105), notes |
+| KSA.P2 | All Out bonus: attacks, the mark and ability damage deal `1% (+1% per 100 bonus armor) (+1% per 100 bonus MR)` of the target's max health as bonus physical damage; for abilities only the nearest target of each cast (the wiki's listed bug) and added to that hit's packet. | | CLIENT `MaxHealthDamagePercentBase`, `MaxHealthDamageResistRatio`; WIKI first-target bug |
+| KSA.Q1 | Ntofo Strikes: cast time `0.45 − (1/1200) × bonus resists` (≥ 0.35 at 120 bonus armor + MR), then a 465 × 100 rectangle from K'Sante's centre in the cast direction: `70–190 + 40% bonus armor + 40% bonus MR` physical and an 80% slow for 0.5 s. Hitting anything gives a stack (6 s, max 2). Attack reset; exactly one champion hit → an attack order on it. Castable during Footwork's and Path Maker's dashes. | 20 mana; `3.5 − 0.0125 × bonus resists` s (≥ 2), × 2/3 in All Out | CLIENT `FlatDamage`, `BaseDamage` calc, `Rectangle*`, `Slow*`, `RecastWindow`, `Min/MaxCastTime`, `BaseCD`, `MinCD`, `DefenseCapforCooldown`, `RCooldownReduction`; WIKI |
+| KSA.Q2 | At 2 stacks the cast consumes them and fires a shockwave from K'Sante's position at the end of the cast time: 825 long, 140 wide, 1600 units/s, hitting every enemy it passes for the same damage and slow, plus a 0.65 s airborne pull of up to 300 units toward K'Sante at 500 units/s (stopping at his hitbox) and a 0.8 s stun starting at the hit. | | CLIENT `KnockupDuration`, `PullSpeed`, `PullDistance`, KSanteQ3Missile `castRange`, `mMissileWidth` 70 (a half-width, as for Aatrox W and Yone Q3; WIKI width 100), movement `mSpeed`, KSanteQ3 `StunDuration` 0.8; WIKI tested stun (2024-06-27, "applied same time as pull, 0.8 s not 1 s"); replays: 3 pulls at ~505 u/s for ~0.6 s (see limitation 2) |
+| KSA.W1 | Path Maker: not while rooted. Charges 0.4–1 s toward the direction fixed at cast: immobile, no attacks or other spells, displacement and knock-up immunity (other CC still lands and doesn't interrupt), 30% damage reduction (75% in All Out). Released by a recast or an attack-move command (both work while stunned or silenced; a recast before 0.4 s releases at 0.4 s) or at 1 s. | 40–60 mana (free in All Out); 14–10 s after the dash | CLIENT `MinChargeTime`, `MaxDuration`, `DamageReduction`, `RDamageReduction`, `cantCastWhileRooted`; WIKI interaction table; PATCH 26.20 (later) |
+| KSA.W2 | The dash: `100 + 350 × min(charge / 0.9, 1)` units at 1400 (1800 in All Out), stopping at walls. Enemies it touches take `45–165 + (8% + 2% per 100 bonus armor + 2% per 100 bonus MR)` max health physical (at least 80–330 to minions; at most 180–500 to monsters, uncapped in All Out); outside All Out they are carried at 1.3× the dash speed to just in front of its end and stunned `0.5 + 2.5 × (charge − 0.4)` s (0.5–1.75), the stun starting at the hit. In All Out: no carry or stun, plus `10% → 80%` (charge 0.4 → 0.9 s) of the damage as true damage. Exactly one champion hit → an attack order on it. | | CLIENT `MinDashBase`, `MaxDashBase`, `TimeToFullCharge`, `DashSpeedBase`, `DashSpeedAO`, `VictimDashMod`, `Min/MaxKnockbackDuration`, `RDamageIncrease*`, `MinimumMinionDamage`, `MaxMonsterDamage`; replays: dash 1400 / 1800 (wiki 1500, "needs to be confirmed"), victims 1820, end gap 134–176 (radii 145), stun running from the hit |
+| KSA.E1 | Footwork: not while rooted or during Path Maker. A location dash of up to 250 at `550 + move speed` (`1250 + move speed` in All Out), stopping at walls; or a dash to an allied champion or minion within 550 (centre to edge) at `1100 + move speed` (`1400 + move speed`), through terrain. A shield of `70–240 + 13.5% bonus health` for 2 s at cast (not while the last one is still up), also given to a target allied champion. | 45–65 mana (free in All Out); 10–8 s, halved in All Out | CLIENT `ShieldBaseAmountFast`, `ShieldHealthRatio`, `FreeTargetRangeBase`, `FreeTargetSpeedBase/AO`, `AllySpeedBase/AO`, `CooldownModAO`, KSanteEAllyDash `castRange`; PATCH 14.19 (no 400 range in All Out); replays: 873 at 330 move speed (client 550, wiki 500), 1590 in All Out, 1462 to an ally, All Out location dashes ~240 |
+| KSA.R1 | All Out: an enemy champion within 350 (centre to edge); not while rooted, during Path Maker's charge or while All Out lasts. A 0.4 s cast time (displacement-immune) and a 0.5 s root on the target from the cast that ignores tenacity. Then the target is pulled along the K'Sante → target direction (fixed at cast): 300 units, or — if terrain starts within 350 and has a far side within 5000 — to 450 past the terrain's far edge. Pull speed `900 → 1700` for pull lengths `600 → 2000`. | 100 mana (at cast); 120/100/80 s after All Out | CLIENT `TackleRange`, `DistanceRatioMin/Max`, `CarrySpeedRatioMin/Max`, `MaxWallCarrySR`, `KSanteLandingOffset`; WIKI 350 check, 450 past, root; replays: 300-unit pulls at ~900 (client `CarrySpeedNoWall` 800 and wiki 2000 both rejected), a 2000-unit pull at ~1716; 14 casts from the replays' spell field: pulls run within 5° of the K'Sante → target line (one outlier, see limitation 4); over terrain, a pull with clear ground past the wall ends 447 past its far side (our map: 8–53 units from the replay end) |
+| KSA.R2 | Without terrain: K'Sante blinks 250 beyond the pull's end at once and goes All Out; the target is airborne during the pull, takes `80/115/150` physical at its end, then is stunned 0.25 s. Over terrain: K'Sante is untargetable until the pull ends and blinks 250 beyond its end 0.25 s after the cast (then goes All Out); the target takes `80/115/150` when it leaves the terrain and, at the end, stays airborne 0.25 s (struck for `80/115/150 + 5% bonus health` physical 0.125 s in), then is stunned 0.5 s; K'Sante is ordered to attack it. | | CLIENT `BaseDamage`, `SlamDownStrikeDamage`, `TotalDamageSlamDown`, `NoWallStunDuration`, `WallStunDuration`; WIKI timings; replays: K'Sante 250 / 253 / 257 from the target at the end (wiki "175 beyond the hitbox edge" = 250 for a 75 radius; wiki's "100 behind" over terrain rejected) |
+| KSA.R3 | All Out (15 s): current health is capped at 65% of max health at entry (health lost is not restored); base armor / MR fall by 85% of bonus armor / MR while bonus resists keep their value for scalings; +40/60/80% attack speed, 20% omnivamp, 50% bonus armor penetration (added to percent penetration on the target's bonus share); mana is set to full and decays to 0, then the mana from before is restored; basic abilities are free; Ntofo Strikes' stacks reset (its cooldown resets if K'Sante had 2), Path Maker's cooldown is refreshed. It lasts 2 s longer if it would end during Path Maker's charge. The cooldown starts when it ends. | | CLIENT `AllOutDuration`, `HealthLost`, `DefensesLost`, `AttackSpeed`, `Omnivamp`, `ArmorPenPercent`; WIKI (threshold, mana, resist rule, additive penetration bug, +2 s) |
+
+### K'Sante limitations
+
+1. **Wiki conflicts resolved for the client**: W damage reduction / cost (26.20 changes after our data), W dash
+   speed 1400 (wiki 1500), Footwork 550 + move speed (wiki 500), All Out no-terrain stun 0.25 s (wiki 0.3 s, a 2024
+   retest; the replays can't show stuns) and the shockwave stun 0.8 s (KSanteQ3 record and wiki test; the Q tooltip
+   reads the Q record's 1.0). The shockwave speed is the movement component's 1600 (the record's `missileSpeed` says
+   1800; `LifetimeMax` 0.45 would fit 1800).
+2. **Shockwave pull.** Three replay pulls run at ~505 u/s for ~0.6 s (the client's 500 / 300); three others run at
+   ~408 u/s and are unexplained (the client's `PullSpeedMin/Max` 110/600 and `PullDistanceMin/Max` 100/400 are not
+   used). The pull stops at K'Sante's hitbox.
+3. **Path Maker.** The dash hits units its 80-radius body touches each tick (the 55 line width isn't used). Victims
+   are carried to the end point plus both radii in front of it, at 1.3× speed, without terrain; the wiki's
+   "new inputs retained" and Flash lock are not modelled. The stun and true-damage curves are continuous (the wiki
+   lists 0.05 s steps).
+4. **All Out over terrain.** The pull runs along the K'Sante → target line at the cast (13 of 14 replay casts
+   within 5°; the outlier, Lux, was 110 from K'Sante — inside each other's hitboxes — and ran 17° off). The far
+   side is the first point past the terrain where a 35-radius disk fits, sampled every 25 units on the base map
+   (Rift transformations and "map-generated terrain only" are not checked). A second wall within 450 stops the
+   pull 35 before it; the one replay case stopped ~170 before it (133 short of this rule), and one replay pull
+   ended in what the base map calls terrain (unexplained; possibly a transformed Rift). Kit displacements now
+   ignore terrain in the move phase (the contract's wording), and a unit left inside terrain is ejected when its
+   displacement ends. K'Sante's vanish is from the cast's end to the pull's end, and he blinks at +0.25 s (replay +0.3 s).
+   A cancelled cast (target dead or gone) keeps its mana cost and starts no cooldown.
+5. **Footwork's ally targets** are allied champions and minions (the client's `mAffectsTypeFlags` aren't decoded;
+   wards are excluded). The ally's shield uses the ally's heal and shield power. The location dash has no minimum
+   distance (wiki: "has a minimum dash range, needs to be measured").
+6. **All Out's resist loss** uses the holder's bonus armor / MR before kit stats, including percent bonuses (live,
+   percent bonuses other than Jak'Sho's are ignored — a listed bug). Its attack bonus is a separate proc packet
+   (live, it amplifies the attack's own instance); none against structures or wards. Gaining bonus health during
+   All Out doesn't move the threshold.
+7. **Cost and cooldown timing** and **spell shields**: shared (see below).
 
 ## Approximations that remain
 
@@ -458,7 +514,7 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitOut.strip_shields` | (C, N) bool | Destroy the unit's shields before this tick's damage (Renekton empowered W). |
 | `KitOut.cast_lockout` | (C,) | Now honoured from any hook, not only on a cast start (Renekton W post-strike lockout). |
 | `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
-| `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted (Darius E). |
+| `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted and through terrain (collision does not clamp it; a unit left inside terrain is ejected when it ends; since MODERN-038). Darius E, Aatrox W, Camille R, K'Sante's pulls. |
 | `immobile(state, kctx)` | (C,) bool | The kit holds its champion in place without a world cast lock, so its other spells stay castable (Aatrox Q and W cast times, during which Umbral Dash works). |
 | `KitCtx.rand` | (C,) | Uniform [0, 1) folded from the world key each tick (Fiora vital directions). |
 | `KitDefense.parry` | (C,) bool | Non-turret damage packets to the holder are negated (`Defense.parry`; Fiora Riposte). |
@@ -476,10 +532,18 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `leash(state, kctx, n)` | (N,) × 4 | `(active, cx, cy, radius)`: the move phase keeps the unit inside the circle after all movement (The Hextech Ultimatum). |
 | `untargetable(state, champion_ids, now)` | (C,) bool | The holder is untargetable this tick (Camille's leap). |
 | `KitAttackMods.true_split` | (C,) | Share of the next melee attack dealt as a second, true packet (Precision Protocol's recast; not against structures). |
+| `KitCtx.bonus_armor` / `bonus_mr` | (C,) | Bonus resists (for kit `stats`: before kit stats). All Out's base-resist loss leaves them unchanged (K'Sante's scalings). |
+| `KitCtx.raw_cast_slot` / `attack_move_cmd` | (C,) | This tick's cast slot before the CC / lock filter, and an attack-move command (Path Maker's recast works while stunned or silenced, and on attack-move). |
+| `displacement_immune(state, kctx)` | (C,) bool | Kit displacements are ignored and knock-ups dropped; other CC lands (Path Maker's charge, All Out's cast). |
+| `hp_cap(state, kctx)` | (C,) | Current health is clamped to this after the tick's heals, vamp and regeneration (All Out's threshold). |
+| `mana_override(state, kctx)` | (C,) × 2 | `(active, mana)`: mana is set after the tick's costs and regeneration (All Out's refill, decay and restore). |
+| `CCOut.tenacity_free` | (C, N) bool | That stun / root ignores tenacity (All Out's root; Ambessa's suppression). |
+| `ItemStats.base_armor_loss` / `base_mr_loss` / `percent_bonus_armor_pen` | (C,) | Kit-only stat buckets: subtract from base resists without changing `bonus_*`; ignore a share of the target's bonus armor, added to percent penetration on that share (`Defense.bonus_armor`, `Offense.percent_bonus_armor_pen`). |
+| `mechanics.wall_exit` | (C,) × 3 | Terrain within a check distance along a ray with a walkable far side (All Out's pull over terrain). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600; K'Sante 80 / 50 / 400. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

@@ -5,6 +5,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from ... import champions as K
 from ... import economy as E
 from ... import wards as WD
 from ...core import types as W
@@ -44,12 +45,15 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     mana = jnp.clip(champ.mana - kit_all.mana_cost * aw.mana_cost_mult + out.effects.mana + sc.extra.mana
                     + st.mana_regen * dt, 0.0, st.max_mana)
     mana = jnp.where(respawn, st.max_mana, mana)
+    m_on, m_val = K.mana_override(sc.kits, sc.kctx)                  # K'Sante's All Out
+    mana = jnp.where(m_on & alive[:c] & ~respawn, jnp.clip(m_val, 0.0, st.max_mana), mana)
     # HP regen in 0.5 s pulses (§12), then the fountain and Homeguard heal.
     pulse = jnp.floor(now / 0.5 + 1e-6) - jnp.floor(s.t / 0.5 + 1e-6)
     regen = jnp.where(alive[:c] & ~respawn, st.hp_regen * 0.5 * pulse, 0.0)
     hp_c = jnp.minimum(hp[:c] + regen, max_hp[:c])
     hp_c, mana = E.fountain_regen(hp_c, max_hp[:c], mana, st.max_mana, sc.in_f & alive[:c], s.t, now,
                                   homeguard=econ.homeguard.active)
+    hp_c = jnp.where(alive[:c] & ~respawn, jnp.minimum(hp_c, K.hp_cap(sc.kits, sc.kctx)), hp_c)   # All Out
     hp = hp.at[:c].set(hp_c)
     replace = lambda inv, frm, to, do: I.Inventory(*jax.vmap(                               # noqa: E731
         lambda it, stk, f_, t_, d_: tuple(I.replace_item(I.Inventory(it, stk), f_, t_, d_)))(
@@ -122,6 +126,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     # Units inside terrain that closed (inhibitor respawn, Rift transformation) step out; the test disk is the
     # movement clearance the MOVE clamp keeps walkable.
     mobile = alive & ((kind == W.KIND_CHAMPION) | (kind == W.KIND_MINION))
+    if sc.displaced is not None:                                      # not mid-displacement (All Out over terrain)
+        mobile = mobile & ~sc.displaced
     x, y = DTR.eject(x, y, jnp.clip(s.team, 0, 1), jnp.minimum(s.radius, cfg.routes.radius), sc.terrain,
                      active=mobile)
     return s, sc._replace(alive=alive, x=x, y=y, hp=hp, max_hp=max_hp, champ=champ, econ=econ, wards=wards,

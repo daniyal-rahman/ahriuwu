@@ -66,12 +66,16 @@ class ItemStats(NamedTuple):
     bonus_ms_amp: Any = 0.0           # other bonus MS is (1 + amp) more effective (Celerity)
     silent_health: Any = 0.0          # part of ``health`` whose gains do not raise current HP (Biscuits)
     attack_speed_cap_lift: Any = 0.0  # > 0 lifts the attack-speed cap (Hail of Blades)
+    # Kit-only buckets (no client item sets them).
+    percent_bonus_armor_pen: Any = 0.0  # ignores this share of the target's bonus armor (K'Sante All Out)
+    base_armor_loss: Any = 0.0        # subtracted from base armor; ``bonus_*`` keeps its value (K'Sante All Out)
+    base_mr_loss: Any = 0.0
 
 
 STAT_FIELDS = ItemStats._fields
 STAT_INDEX = {name: i for i, name in enumerate(STAT_FIELDS)}
 # Stack as 1 - prod(1 - x) across sources (DAMAGE_AND_STATS §3.4); everything else adds.
-MULTIPLICATIVE_FIELDS = ("tenacity", "slow_resist", "percent_armor_pen", "percent_magic_pen")
+MULTIPLICATIVE_FIELDS = ("tenacity", "slow_resist", "percent_armor_pen", "percent_magic_pen", "percent_bonus_armor_pen")
 
 
 def zero_stats(shape=(), xp: Any = jnp) -> ItemStats:

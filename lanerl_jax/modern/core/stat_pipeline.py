@@ -135,6 +135,7 @@ class ChampionStats(NamedTuple):
     max_mana: Any
     mana_regen: Any
     attack_range: Any
+    percent_bonus_armor_pen: Any = 0.0   # share of targets' bonus armor ignored (K'Sante All Out)
 
 
 def soft_cap_move_speed(raw: Any) -> Any:
@@ -223,7 +224,8 @@ def compose(base: ChampionBase, level: Any, bonus: ItemStats, *, adaptive_physic
     shape = jnp.broadcast_shapes(jnp.shape(base.base_hp), jnp.shape(level))
     return ChampionStats(*(jnp.broadcast_to(jnp.asarray(v, jnp.float32), shape) for v in ChampionStats(
         base_ad=base_ad, bonus_ad=bonus_ad, ap=ap, base_hp=base_hp, max_hp=max_hp,
-        base_armor=base_armor, bonus_armor=armor - base_armor, base_mr=base_mr, bonus_mr=mr - base_mr,
+        base_armor=base_armor - bonus.base_armor_loss, bonus_armor=armor - base_armor,
+        base_mr=base_mr - bonus.base_mr_loss, bonus_mr=mr - base_mr,
         attack_speed=aspd, bonus_attack_speed=bonus_as, attack_period=1.0 / aspd,
         attack_windup=windup(base.attack_speed, aspd, base.windup_percent, base.windup_modifier),
         move_speed=ms, basic_ability_haste=basic_ah, ultimate_haste=ult_ah,
@@ -234,7 +236,7 @@ def compose(base: ChampionBase, level: Any, bonus: ItemStats, *, adaptive_physic
         lethality=bonus.lethality, percent_armor_pen=bonus.percent_armor_pen, magic_pen=bonus.magic_pen,
         percent_magic_pen=bonus.percent_magic_pen, hp_regen=hp_regen,
         max_mana=base.base_mana + base.mana_per_level * g + bonus.mana, mana_regen=mana_regen,
-        attack_range=base.attack_range)))
+        attack_range=base.attack_range, percent_bonus_armor_pen=bonus.percent_bonus_armor_pen)))
 
 
 def sync_max_health(hp: Any, old_max: Any, new_max: Any, heal_on_gain: Any = None) -> tuple[Any, Any]:

@@ -61,6 +61,10 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     kits = K.on_parry(sc.kits, sc.kctx, (immune & immobilized)[:c])
     champ_cc, slow_cc = _drop(champ_cc, immune), _drop(slow_cc, immune)
     monster_cc = [_drop(x, immune) for x in monster_cc]
+    # Displacement immunity (K'Sante's Path Maker charge, All Out cast): knock-ups are dropped, other CC lands.
+    unmoved = jnp.zeros((n,), bool).at[:c].set(K.displacement_immune(sc.kits, sc.kctx))
+    no_up = lambda x: x._replace(knockup=jnp.where(unmoved[None, :], 0.0, x.knockup))        # noqa: E731
+    champ_cc, monster_cc = no_up(champ_cc), [no_up(x) for x in monster_cc]
     cc = M.apply_cc(s.cc, champ_cc, ten, sres, now, source_is_champion=jnp.ones((c,), bool),
                     cleansed=jnp.zeros((n,), bool).at[:c].set(s_out.cleanse | item_cleanse.cleanse))
     for mcc in monster_cc:
@@ -75,4 +79,4 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
 
 def _drop(cc: W.CCOut, immune) -> W.CCOut:
     """``cc`` without its columns on ``immune`` (N,) units."""
-    return W.CCOut(*(jnp.where(immune[None, :], jnp.zeros_like(x), x) for x in cc))
+    return W.CCOut(*(None if x is None else jnp.where(immune[None, :], jnp.zeros_like(x), x) for x in cc))

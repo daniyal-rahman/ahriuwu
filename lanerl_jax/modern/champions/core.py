@@ -85,6 +85,11 @@ class KitCtx(NamedTuple):
     last_order_at: Any = None        # (C,) time of the last move or attack command
     life_steal: Any = None           # (C,) life steal stat (Ambessa's Public Execution healing)
     terrain: Any = None              # the world's terrain masks (Camille's Hookshot finds walls); None = no walls
+    bonus_armor: Any = None          # (C,) bonus armor / magic resist before kit losses (K'Sante's scalings)
+    bonus_mr: Any = None
+    raw_cast_slot: Any = None        # (C,) this tick's cast slot before the CC / lock filter (K'Sante's Path Maker
+                                     # recast works while stunned or silenced); None = the filtered order
+    attack_move_cmd: Any = None      # (C,) bool: an attack-move command this tick (Path Maker's recast)
 
     @property
     def total_ad(self):

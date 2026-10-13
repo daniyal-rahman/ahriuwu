@@ -61,6 +61,7 @@ class TickScratch(NamedTuple):
     ms: Any = None              # MOVE: (N,) move speed
     dstart: Any = None          # MOVE: (C,) dash started
     in_dash: Any = None         # MOVE: (C,) dashing
+    displaced: Any = None       # MOVE: (N,) under a kit displacement this tick (terrain and collision ignored)
     att: Any = None             # ATTACK: AttackState
     launched: Any = None        # ATTACK: (N,) attacks launched
     started: Any = None         # ATTACK: (N,) windups started

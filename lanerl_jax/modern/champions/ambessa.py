@@ -373,7 +373,8 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
         e_pending=state.e_pending & ~e_due, e_second=e_second, e_slow_from=f32(e_slow_from),
         w_smash_at=f32(w_smash_at), r_pending=state.r_pending & ~r_due)
     cc = CCOut(f32(jnp.maximum(supp, stun2)), z, z, z, f32(e_slow), f32(e_slow_t),
-               jnp.where(supp_mask, sid, jnp.where(e_hit, e_id[:, None], 0)).astype(jnp.int32))
+               jnp.where(supp_mask, sid, jnp.where(e_hit, e_id[:, None], 0)).astype(jnp.int32),
+               tenacity_free=supp_mask & (supp > 0))                 # suppression ignores tenacity
     dash = Dash(*(jnp.where(blink.active, b, s_) for s_, b in zip(step, blink)))
     lock = jnp.where(seized, R_SUPPRESS, 0.0)
     return state, out(c, n, packets=D.concat_packets(p_q, p_e, p_w, p_r), cc=cc, dash=dash,

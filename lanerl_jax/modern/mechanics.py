@@ -153,7 +153,8 @@ def apply_cc(cc: CCTimers, out: W.CCOut, tenacity: Any, slow_resist: Any, now: A
              source_is_champion: Any, cleansed: Any = None) -> CCTimers:
     """Add this tick's CC (C, N), tenacity applied now (§10.2; not on knock-ups). The strongest slow wins; slow
     resist applies at use (§9.1)."""
-    reduce = lambda d: cc_duration(d, tenacity[None, :])
+    free = jnp.zeros(out.stun.shape, bool) if out.tenacity_free is None else out.tenacity_free
+    reduce = lambda d: jnp.where(free, d, cc_duration(d, tenacity[None, :]))          # noqa: E731
     stun = jnp.max(jnp.where(out.stun > 0, reduce(out.stun), 0.0), axis=0)
     root = jnp.max(jnp.where(out.root > 0, reduce(out.root), 0.0), axis=0)
     sil = jnp.max(jnp.where(out.silence > 0, reduce(out.silence), 0.0), axis=0)
@@ -282,6 +283,28 @@ def first_wall(x0: Any, y0: Any, ux: Any, uy: Any, max_dist: Any, team: Any, ter
         last = jnp.maximum(jnp.argmax(blocked) - 1, 0)
         return hit, jnp.where(hit, px[last], ax), jnp.where(hit, py[last], ay)
     return jax.vmap(one)(x0, y0, ux, uy, max_dist, team)
+
+
+def wall_exit(x0: Any, y0: Any, ux: Any, uy: Any, check: Any, max_dist: Any, team: Any, terrain: tuple,
+              step: float = 25.0, samples: int = 201, radius: float = 0.0) -> tuple[Any, Any, Any]:
+    """``(found, entry, exit)`` distances along the ray from ``(x0, y0)``: terrain starts within ``check`` and the ray
+    is walkable again by ``max_dist`` (K'Sante All Out: terrain with an opposite side). ``exit`` is the first sample
+    past the terrain where a disk of ``radius`` fits (a gap narrower than a unit is still terrain); sampled every
+    ``step`` units (``samples`` covers 5000)."""
+    def one(ax, ay, dx, dy, ck, md, tm):
+        ter = team_terrain(terrain, tm)
+        d = jnp.arange(samples, dtype=jnp.float32) * step
+        px, py = ax + dx * d, ay + dy * d
+        ok = jax.vmap(lambda u, v: is_walkable(u, v, 0.0, ter))(px, py) | (d > md)            # entry: the ray
+        fits = jax.vmap(lambda u, v: is_walkable(u, v, radius, ter))(px, py)                 # exit: a unit fits
+        blocked = ~ok & (d > 0)
+        i0 = jnp.argmax(blocked)
+        has_wall = jnp.any(blocked) & (d[i0] <= ck)
+        after = fits & (jnp.arange(samples) > i0) & (d <= md)
+        i1 = jnp.argmax(after)
+        found = has_wall & jnp.any(after)
+        return found, d[i0], jnp.where(found, d[i1], md)
+    return jax.vmap(one)(x0, y0, ux, uy, check, max_dist, team)
 
 
 def blink_point(x0: Any, y0: Any, x1: Any, y1: Any, max_range: Any, team: Any, radius: Any, terrain: tuple,
