@@ -30,6 +30,8 @@ CODE_AATROX_W2 = 7         # Infernal Chains' pull damage
 CODE_FIORA_VITAL = 4       # Duelist's Dance true damage (codes are unique per holder, so kits may share numbers)
 CODE_YONE_Q3 = 4           # Mortal Steel's empowered dash and whirlwind after their cast
 CODE_YONE_E = 5            # Soul Unbound's mark detonation
+CODE_AMBESSA_P = 4         # Medarda Maxim's bonus damage on an empowered attack
+CODE_AMBESSA_SPIN2 = 5     # Lacerate's second spin at the end of a Drakehound's Step dash
 EPS = 1e-6
 NEVER = 1e9
 
@@ -76,6 +78,11 @@ class KitCtx(NamedTuple):
     rand: Any = None                 # (C,) uniform [0, 1) drawn from the world key each tick (Fiora vital
                                      # directions); None = 0
     rand_n: Any = None               # (C, N) uniform [0, 1) per holder and unit (Yone Q per-target crit rolls)
+    move_goal: Any = None            # (C, 2) the champion's move-order point (Ambessa's Drakehound's Step)
+    moving: Any = None               # (C,) bool: a move order is active
+    attack_order: Any = None         # (C,) int32 attack-order unit, -1 none
+    last_order_at: Any = None        # (C,) time of the last move or attack command
+    life_steal: Any = None           # (C,) life steal stat (Ambessa's Public Execution healing)
 
     @property
     def total_ad(self):
@@ -104,6 +111,7 @@ class KitOut(NamedTuple):
     on_hit_target: Any = None        # (C,) int32: the holder's ability applies on-hit effects to this unit this tick
                                      # (Fiora Lunge), -1 none; None = never
     on_attack_proc: Any = None       # (C,) bool: ... and on-attack effects too, as an attack launch (Yone Q)
+    dash_stops_at_walls: Any = None  # (C,) bool: this tick's kit dash stops at terrain instead of crossing it
 
 
 class KitDefense(NamedTuple):
@@ -234,7 +242,7 @@ def no_out(c: int, n: int) -> KitOut:
                   jnp.zeros((c, 4), bool), jnp.zeros((c, 4), jnp.float32), jnp.zeros((c,), bool),
                   jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32), zc,
                   jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c, n), bool),
-                  jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), bool))
+                  jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), bool), jnp.zeros((c,), bool))
 
 
 def out(c: int, n: int, **fields) -> KitOut:
@@ -249,6 +257,7 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
         ss = p.strip_shields if p.strip_shields is not None else jnp.zeros((c, n), bool)
         oh = p.on_hit_target if p.on_hit_target is not None else jnp.full((c,), -1, jnp.int32)
         oa = p.on_attack_proc if p.on_attack_proc is not None else jnp.zeros((c,), bool)
+        sw = p.dash_stops_at_walls if p.dash_stops_at_walls is not None else jnp.zeros((c,), bool)
         acc = KitOut(
             D.concat_packets(acc.packets, p.packets), merge_cc(acc.cc, p.cc),
             Dash(*(jnp.where(p.dash.active, b, a) for a, b in zip(acc.dash, p.dash))),
@@ -261,7 +270,8 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
             jnp.where(p.cast_started, p.cast_id, acc.cast_id),
             jnp.maximum(acc.cast_lockout, p.cast_lockout), acc.cleanse_slow | cs,
             jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32), acc.strip_shields | ss,
-            jnp.where(oh >= 0, oh, acc.on_hit_target).astype(jnp.int32), acc.on_attack_proc | oa)
+            jnp.where(oh >= 0, oh, acc.on_hit_target).astype(jnp.int32), acc.on_attack_proc | oa,
+            jnp.where(p.dash.active, sw, acc.dash_stops_at_walls))
     return acc
 
 

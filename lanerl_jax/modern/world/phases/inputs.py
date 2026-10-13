@@ -151,8 +151,10 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
                        x=jnp.where(am_req, orders.move_x, amove.x), y=jnp.where(am_req, orders.move_y, amove.y),
                        held=jnp.where(new_order, -1, amove.held), held_seq=amove.held_seq)
     ranks = skill_up(s, cfg, orders)
+    commanded = orders.move | (orders.attack >= 0) | am_req
     champ = champ._replace(attack_order=attack_order.astype(jnp.int32), moving=moving, move_goal=goal, ranks=ranks,
-                           target_seen_at=seen_at, queued_cast=queued)
+                           target_seen_at=seen_at, queued_cast=queued,
+                           last_order_at=jnp.where(commanded, now, champ.last_order_at).astype(jnp.float32))
     s = s._replace(champ=champ, amove=amove)
     s = spawn_minions(s, cfg, now)
     caps = M.capabilities(s.cc, now)

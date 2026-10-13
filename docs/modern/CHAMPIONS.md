@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora and Yone, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone and Ambessa, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
-`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora and Yone.
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`, `ambessa.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone and Ambessa.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -333,6 +333,46 @@ resource pool now holds only mana (`arType` 0) and energy (1). Gameplay radius 6
    stats. An Azakana crit doubles both halves; Spellblade and Demolish are not split into magic damage.
 7. **Cost and cooldown timing** and **spell shields**: shared (see below).
 
+## Ambessa (799)
+
+Energy (200, 10 per second) through the world's resource pool (`uses_energy`). Gameplay radius 65, pathing 35,
+acquisition 600; windup 0.25 / 1.6 (15.6%). The wiki pages are already at 26.20: Drakehound's Step's bonus damage
+was cut to 5–25 + 20% bonus AD there, so the 26.19 client values (5–30 + 25%) are used. Rift patches since 26.1:
+26.4/26.10 (monster damage 75), 26.9 (R cast time 0.7 s), 26.10 (Q 4–6% max health, R healing 15–20%).
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| AMB.P1 | Drakehound's Step: a move or attack command given after an ability is cast, up to its lockout's end plus 0.275 s (0.25 s for Repudiation), makes Ambessa dash once the lockout ends toward the attack target (to its edge) or the move point, 175–350 long, at `770 (+60 at levels 6, 11, 16) + move speed`. The dash stops at walls and is not possible while stunned or rooted. | 175–350 | CLIENT `Buffer_Dash_*`, dash speed calculation; WIKI |
+| AMB.P2 | Medarda Maxim: each ability gives a stack when its lockout ends (max 3, 4 s, refreshed). An attack started with a stack is a chained attack: +75 range, uncancellable windup, total attack time 0.35 s (0.30 from level 7, 0.25 from 13; windup 15.6% of it); if it lands it deals `5 → 30 (by level) + 25% bonus AD` bonus physical damage (proc, life steal) and restores 40/55/70 energy (levels 1/7/13). | | CLIENT `Attack_Buff_*`, `Attack_Range_Amount`, `Calc_OnHit_Damage_Flat`, `Calc_OnHit_Energy_Refund`, `AmbessaBasicAttackChained*.mOverrideAttackTime`; replay cadence (see limitation 1) |
+| AMB.Q1 | Cunning Sweep: 0.225 s lockout, then a 180° sweep in the cast direction, 400 long (edge range), plus everything within 135 of Ambessa. Enemies whose centre is beyond 275 take `Damage_1_Base + 0.6 bonus AD + (4–6% + 3% per 100 bonus AD) max HP`; closer ones take half. Monsters: +75, the max-health part capped at 100 → 300 by level. A hit allows Sundering Slam from 0.5 s to 4 s later. Cooldown at cast. | 70 energy; 14–10 s; 40–120 | CLIENT `Damage_1_*`, `Calc_Damage_1_Percent_Max`, `Swap_*`, monster calculations; WIKI radii |
+| AMB.Q2 | Sundering Slam: 0.225 s lockout, then a 650 × 80 line (edge range): the first enemy takes `Damage_2_Base + 0.9 bonus AD + (4–6% + 4% per 100 bonus AD) max HP`, the rest half. It neither needs nor starts the cooldown. | 70 energy; 50–150 | CLIENT `Damage_2_*`, `Calc_Damage_2_Percent_Max`; WIKI |
+| AMB.W1 | Repudiation: a shield of `50 → 320 (by level) + 1.5 bonus AD` for 1.5 s at cast; 0.225 s lockout (other abilities usable after it); at the end of the 0.5 s brace (or of a Drakehound's Step dash it ends during) a smash within 325 (edge range): `BaseDamage + 0.5 bonus AD`, ×1.5 if the shield absorbed damage from a champion, large monster or turret during the brace. Cooldown at cast. | 70 energy; 18–14 s; 50–150 | CLIENT `Calc_Shield`, `Buff_Duration`, `HighDamageMultiplier`; WIKI |
+| AMB.E1 | Lacerate: 0.225 s lockout, then a spin within 325 (edge range): `Damage_Flat_Base + 0.5 bonus AD` and a 99% slow decaying to 0 over 1 s; again at the end of a Drakehound's Step dash taken in its window. Cooldown at cast. | 70 energy; 13–9 s; 40–120 | CLIENT `Calc_Damage_Flat`, `Slow_Amount`, `Slow_Duration`; WIKI |
+| AMB.R1 | Public Execution (passive): `Armor_Penetration` % armor penetration; heals `Omnivamp + 50% of life steal` of the post-mitigation damage her abilities deal, 25% of that against minions and monsters. | 10/20/30%; 15/17.5/20% | CLIENT `Armor_Penetration`, `Calc_Omnivamp`, `Omnivamp_MinionMod`; PATCH 26.10 |
+| AMB.R2 | Active: not while rooted; 0.7 s cast time (no actions); then she blinks just behind the farthest enemy champion in a 1250 × 130 line (edge range) and suppresses it 0.75 s (locked out meanwhile); then `Damage + 0.8 bonus AD` physical and a 0.4 s stun. Cooldown at cast. | 130/115/100 s; 150/250/350 | CLIENT `Calc_Damage`, `Suppress_Duration`, `Stun_Duration`; PATCH 26.9; WIKI |
+
+### Ambessa limitations
+
+1. **Chained attack timing.** The wiki says the empowered attack gains "50% bonus attack speed". The client
+   instead gives the chained attacks a total attack time of 0.35/0.30/0.25 s, and the kit uses that (INFERRED-M).
+   The windup share (15.6%) is the basic attack's, since the record gives none. In the 16.9 replays, hits on the
+   lane opponent after a dash often come about 0.3 s apart, which supports short chained attacks
+   (`/mnt/nfs/shared/champ-expansion/ambessa-measurements/chain-4549.out`). Stacks are consumed when the attack
+   launches; live, on hit.
+2. **Drakehound's Step.** Any move or attack command since the cast counts, and the latest command wins. The
+   Hold/Stop cancel, the 500-unit wall forgiveness and the "dash cancelled by CC during the lockout" rules are
+   not modelled; she only needs to be free to move when the dash starts. A dash toward an attack target ends at
+   the target's edge.
+3. **Cunning Sweep's areas.** The 180° half-plane uses edge range; the inner/outer split uses the target's centre
+   (beyond 275 = edge hit).
+4. **Repudiation** reads absorption from any of her shields in the damage report during the brace.
+5. **Lacerate's slow** is re-applied every tick at its decayed strength (the world keeps the strongest slow), so
+   tenacity does not shorten its decay.
+6. **Public Execution.** Suppression is a stun here, so tenacity shortens it (live, it ignores tenacity). Her
+   displacement immunity and the rule that keeps her blink out of turret range are not modelled. The blink lands
+   the target's radius + 65 behind it.
+7. **Cost and cooldown timing** and **spell shields**: shared (see below).
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -390,10 +430,13 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitOut.on_attack_proc` | (C,) bool | With `on_hit_target`: the proc also counts as an attack launch for items and runes (Yone Mortal Steel). |
 | `KitAttackMods.magic_split` | (C,) | Share of the next melee attack dealt as a second, magic packet (Yone's Azakana sword). |
 | Kit blink (`Dash.blink`) | (C,) | A kit dash with `blink` teleports to its point by the Flash landing rule (Yone Fate Sealed). |
+| `KitCtx.move_goal` / `moving` / `attack_order` / `last_order_at` | (C,) | The champion's move and attack commands and the time of the last one (`ChampionLayer.last_order_at`; Ambessa's Drakehound's Step). |
+| `KitCtx.life_steal` | (C,) | Life steal stat (Ambessa's Public Execution healing). |
+| `KitOut.dash_stops_at_walls` | (C,) bool | This tick's kit dash stops at terrain instead of crossing it (Drakehound's Step). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

@@ -15,6 +15,7 @@ import jax.numpy as jnp
 from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
 from . import aatrox
+from . import ambessa
 from . import darius
 from . import fiora
 from . import garen
@@ -26,7 +27,7 @@ from . import yone
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit

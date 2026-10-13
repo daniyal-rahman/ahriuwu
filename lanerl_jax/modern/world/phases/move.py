@@ -75,7 +75,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     blink_to = (dash.to_x, dash.to_y)
     dstart = dstart & ~kit_blink
     point = dstart & (dash.target < 0)
-    ex, ey = M.dash_end(s.x[:c], s.y[:c], dash.to_x, dash.to_y, s.team[:c], s.radius[:c], terrain, ~item_dash)
+    stops = jnp.zeros((c,), bool) if sc.kit_out.dash_stops_at_walls is None else sc.kit_out.dash_stops_at_walls
+    ex, ey = M.dash_end(s.x[:c], s.y[:c], dash.to_x, dash.to_y, s.team[:c], s.radius[:c], terrain,
+                        ~item_dash & ~stops)
     dash = dash._replace(to_x=jnp.where(point, ex, dash.to_x), to_y=jnp.where(point, ey, dash.to_y))
     dt_ = jnp.clip(dash.target, 0, n - 1)
     dx = jnp.where(dash.target >= 0, s.x[dt_], dash.to_x)
