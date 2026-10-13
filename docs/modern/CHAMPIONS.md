@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox and Fiora, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora and Yone, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
-`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox and Fiora.
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora and Yone.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -295,6 +295,44 @@ wiki 1.85 s), Bladework's window is 3 s (`BuffDuration`; wiki 4 s).
    heals only Fiora, since the lane world has one champion per team.
 7. **Spell shields.** The Riposte slow or stun is not blocked by a spell shield (shared, see below).
 
+## Yone (777)
+
+No mana: his bar (Flow, `arType` 11, base 500 in the record) shows Soul Unbound's remaining time, and the world's
+resource pool now holds only mana (`arType` 0) and energy (1). Gameplay radius 65, pathing 32, acquisition 400; windup
+0.3 − 0.08 = 22%. Mortal Steel and Spirit Cleave ignore ability haste (`Trait_NotBenefitFromHaste`).
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| YON.P1 | Intent: crit chance from all other sources doubled (capped at 100%); each 1% above 100% becomes 0.5 bonus AD; Yone's crits deal 95% of his crit damage. | ×2; 0.5 AD/%; 95% | CLIENT `CritChanceMultiplier`, `YoneCritToAD`, `CritDamageMod` |
+| YON.P2 | Steel and Spirit: attacks alternate Steel / Azakana on launch, starting with Steel (kept through death; Soul Unbound resets it). An Azakana attack deals half its damage as a second, magic packet (both basic damage; on-hit once). | 50% | CLIENT `MagicDamageSplit`; WIKI notes |
+| YON.Q1 | Mortal Steel: cast time `0.35 × (1 − min(0.41667 × bonus AS, 0.5))` (Yone held, no attacks), then a thrust 450 long, 80 wide (edge range) in the direction fixed at cast: `BaseDamage + 1.1 AD` physical to every enemy, the AD part critting per target. The nearest target takes basic damage (life steal, dodgeable) and gets on-hit and on-attack effects; the others take spell AoE damage. A hit grants a Gathering Storm stack (max 2) for 6 s. Cooldown `4 × (1 − min(0.6 × bonus AS, 0.6667))`, no haste, at cast. | 25–125 + 110% AD; 4 → 1.33 s | CLIENT `QDamage`, `QAttackSpeed*`, `QBaseCastTime`, `BuffDuration`, `mRollForCriticalHit`; WIKI notes |
+| YON.Q2 | At two stacks the cast (not while rooted) consumes them: after the cast time Yone dashes 450 at 1500 and a whirlwind travels 950 at 1500 (80 half-width); every enemy within 100 of the dashing Yone (edge range) or the whirlwind is struck once for the same damage and knocked up 0.75 s. | 0.75 s | CLIENT `Q3MaxDistance`, `Q3DashSpeed`, `Q3AoESize`, `Q3KnockupDuration`, `YoneQ3Missile`; replay (~450 in ~0.32 s) |
+| YON.W1 | Spirit Cleave: cast time `0.5 × (1 − min(0.41667 × bonus AS, 0.5))`, then an 80° cone reaching 650 from a point 50 behind Yone (edge range; centres behind Yone never hit): `BaseDamage + MaxHealthDamage × target max HP` total, half physical then half magic; at least the minion floor (30, +10/level to 8, +20/level 9–13, +40/level from 14) against minions, at most 140 + 10/level against monsters. Cooldown `14 × (1 − min(0.6 × bonus AS, 0.5714))`, no haste, at cast. | 10–50 + 8–12% max HP; 14 → 6 s | CLIENT `MaxHealthDamage`, `ConeWidth`, `WAttackSpeed*`, `MinimumDamageMinions`, `MonsterDamageCap`; WIKI cone |
+| YON.W2 | If it hits anything, a shield of `40 → 90 (by level) + 0.65 bonus AD` for 1.5 s, ×2 with one champion hit and +50% per further champion. | | CLIENT `WShield`, `FirstChampShieldMultiplier`, `SecondChampShieldMultiplier`, `ShieldDuration` |
+| YON.E1 | Soul Unbound: not while rooted; dashes 300 toward the cursor at 1200; the body is left 300 behind the cast point. For 5 s (Spirit Form) Yone is ghosted with 10% → 30% bonus move speed over the first 3 s, and his attack and ability damage to enemy champions (health lost, not shields) stores `DeathmarkPercent` on each. | 25–35%; 22/19/16/13/10 s post-effect | CLIENT `EDashRange`, `EDashSpeed`, `ReturnTimer`, `StartingMS`, `MovementSpeed`, `DeathmarkPercent`; WIKI body, ramp; replay (body 300 behind) |
+| YON.E2 | Recast after 0.5 s, or automatically at 5 s (deferred while stunned, silenced or casting): a 0.225 s cast time, then the stored damage is dealt as true damage and Yone dashes back to the body at 2950 units/s. Cooldown at the return. | 0.225 s; 2950 | CLIENT `RecastLockout`; WIKI recast time; return speed measured on 5 returns in the 16.9 replays (2920–2965 u/s; the wiki's "1200, pending for test" is the outbound speed) |
+| YON.R1 | Fate Sealed: 0.75 s cast time (no move or attack). At its end every enemy in a 1000 × 225 rectangle (edge range) from Yone is stunned 1 s and marked; Yone blinks 0.05 s later to 200 beyond the farthest marked champion, else 1000 ahead, and is locked out 0.45 s. 0.3 s after the cast time, marked enemies still in the area take `BaseDamage + 0.8 bonus AD`, half magic then half physical, are pulled to the blink point at 3000 units/s, then knocked up 0.75 s. Cooldown at cast. | 200/400/600; 120/100/80 s | CLIENT `Damage`, `Width`, `BlinkDistanceBehindTarget`, `RKnockTowardsSpeed`, `RKnockupDuration`; WIKI timings |
+
+### Yone limitations
+
+1. **Attack-speed scaling** uses the client coefficients (0.6 cooldown and 0.4167 cast-time reduction per 100%
+   bonus attack speed). The wiki's Spirit Cleave cooldown slope differs slightly (per 1.51% instead of 1.67%).
+   Mortal Steel's "cooldown resets to 0.1 s if disarmed during the cast" is not modelled (the world has no disarm).
+2. **Mortal Steel** crit rolls use the world key (`KitCtx.rand_n`). Spell vamp at 33% on secondary targets and the
+   Hail of Blades interaction are not modelled. The whirlwind uses the client missile range 950; the wiki gives
+   1050 centre range.
+3. **Spirit Cleave.** The client record also has `mRollForCriticalHit` and `WCritMultiplier` 0.8. The wiki
+   describes no crit, so the cleave never crits here.
+4. **Soul Unbound.** The body point is not pushed out of terrain (wiki: it is not sent through walls). Displacement
+   immunity during the recast and the disabled Recall are not modelled. The automatic return is deferred while
+   Yone is stunned, silenced or casting, but not while he winds up an attack. The ability's 15 s lock at game
+   start is not modelled.
+5. **Fate Sealed.** The blink uses the Flash landing rule for terrain. The pull ignores terrain, and the 1 s stun
+   is not cut short by the pull.
+6. **Intent and Steel and Spirit.** The crit doubling and the AD conversion read crit chance without dynamic
+   stats. An Azakana crit doubles both halves; Spellblade and Demolish are not split into magic damage.
+7. **Cost and cooldown timing** and **spell shields**: shared (see below).
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -348,10 +386,14 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `cc_immune(state, kctx)` / `on_parry(state, kctx, parried)` | (C,) bool | The holder's CC, slows and newly started forced movement are dropped this tick (`ChampionLayer.disp_ignored` holds a dropped movement off to its end); `parried` reports a dropped hostile stun, root or knock-up. |
 | `KitAttackMods.force_crit` / `crit_mult` | (C,) | The next attack crits for this multiplier (Fiora Bladework); an item's forced crit wins when higher. |
 | `KitOut.on_hit_target` | (C,) int32 | The holder's ability applies on-hit effects to this unit: items and runes see a landed hit, not a launch (Fiora Lunge). |
+| `KitCtx.rand_n` | (C, N) | Uniform [0, 1) per holder and unit each tick (Yone per-target crit rolls). |
+| `KitOut.on_attack_proc` | (C,) bool | With `on_hit_target`: the proc also counts as an attack launch for items and runes (Yone Mortal Steel). |
+| `KitAttackMods.magic_split` | (C,) | Share of the next melee attack dealt as a second, magic packet (Yone's Azakana sword). |
+| Kit blink (`Dash.blink`) | (C,) | A kit dash with `blink` teleports to its point by the Flash landing rule (Yone Fate Sealed). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

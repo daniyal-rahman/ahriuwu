@@ -166,7 +166,8 @@ def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, no
                     dashing=now < s.champ.dash_until,
                     kit_shield=jnp.sum(jnp.where(s.shields.source[:c] == D.SOURCE_KIT,
                                                  D.shield_value(s.shields, now)[:c], 0.0), axis=1),
-                    rand=jax.random.uniform(jax.random.fold_in(s.key, KIT_RAND_STREAM), (c,)))
+                    rand=jax.random.uniform(jax.random.fold_in(s.key, KIT_RAND_STREAM), (c,)),
+                    rand_n=jax.random.uniform(jax.random.fold_in(s.key, KIT_RAND_STREAM + 1), (c, s.x.shape[0])))
 
 
 def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:

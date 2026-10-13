@@ -69,7 +69,10 @@ def champion_base(names) -> ChampionBase:
         return float(champion(name)["character"].get(key, default))
 
     def resource(name, key):
+        """Mana (arType 0) or energy (1) pool values; other bars (Fury, Blood Well, Flow) are kit state."""
         par = champion(name)["character"].get("primaryAbilityResource", {})
+        if par.get("arType", 0) not in (0, 1):
+            return 0.0
         return float(par[key]["baseValue"]) if key in par else 0.0
 
     rows = []

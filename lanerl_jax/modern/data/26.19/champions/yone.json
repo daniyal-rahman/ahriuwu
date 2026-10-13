@@ -1,0 +1,1081 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "baseValue": 4.599999904632568,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 175.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 3.5,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 33.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseDamageModifiable": {
+      "baseValue": 62.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseHPModifiable": {
+      "baseValue": 620.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 32.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 345.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 1.5,
+      "__type": "ModifiableFloat"
+    },
+    "basicAttack": {
+      "mAttackDelayCastOffsetPercent": -0.07999999821186066,
+      "mAttackDelayCastOffsetPercentAttackSpeedRatio": 1.0,
+      "mAttackProbability": 1.0,
+      "__type": "AttackSlotData"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 2.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 105.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.15000000596046448,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 2.049999952316284,
+      "__type": "ModifiableFloat"
+    },
+    "primaryAbilityResource": {
+      "arType": 11,
+      "{726ee5cd}": {
+        "baseValue": 500.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 0.0,
+        "__type": "ModifiableFloat"
+      },
+      "arIncrements": 100.0,
+      "arMaxSegments": 5,
+      "arHasRegenText": false,
+      "arAllowMaxValueToBeOverridden": true,
+      "{4eb6a404}": 2,
+      "__type": "AbilityResourceSlotInfo"
+    },
+    "acquisitionRange": 400.0,
+    "pathfindingCollisionRadius": 32.0,
+    "selectionRadius": 120.0
+  },
+  "patch": "26.19",
+  "slots": {
+    "Q": "Characters/Yone/Spells/YoneQAbility/YoneQ",
+    "W": "Characters/Yone/Spells/YoneWAbility/YoneW",
+    "E": "Characters/Yone/Spells/YoneEAbility/YoneE",
+    "R": "Characters/Yone/Spells/YoneRAbility/YoneR",
+    "Passive": "Characters/Yone/Spells/YonePassiveAbility/YonePassive"
+  },
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/yone/yone.bin.json",
+  "spells": {
+    "Characters/Yone/Spells/YoneQAbility/YoneQ": {
+      "calculations": {
+        "QDamage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mDataValue": "ADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "TotalDamageCrit": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mSubpart": {
+                "mStat": 9,
+                "mDataValue": "ADRatio",
+                "__type": "StatByNamedDataValueCalculationPart"
+              },
+              "__type": "StatBySubPartCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          4.0,
+          4.0,
+          4.0,
+          4.0,
+          4.0,
+          4.0,
+          4.0
+        ],
+        "{0a3e0478}": 4.0,
+        "__type": "{0a0eddc9}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            0.0,
+            25.0,
+            50.0,
+            75.0,
+            100.0,
+            125.0,
+            150.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ADRatio",
+          "values": [
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Width",
+          "values": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BuffDuration",
+          "values": [
+            6.0,
+            6.0,
+            6.0,
+            6.0,
+            6.0,
+            6.0,
+            6.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q3MaxDistance",
+          "values": [
+            450.0,
+            450.0,
+            450.0,
+            450.0,
+            450.0,
+            450.0,
+            450.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q3MinDistance",
+          "values": [
+            450.0,
+            450.0,
+            450.0,
+            450.0,
+            450.0,
+            450.0,
+            450.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q3DashSpeed",
+          "values": [
+            1500.0,
+            1500.0,
+            1500.0,
+            1500.0,
+            1500.0,
+            1500.0,
+            1500.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q3AoESize",
+          "values": [
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QAttackSpeedCDPercent",
+          "values": [
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QAttackSpeedCDMax",
+          "values": [
+            0.666670024394989,
+            0.666670024394989,
+            0.666670024394989,
+            0.666670024394989,
+            0.666670024394989,
+            0.666670024394989,
+            0.666670024394989
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QAttackSpeedCastReductionPercent",
+          "values": [
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QAttackSpeedCastReductionMax",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "QBaseCastTime",
+          "values": [
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q3KnockupHeight",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Q3KnockupDuration",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Yone/Spells/YoneWAbility/YoneW": {
+      "calculations": {
+        "WDamage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "{8dfeb810}": {
+          "mMultiplier": {
+            "mStartValue": 0.20000000298023224,
+            "mEndValue": 1.0,
+            "__type": "ByCharLevelInterpolationCalculationPart"
+          },
+          "mFormulaParts": [
+            {
+              "mStat": 2,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "WShield": {
+          "mFormulaParts": [
+            {
+              "mStartValue": 40.0,
+              "mEndValue": 90.0,
+              "__type": "ByCharLevelInterpolationCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "ShieldBADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "MinimumDamageMinions": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mExpandedTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mLevel1Value": 30.0,
+              "mBreakpoints": [
+                {
+                  "mBonusPerLevelAtAndAfter": 10.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 9,
+                  "mBonusPerLevelAtAndAfter": 20.0,
+                  "__type": "Breakpoint"
+                },
+                {
+                  "mLevel": 14,
+                  "mBonusPerLevelAtAndAfter": 40.0,
+                  "__type": "Breakpoint"
+                }
+              ],
+              "__type": "ByCharLevelBreakpointsCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "MonsterDamageCap": {
+          "mFormulaParts": [
+            {
+              "values": [
+                140.0,
+                150.0,
+                160.0,
+                170.0,
+                180.0,
+                190.0,
+                200.0,
+                210.0,
+                220.0,
+                230.0,
+                240.0,
+                250.0,
+                260.0,
+                270.0,
+                280.0,
+                290.0,
+                300.0,
+                310.0,
+                320.0,
+                330.0,
+                340.0,
+                350.0,
+                360.0,
+                370.0,
+                380.0,
+                390.0,
+                400.0,
+                410.0,
+                420.0,
+                430.0,
+                440.0
+              ],
+              "__type": "ByCharLevelFormulaCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          14.0,
+          14.0,
+          14.0,
+          14.0,
+          14.0,
+          14.0,
+          14.0
+        ],
+        "{0a3e0478}": 14.0,
+        "__type": "{0a0eddc9}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            0.0,
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            50.0,
+            60.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MinionMod",
+          "values": [
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "HealthStealMultiplier",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ConeWidth",
+          "values": [
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0,
+            40.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WAttackSpeedCDPercent",
+          "values": [
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WAttackSpeedCDMax",
+          "values": [
+            0.5714200139045715,
+            0.5714200139045715,
+            0.5714200139045715,
+            0.5714200139045715,
+            0.5714200139045715,
+            0.5714200139045715,
+            0.5714200139045715
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WAttackSpeedCastReductionPercent",
+          "values": [
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666,
+            0.4166699945926666
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WAttackSpeedCastReductionMax",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WBaseCastTime",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "WCritMultiplier",
+          "values": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MaxHealthDamage",
+          "values": [
+            0.07000000029802322,
+            0.07999999821186066,
+            0.09000000357627869,
+            0.10000000149011612,
+            0.10999999940395355,
+            0.11999999731779099,
+            0.12999999523162842
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseHealing",
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseShield",
+          "values": [
+            0.0,
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            50.0,
+            60.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "FirstChampShieldMultiplier",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "SecondChampShieldMultiplier",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ShieldDuration",
+          "values": [
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ShieldbADRatio",
+          "values": [
+            0.6499999761581421,
+            0.6499999761581421,
+            0.6499999761581421,
+            0.6499999761581421,
+            0.6499999761581421,
+            0.6499999761581421,
+            0.6499999761581421
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Yone/Spells/YoneEAbility/YoneE": {
+      "calculations": {
+        "{df232269}": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "DeathmarkBase",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mCoefficient": 0.25,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          22.0,
+          22.0,
+          19.0,
+          16.0,
+          13.0,
+          10.0,
+          10.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "values": [
+        {
+          "name": "ReturnTimer",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MovementSpeed",
+          "values": [
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "DeathmarkBase",
+          "values": [
+            5.0,
+            20.0,
+            35.0,
+            50.0,
+            65.0,
+            80.0,
+            95.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "DeathmarkPercent",
+          "values": [
+            0.22499999403953552,
+            0.25,
+            0.2750000059604645,
+            0.30000001192092896,
+            0.32499998807907104,
+            0.3499999940395355,
+            0.375
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RecastLockout",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "EDashRange",
+          "values": [
+            300.0,
+            300.0,
+            300.0,
+            300.0,
+            300.0,
+            300.0,
+            300.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "EDashSpeed",
+          "values": [
+            1200.0,
+            1200.0,
+            1200.0,
+            1200.0,
+            1200.0,
+            1200.0,
+            1200.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "OnHitIncrease",
+          "values": [
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25,
+            0.25
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "StartingMS",
+          "values": [
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MissingHealthPercent",
+          "values": [
+            0.22499999403953552,
+            0.25,
+            0.2750000059604645,
+            0.30000001192092896,
+            0.32499998807907104,
+            0.3499999940395355,
+            0.375
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Yone/Spells/YoneRAbility/YoneR": {
+      "calculations": {
+        "Damage": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mDataValue": "ADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "TooltipDamage": {
+          "mMultiplier": {
+            "mNumber": 0.5,
+            "__type": "NumberCalculationPart"
+          },
+          "mModifiedGameCalculation": "Damage",
+          "__type": "GameCalculationModified"
+        }
+      },
+      "cooldown": {
+        "values": [
+          120.0,
+          120.0,
+          100.0,
+          80.0,
+          80.0,
+          80.0,
+          80.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            0.0,
+            200.0,
+            400.0,
+            600.0,
+            800.0,
+            1000.0,
+            1200.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ADRatio",
+          "values": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BlinkDistanceBehindTarget",
+          "values": [
+            200.0,
+            200.0,
+            200.0,
+            200.0,
+            200.0,
+            200.0,
+            200.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "Width",
+          "values": [
+            225.0,
+            225.0,
+            225.0,
+            225.0,
+            225.0,
+            225.0,
+            225.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RKnockupHeight",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RKnockupDuration",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RKnockTowardsSpeed",
+          "values": [
+            3000.0,
+            3000.0,
+            3000.0,
+            3000.0,
+            3000.0,
+            3000.0,
+            3000.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RKnockTowardsDampener",
+          "values": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Yone/Spells/YonePassiveAbility/YonePassive": {
+      "calculations": {
+        "CurrentCritDamage": {
+          "mExpandedTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mStat": 9,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "mDisplayAsPercent": true,
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "{0a3e0478}": 0.0,
+        "__type": "{0a0eddc9}"
+      },
+      "values": [
+        {
+          "name": "MagicDamageSplit",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "YoneCritToAD",
+          "values": [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CritChanceMultiplier",
+          "values": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CritDamageMod",
+          "values": [
+            0.949999988079071,
+            0.949999988079071,
+            0.949999988079071,
+            0.949999988079071,
+            0.949999988079071,
+            0.949999988079071,
+            0.949999988079071
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    }
+  }
+}

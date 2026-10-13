@@ -71,6 +71,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     item_dash = pd.active & ~dash.active                               # Rocketbelt never crosses terrain
     dash = W.Dash(*(jnp.where(item_dash, a, b) for a, b in zip(pd, dash)))
     dstart = dash.active & s.alive[:c]
+    kit_blink = dstart & dash.blink & ~item_dash                      # a kit blink teleports (Yone R)
+    blink_to = (dash.to_x, dash.to_y)
+    dstart = dstart & ~kit_blink
     point = dstart & (dash.target < 0)
     ex, ey = M.dash_end(s.x[:c], s.y[:c], dash.to_x, dash.to_y, s.team[:c], s.radius[:c], terrain, ~item_dash)
     dash = dash._replace(to_x=jnp.where(point, ex, dash.to_x), to_y=jnp.where(point, ey, dash.to_y))
@@ -95,6 +98,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     bx, by = M.blink_point(cx, cy, s_out.dash.to_x, s_out.dash.to_y, jnp.full((c,), S.FLASH_RANGE), s.team[:c],
                            s.radius[:c], terrain)
     cx, cy = jnp.where(blink, bx, cx), jnp.where(blink, by, cy)
+    kbx, kby = M.blink_point(cx, cy, blink_to[0], blink_to[1], jnp.full((c,), 1e6), s.team[:c], s.radius[:c], terrain)
+    cx, cy = jnp.where(kit_blink, kbx, cx), jnp.where(kit_blink, kby, cy)
     cx = jnp.where(s_out.teleport_arrive, s_out.teleport_x, cx)
     cy = jnp.where(s_out.teleport_arrive, s_out.teleport_y, cy)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))

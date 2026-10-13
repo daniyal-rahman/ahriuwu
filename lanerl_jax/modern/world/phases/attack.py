@@ -129,7 +129,12 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         extra_atk.append(o_extra)
     ranged = launched & (msl_speed > 0)
     flags_c = jnp.full((c,), D.BASIC_ATTACK, jnp.int32) | jnp.where(crit, jnp.int32(D.PROP_CRIT), jnp.int32(0))
-    raw_all = lane_pk.raw.at[:c].set(craw)
+    # Kit split attacks (Yone's Azakana sword): that share of a melee attack is a second, magic packet.
+    split = jnp.where(cdtype == D.PHYSICAL, opt(kmods.magic_split, jnp.zeros((c,), jnp.float32)), 0.0)
+    split_pk = D.packets(launched[:c] & ~ranged_c & ~on_ward[:c] & (att.target[:c] >= 0) & (split > 0), jnp.arange(c),
+                         jnp.maximum(att.target[:c], 0), craw * split, D.MAGIC, flags_c, cast_id=cast_ids[:c])
+    extra_atk.append(split_pk)
+    raw_all = lane_pk.raw.at[:c].set(craw * jnp.where(ranged_c, 1.0, 1.0 - split))
     dtype_all = lane_pk.dtype.at[:c].set(cdtype)
     flags_all = lane_pk.flags.at[:c].set(flags_c)
     lay = cfg.layout
@@ -158,7 +163,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     kit_all = merge_out([kit_out, k_att, k_hit], c, n)
     # Abilities that apply on-hit effects (Fiora Lunge) reach items and runes as a landed hit, not an attack launch.
     oh = kit_all.on_hit_target
-    attack = attack._replace(hit=attack.hit | (oh >= 0), target=jnp.where(oh >= 0, oh, attack.target))
+    attack = attack._replace(hit=attack.hit | (oh >= 0), target=jnp.where(oh >= 0, oh, attack.target),
+                             launched=attack.launched | ((oh >= 0) & kit_all.on_attack_proc))
     jfx = None
     if cfg.jungle is not None:
         # Scorchclaw reads last tick's damage matrix.
