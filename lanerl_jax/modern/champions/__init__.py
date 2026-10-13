@@ -3,7 +3,7 @@
 ``KITS`` holds one module per champion. A kit defines ``NAME``, ``ID``, ``SKILL_ORDER`` (default rank per level),
 ``TRAITS`` (rune legality), ``UNIT_TARGET_RANGE``, ``State``/``init`` and the hooks ``cast``, ``periodic``,
 ``on_attack``, ``on_hit``, ``on_damage``, ``on_takedown``, ``stats``, ``defense``, ``attack_mods``, ``debuffs`` and
-optionally ``ghosted`` and ``dodging`` (contract: ``core``). Every hook runs every kit for every holder and each kit
+optionally ``ghosted``, ``dodging``, ``immobile``, ``displacement``, ``size`` and ``resource`` (contract: ``core``). Every hook runs every kit for every holder and each kit
 gates itself on ``KitCtx.champion_id``, so shapes stay fixed.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ import jax.numpy as jnp
 
 from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
+from . import aatrox
 from . import darius
 from . import garen
 from . import jax as jax_kit
@@ -23,7 +24,7 @@ from . import renekton
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
@@ -133,6 +134,16 @@ def ghosted(state: ChampionState, kctx: KitCtx) -> Any:
     return out
 
 
+def immobile(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) bool: the kit holds its champion in place without a cast lock, so its other spells stay castable
+    (Aatrox Q and W cast times)."""
+    out = jnp.zeros(kctx.unit.shape, bool)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "immobile"):
+            out = out | k.immobile(st, kctx)
+    return out
+
+
 def resource_fraction(state: ChampionState, champion_ids, mana_fraction) -> Any:
     """(C,) resource bar: a kit's own resource where it has one (Renekton Fury), else ``mana_fraction``."""
     out = jnp.asarray(mana_fraction, jnp.float32)
@@ -173,5 +184,5 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "debuffs", "dodging_units", "ghosted", "resource_fraction", "point_target_ranges", "displacement", "size",
+           "attack_mods", "debuffs", "dodging_units", "ghosted", "immobile", "resource_fraction", "point_target_ranges", "displacement", "size",
            "unit_target_ranges"]

@@ -30,7 +30,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     so, mai, mbuf, lane_ai = sc.so, sc.mai, sc.mbuf, sc.lane_ai
     terrain, ictx = sc.terrain, sc.ictx
     tp_lock = s_out.teleport_channel | s_out.teleport_dash
-    can_move_c = caps["can_move"][:c] & s.alive[:c] & ~sc.locked & ~tp_lock & (now >= champ.dash_until)
+    can_move_c = caps["can_move"][:c] & s.alive[:c] & ~sc.locked & ~tp_lock & (now >= champ.dash_until) \
+        & ~K.immobile(sc.kits, sc.kctx)                               # kit cast times without a cast lock (Aatrox Q)
     tgt = jnp.clip(attack_order_eff, 0, n - 1)
     in_range = M.in_attack_range(units._replace(attack_range=units.attack_range.at[:c].set(reach)),
                                  jnp.full((n,), -1, jnp.int32).at[:c].set(jnp.where(t_ok_eff, attack_order_eff,

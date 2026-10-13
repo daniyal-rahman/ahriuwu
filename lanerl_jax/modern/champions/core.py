@@ -6,7 +6,7 @@ pre-tenacity durations, stats are ``ItemStats``. ``now`` is fixed across one tic
 ``periodic``. A timer ending at ``until`` expires on the tick whose end ``now + dt`` reaches it.
 
 Cast ids: ``KIT_ID_BASE + (tick * C + holder) * ID_STRIDE + code``, ``code`` the slot 0..3 or a ``CODE_*`` for a
-non-cast instance (one Garen E spin, one Jax R passive proc). ``KIT_ID_BASE`` keeps them clear of attack ids.
+non-cast instance (one Garen E spin, one Jax R passive proc, Aatrox's passive and W pull). ``KIT_ID_BASE`` keeps them clear of attack ids.
 """
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ KIT_ID_BASE = 1 << 30
 ID_STRIDE = 8
 CODE_GAREN_E_TICK = 4
 CODE_JAX_R_PASSIVE = 5
+CODE_AATROX_P = 6          # one Deathbringer Stance bonus-damage packet
+CODE_AATROX_W2 = 7         # Infernal Chains' pull damage
 EPS = 1e-6
 NEVER = 1e9
 

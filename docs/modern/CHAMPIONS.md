@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius and Malphite, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite and Aatrox, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`, `malphite.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
-`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius and Malphite.
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite and Aatrox.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -10,13 +10,15 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
 - **CLIENT**: the pinned BIN snapshots `lanerl_jax/modern/data/26.19/champions/<name>.json` (spell data values,
   cooldowns, mana, record radii and acquisition range), and the full CDragon 16.19 records in
   `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/<name>.bin.json` (Nasus, Malphite, Renekton, Darius and
-  Tryndamere fetched 2026-10-12, checksums in `SHA256SUMS`): spell calculations,
+  Tryndamere fetched 2026-10-12; Aatrox, Fiora, Yone, Ambessa, Camille, Jayce, K'Sante and Ornn 2026-10-13; checksums in
+  `SHA256SUMS`): spell calculations,
   `mOverrideAttackTime`, `mRollForCriticalHit`, cast times, spell tags, plus the 16.19 string table tooltips.
   Calculation `mStat` numbers were checked against the item calculations: 2 is AD, 4 is attack speed, 6 is MR,
   7 is move speed, 8 is crit chance, 9 is crit damage and 12 is health.
 - **WIKI**: `Template:Data Garen/*` and `Template:Data Jax/*` ability data and the patch history pages,
   fetched raw on 2026-10-02; `Template:Data {Nasus,Renekton,Darius,Malphite}/*` and their patch histories cached raw in
-  `cdragon-16.19/wiki-2026-10-12-champions/`.
+  `cdragon-16.19/wiki-2026-10-12-champions/`; the Aatrox, Fiora, Yone, Ambessa, Camille, Jayce, K'Sante and Ornn templates,
+  patch histories and hitbox diagrams in `cdragon-16.19/wiki-2026-10-13-champions/`.
 - **PATCH**: Riot patch notes 26.1–26.19. These Summoner's Rift changes apply: 26.1 (Garen E crit is 30% of
   bonus crit damage; Jax passive gains a level-19 breakpoint), 26.5 (Garen Q MS duration, E AD ratio),
   26.12 (Jax Q costs 50 mana, Jax E deals 4% max HP) and 26.14 (Garen R base damage 125/200/275). The Garen
@@ -202,6 +204,56 @@ Rift patches since 26.1: 26.4 Hemorrhage monster damage ×2.5 (client `MonsterMo
    (0.25 / 0.2419 s).
 6. **Spell shields.** The slows, cripple and knock-up are not blocked by a spell shield (shared, see below).
 
+## Aatrox (266)
+
+Rift patches since 26.1 (client values include them): 26.2 (passive 4–10% max health; Q +25 vs monsters), 26.12 (Q
+sweetspot +75%), 26.19 (W cooldown 18–12 s; E heal +1.3% per 100 bonus health). Gameplay radius 65, pathing 35,
+acquisition 475; no mana (the bar shows World Ender's remaining duration).
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| AAT.P1 | Deathbringer Stance: while ready, the next basic attack gains 50 range and deals `PDamage` (4% → 10% by level) of the target's max health as bonus magic damage, capped at 100 → 320 (by level) against monsters; not against structures or wards (not consumed). The bonus is a proc packet with life steal; Aatrox heals 100% of its post-mitigation damage, 25% against minions. Dodged attacks deal nothing. Cooldown 22 → 10 s by level, static (no haste). | 4–10% | CLIENT `PDamage`, `PCooldown`, `MonsterDamageCap`, `PBonusAARange`, `PHealingRatio`, `PHealingMinionMod`; WIKI static cooldown, structures/wards, proc + ApplyLifesteal |
+| AAT.P2 | Each basic attack landing on, and each ability hit on, an enemy champion or large monster reduces the current passive cooldown by 2 s, once per attack or cast; 4 s if a Darkin Blade sweetspot hits one. Infernal Chains' first hit and its pull each count. | 2 / 4 s | CLIENT `PChargeRate`; tooltip; WIKI |
+| AAT.Q1 | Three casts. The first needs the cooldown; each recast is allowed 1 s (static) after the previous cast and within `QExtensionTime` of it; after the third cast or the window the sequence resets. The cooldown starts on the first cast and restarts on each recast. | 14/12/10/8/6 s | CLIENT `cooldownTime`, `QExtensionTime`; WIKI cdstart, 1 s static |
+| AAT.Q2 | 0.6 s cast time: Aatrox cannot walk or attack, Umbral Dash stays castable, only death interrupts. The strike lands at the end, from Aatrox's position then, in the direction fixed at cast. | 0.6 s | CLIENT `AatroxQWrapperCast.mCastTime`; WIKI cast-time notes |
+| AAT.Q3 | Areas along the cast direction from Aatrox's centre. Cast 1: rectangle 0–625 long, 180 wide (edge range); sweetspot where the unit's centre is 450–755 along and within 186.5 of the line. Cast 2: trapezoid from 100 behind to 475 ahead, 300 → 500 wide (edge range); sweetspot centre 300–675 along, half-width 301 → 342. Cast 3: circle of 300 around the point 200 ahead (centre range); sweetspot within 180 of it. A sweetspot also needs the main area. | see rule | WIKI dimensions; sweetspot boxes measured off `File:Aatrox_hitbox_areas.png` (1 px = 1 unit) |
+| AAT.Q4 | Damage `QBaseDamage + QTotalADRatio × AD` physical, × (1 + 0.25 × cast index), × 1.75 in the sweetspot; × 55% against minions (+5% at levels 6, 11 and 16); +25 against monsters before the cast and sweetspot multipliers. The sweetspot knocks up for 0.25 s (0.5 s against monsters). | 10–70 + 60–90% AD | CLIENT `QDamage`, `QRampBonus`, `QSweetSpotBonus`, `QMinionDamage`, `QMonsterBonus`, `QKnockupDuration`; WIKI |
+| AAT.W1 | 0.25 s cast time (Aatrox held in place, E castable), then a chain from Aatrox's position at 1800 units/s along the direction fixed at cast. It stops on the first enemy (minion, monster or champion) whose hitbox comes within 80 of its line, up to 765 edge range (≈ 825 centre range). `WBaseDamage + 0.4 AD` physical, ×2 against minions, and a 1.5 s slow. Cooldown at cast. | 18/16.5/15/13.5/12 s; 30–70; 25–35% | CLIENT `mCastTime`, `mMissileSpec` speed/width, `WDamage`, `WSlowPercentage`; WIKI ranges, minion ×2, PATCH 26.19 |
+| AAT.W2 | A champion or large monster hit is tethered to the point where it was hit for 1.5 s. If it is still within 650 of that point at the end, it takes the damage again and is pulled to the point over 0.25 s, airborne for 0.5 s in total. | 650; 0.25 s; 0.5 s | WIKI tether, second hit; zone, pull and airborne time measured on 19 clean pulls in the 16.9 replay corpus (`/mnt/nfs/shared/champ-expansion/aatrox-measurements/clean-pulls.txt`; see limitations 1–2) |
+| AAT.E1 | Passive: heals `ESpellVamp` % + 0.013% per bonus health of the post-mitigation, non-persistent damage Aatrox deals to enemy champions. | 16% + 1.3% per 100 bonus HP | CLIENT `TotalEVamp`; PATCH 26.19 |
+| AAT.E2 | Dashes toward the cursor, 75–300 (shorter clicks dash 75, longer ones 300) at 800 units/s; no cast time; attack reset; not while rooted; castable during the Q, W and R cast times without cancelling them, and they during it. Cooldown at cast. | 9/8/7/6/5 s | CLIENT `EMinRange`, `EMaxRange`, `EDashSpeed`, `cantCastWhileRooted`, `Trait_AttackReset`; WIKI |
+| AAT.R1 | 0.25 s cast time (Aatrox may walk, not attack); cooldown at cast. At the end: fears enemy minions and monsters within 600 (center to edge) for 3 s, and for 10 s grants `RTotalADAmp` × total AD bonus AD, `RMovementSpeedBonus` bonus move speed that loses 10% of its current value every 0.25 s, `RHealingAmp` increased self-healing, ghosting and 5% size. | 120/100/80 s; 20/30/40% AD; 60/80/100% MS; 50/75/100% healing | CLIENT `RDuration`, `RFearRadius`, `RMinionFearDuration`, `RTotalADAmp`, `RMovementSpeedBonus`, `RHealingAmp`; WIKI decay, ghost, size |
+| AAT.R2 | Each champion takedown during World Ender adds 5 s (at most 10 s remaining) and restarts the move-speed decay. | +5 s | CLIENT `RExtension`; WIKI |
+
+### Aatrox limitations
+
+1. **Infernal Chains zone.** No source gives its size. Modelled as a circle of 650 around the hit point. The 16.9
+   replay corpus (5 games with Aatrox, 20 fps positions) has 19 clean pulls; targets were still pulled from up to 573
+   units away, so the zone is at least that large. The wiki's escape note ("at least 628 movement speed" to escape
+   straight away from Aatrox) puts it at about 612–690, depending on the slow. The wiki describes the area as
+   oriented toward Aatrox, so the live shape may not be a circle.
+2. **Infernal Chains pull.** In the replays every pull took about 0.25 s (0.22–0.33 at 20 fps) whatever its length,
+   and the target stayed in place about 0.25 s after arriving. The model pulls over 0.25 s with a 0.5 s knock-up.
+   Live, the pull ends 3–67 units from the hit point, slightly toward Aatrox; the model ends exactly on it.
+3. **Darkin Blade shapes.** The sweetspot boxes are measured off the wiki's hitbox diagram. Cast 2's edge-range test
+   grows the trapezoid by the unit's radius, which slightly widens the corners. The bug that briefly stops Aatrox
+   from starting an attack after a cast is not modelled.
+4. **Deathbringer Stance timing.** The empowered attack is decided at launch, not when the windup starts, so an
+   attack that was already winding up when the passive came off cooldown is empowered here but not live. The
+   empowered attack's own hit gives no 2 s refund (INFERRED-M).
+5. **Umbral Dash.** The extended dash across walls (up to 500 units, faster) and the re-issued move order are not
+   modelled; dashes follow the world's wall rule (shared, `mechanics.dash_end`). The wiki notes the measured
+   speed is slightly above 800.
+6. **World Ender.** The world has no fear, so minions and monsters are stunned for 3 s instead. Live, they flee
+   while being slowed by up to 99%, so they barely move and don't attack either way. The AD bonus reads AD without
+   dynamic stats (Conqueror stacks, for example). The healing amplification uses the world's `incoming_heal`,
+   which also amplifies shields Aatrox receives.
+7. **Cost and cooldown timing.** W and R start their cooldowns at the key press; live, after their 0.25 s cast
+   times (shared).
+8. **Spell shields.** The Q knock-up and the W slow, tether and pull are not blocked by a spell shield, and the
+   pull's damage is blocked (live, a spell shield blocks only the chain's first hit; shared, see below).
+9. **Heals** read the main damage pass. Follow-up item procs are not counted toward Umbral Dash's healing.
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -249,10 +301,11 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitOut.cast_lockout` | (C,) | Now honoured from any hook, not only on a cast start (Renekton W post-strike lockout). |
 | `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
 | `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted (Darius E). |
+| `immobile(state, kctx)` | (C,) bool | The kit holds its champion in place without a world cast lock, so its other spells stay castable (Aatrox Q and W cast times, during which Umbral Dash works). |
 | `size(state, kctx)` | (C,) | Bonus size; the stats phase sets the champion's gameplay radius to record × (1 + size) (wiki Unit size). |
 | `KitCtx.dashing` | (C,) bool | A dash is moving the holder; point dashes land per `mechanics.dash_end` (wiki Dash: cross a wall only to a walkable end point, else stop short; Rocketbelt always stops). |
 | `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400.
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475.

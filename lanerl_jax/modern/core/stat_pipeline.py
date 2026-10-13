@@ -51,6 +51,14 @@ class ChampionBase(NamedTuple):
 AR_BASE, AR_PER_LEVEL, AR_REGEN, AR_REGEN_PER_LEVEL = "{726ee5cd}", "{6216bf7b}", "{c4ab3550}", "{3a509002}"
 
 
+def windup_percent(attack: dict) -> float:
+    """Windup as a share of the attack time (wiki Attack speed, Windup): ``mAttackCastTime / mAttackTotalTime`` on
+    records that give them (Aatrox 0.3 / 1.52), else ``0.3 + mAttackDelayCastOffsetPercent``."""
+    if "mAttackCastTime" in attack and "mAttackTotalTime" in attack:
+        return float(attack["mAttackCastTime"]) / float(attack["mAttackTotalTime"])
+    return 0.3 + float(attack.get("mAttackDelayCastOffsetPercent", 0.0))
+
+
 def champion_base(names) -> ChampionBase:
     """Host-side ``ChampionBase`` from the pinned 26.19 champion records."""
     def field(name, key, default=0.0):
@@ -76,7 +84,7 @@ def champion_base(names) -> ChampionBase:
             attack_speed=field(name, "attackSpeedModifiable"),
             attack_speed_ratio=field(name, "attackSpeedRatioModifiable", field(name, "attackSpeedModifiable")),
             attack_speed_per_level=field(name, "attackSpeedPerLevelModifiable"),
-            windup_percent=0.3 + float(attack.get("mAttackDelayCastOffsetPercent", 0.0)),
+            windup_percent=windup_percent(attack),
             windup_modifier=float(attack.get("mAttackDelayCastOffsetPercentAttackSpeedRatio", 1.0)),
             hp_regen=field(name, "baseStaticHPRegenModifiable"),
             hp_regen_per_level=field(name, "hpRegenPerLevelModifiable"),
