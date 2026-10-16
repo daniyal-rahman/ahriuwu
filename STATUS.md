@@ -131,6 +131,24 @@ separate. Unresolved: simultaneous basic/ability hits still share one holder hit
 proposed follow-up in the MODERN-046 ledger rows.
 
 Review fixes integrated as `76a4d59f`; parent independently checked strict equality of all12 golden
-records and Python syntax. A focused follow-up agent (MODERN-047) is reproducing/fixing the remaining
-simultaneous-hit event loss, with targeted regressions and runtime-cost review required. Full-PPO GPU
+records and Python syntax. The focused follow-up (MODERN-047) fixes simultaneous-hit event loss; validation and cost evidence
+are recorded below. Full-PPO GPU
 memory diagnosis7588 remains queued; its CPU component-compilation prerequisite7587 passed.
+
+**Simultaneous landed hits (2026-10-16, MODERN-047).** Resolved MODERN-046's remaining collision:
+ordered landed records preserve each basic/ability hit's target, raw, crit and cast ID, with independent
+launch hooks and one combat resolution. Additional kit/item/rune hooks run only for additional landings;
+packet drops are counted. Red Buff receives every landed target. Parent7619 reproduces the missing second
+Recurve proc despite both base packets damaging; the fix passes same/different-target basics and Q+basic,
+with/without another launch, plus Profane Cleave, mark detonation and rune/overflow regressions.
+
+**Validation complete:**139 unique focused checks across7644/7650;7650 COMPLETED/0:0 in10m58s, including
+full/top3600-tick goldens. All12 complete records equal the accepted reference (862/732 leaves, summaries,
+peak counters; overflow0). Sources/logs: `/mnt/nfs/shared/champ-expansion/modern047-hits-TEMP/` and
+`modern047-*.out`. All116 implementation files match the cost/validation snapshots byte for byte.
+Compiler comparison7638 (restricted-item CPU top lane, fog off, no runes, against Garen): input/output
+bytes unchanged; temporary bytes Garen338168→344120, Ezreal451960→432752. Ezreal estimated FLOPs+0.39%,
+bytes accessed+0.10%; exclusive runtime/GPU cost remains unmeasured while7433 occupies the node.
+Own intermediate7626/7632 and unstarted7633 superseded;7637's zero-stack item fixture and7644's deduplicating
+count helper were corrected and revalidated. No active own jobs/watchers, GPU runs, memory-diagnostic edits,
+or unrelated cancellations. Existing item/rune launch reservations retain their per-holder state.

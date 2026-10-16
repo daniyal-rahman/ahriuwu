@@ -83,8 +83,7 @@ def test_arcane_shift_blinks_475_toward_the_point():
     np.testing.assert_allclose(float(s.y[0]), SY, atol=5.0)
 
 
-@pytest.mark.parametrize("launching", [False, True])
-def test_arriving_attack_detonates_mark_while_launching_at_another_unit(launching):
+def arrival_state(launching):
     from lanerl_jax.modern.core import damage as D
     from lanerl_jax.modern.core import types as W
     from lanerl_jax.modern.items.catalog import catalog
@@ -115,6 +114,12 @@ def test_arriving_attack_detonates_mark_while_launching_at_another_unit(launchin
                      y=ms.y.at[0].set(s.y[1]), speed=ms.speed.at[0].set(Z.ATTACK_MISSILE),
                      raw=ms.raw.at[0].set(100.0), flags=ms.flags.at[0].set(D.BASIC_ATTACK))
     s = s._replace(kits=s.kits._replace(ezreal=kit), missiles=ms)
+    return s, target
+
+
+@pytest.mark.parametrize("launching", [False, True])
+def test_arriving_attack_detonates_mark_while_launching_at_another_unit(launching):
+    s, target = arrival_state(launching)
     s, ev = step(s, orders(attack=[target, -1]))
     assert bool(ev.launched[0]) == launching
     assert int(s.att.target[0]) == target
@@ -124,3 +129,70 @@ def test_arriving_attack_detonates_mark_while_launching_at_another_unit(launchin
     assert det.sum() == 1
     assert int(np.asarray(p.dst)[det][0]) == 1
     assert bool(jnp.any(p.valid & (p.item == 6698) & (p.dst == target)))  # nonzero landed raw enables Cleave
+
+
+@pytest.mark.parametrize("collision", ["basics_different", "basics_same", "q_basic"])
+@pytest.mark.parametrize("launching", [False, True])
+def test_every_colliding_landing_runs_on_hits(collision, launching):
+    from lanerl_jax.modern.core import damage as D
+    from lanerl_jax.modern.items.catalog import catalog
+    from lanerl_jax.modern.items.effects import marksman as M
+
+    s, target = arrival_state(launching)
+    inv = s.champ.inventory
+    s = s._replace(champ=s.champ._replace(inventory=inv._replace(
+        item=inv.item.at[0, 0].set(catalog().row(M.RECURVE)).at[0, 1].set(catalog().row(M.YUNTAL))
+                     .at[0, 2].set(catalog().row(6698)), stack=inv.stack.at[0, 2].set(1))))
+    marksman = s.combat.items.marksman._replace(yt_cd_until=s.combat.items.marksman.yt_cd_until.at[0].set(90.0))
+    s = s._replace(combat=s.combat._replace(items=s.combat.items._replace(marksman=marksman)))
+    second = 1 if collision == "basics_same" else target
+    kit = s.kits.ezreal._replace(mark_unit=s.kits.ezreal.mark_unit.at[0].set(second),
+                                mark_seq=s.kits.ezreal.mark_seq.at[0].set(s.spawn_seq[second]))
+    ms = s.missiles._replace(raw=s.missiles.raw.at[0].set(110.0), crit=s.missiles.crit.at[0].set(True),
+                             flags=s.missiles.flags.at[0].set(D.BASIC_ATTACK | D.PROP_CRIT),
+                             cast_id=s.missiles.cast_id.at[0].set(101))
+    if collision == "q_basic":
+        kit = kit._replace(q_fly=kit.q_fly.at[0].set(True), q_ox=kit.q_ox.at[0].set(s.x[target] - 60.0),
+                           q_oy=kit.q_oy.at[0].set(s.y[target]), q_mdx=kit.q_mdx.at[0].set(1.0),
+                           q_mdy=kit.q_mdy.at[0].set(0.0), q_dist=kit.q_dist.at[0].set(0.0),
+                           q_mid=kit.q_mid.at[0].set(333))
+    else:
+        ms = ms._replace(alive=ms.alive.at[1].set(True), src=ms.src.at[1].set(0), dst=ms.dst.at[1].set(second),
+                         dst_seq=ms.dst_seq.at[1].set(s.spawn_seq[second]), x=ms.x.at[1].set(s.x[second]),
+                         y=ms.y.at[1].set(s.y[second]), speed=ms.speed.at[1].set(Z.ATTACK_MISSILE),
+                         raw=ms.raw.at[1].set(70.0), flags=ms.flags.at[1].set(D.BASIC_ATTACK),
+                         cast_id=ms.cast_id.at[1].set(102))
+    s, ev = step(s._replace(kits=s.kits._replace(ezreal=kit), missiles=ms), orders(attack=[target, -1]))
+    assert bool(ev.launched[0]) == launching
+    assert int(s.att.target[0]) == target
+    p = ev.report.packets
+    primary = p.valid & (p.src == 0) & ((p.cast_id == 101) | (p.cast_id == (333 if collision == "q_basic" else 102)))
+    assert int(jnp.sum(primary & (p.raw > 0))) == 2
+    assert bool(jnp.any(primary & (p.cast_id == 101) & (p.dst == 1) & (p.raw == 110.0)))
+    onhit = p.valid & (p.item == M.RECURVE) & (p.src == 0)
+    np.testing.assert_array_equal(np.sort(np.asarray(p.dst)[np.asarray(onhit)]), np.sort([1, second]))
+    assert int(jnp.sum(p.valid & (p.item == 6698))) == 2  # both landed raw values enable Profane Cleave
+    assert not bool(s.kits.ezreal.mark_on[0])
+    assert int(jnp.sum(p.valid & (p.cast_id == 123) & (p.dst == second))) == 1
+    np.testing.assert_allclose(s.combat.items.marksman.yt_cd_until[0], 90.0 - M.YT_CRIT_CDR - M.YT_AA_CDR)
+    launches = int(launching) + int(collision == "q_basic")
+    np.testing.assert_allclose(s.combat.items.marksman.yt_crit[0], launches * M.YT_CRIT_PER * M.YT_RANGED)
+    assert int(ev.packet_overflow) == int(ev.missile_overflow) == 0
+
+
+def test_hit_batch_padding_cannot_launch_another_ability():
+    from lanerl_jax.modern.items.effects.core import Attack
+    from lanerl_jax.modern.world.phases.attack import _pack_hits
+
+    hits = Attack(jnp.asarray([[False, False], [True, False], [False, False]]),
+                  jnp.asarray([[False, True], [True, False], [False, True]]),
+                  jnp.asarray([[-1, 0], [2, -1], [-1, 3]]), jnp.asarray([[0., 80.], [90., 0.], [0., 100.]]),
+                  jnp.asarray([[False, False], [True, False], [False, True]]),
+                  cast_id=jnp.asarray([[0, 11], [12, 0], [0, 13]]))
+    packed, _ = jax.jit(_pack_hits)(hits)
+    np.testing.assert_array_equal(packed.hit[:2], [[True, True], [False, True]])
+    np.testing.assert_array_equal(packed.launched, [[True, False], [False, False], [False, False]])
+    np.testing.assert_array_equal(packed.target[0], [2, 0])
+    np.testing.assert_array_equal(packed.raw[0], [90., 80.])
+    np.testing.assert_array_equal(packed.is_crit[0], [True, False])
+    np.testing.assert_array_equal(packed.cast_id[0], [12, 11])

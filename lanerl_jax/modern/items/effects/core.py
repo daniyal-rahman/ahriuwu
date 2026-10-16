@@ -156,13 +156,14 @@ class Units(NamedTuple):
 
 
 class Attack(NamedTuple):
-    """At most one basic attack per holder per tick (C,)."""
+    """One launch or landed hit per holder (C,); a hit batch has leading event axis."""
     launched: Any           # windup completed (on-attack)
     hit: Any                # landed (on-hit)
     target: Any             # int32 unit index
     raw: Any                # pre-mitigation damage after crit
     is_crit: Any
     natural_crit: Any = None  # crit from the roll, not forced by attack_mods; None = unknown
+    cast_id: Any = None       # landed/launch instance; None for synthetic item re-applications
 
 
 class Cast(NamedTuple):

@@ -376,7 +376,8 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
                jnp.where(struck, state.w_cast_id[:, None], 0).astype(jnp.int32))
     cd = jnp.zeros((c, 4), bool).at[:, 0].set(q_done & m).at[:, 1].set(w_end).at[:, 2].set(e_end)
     return state, out(c, n, packets=D.concat_packets(p_v, p_q, p_w), cc=cc, heal=f32(heal), cooldown_start=cd,
-                      base_cooldown=_base_cd(state, kctx), on_hit_target=jnp.where(stab, tgt, -1).astype(jnp.int32))
+                      base_cooldown=_base_cd(state, kctx), on_hit_target=jnp.where(stab, tgt, -1).astype(jnp.int32),
+                      on_hit_raw=_q_damage(kctx), on_hit_cast_id=state.q_cast_id)
 
 
 def _vital_open(state: State, kctx, units, r_col, r_on) -> Any:

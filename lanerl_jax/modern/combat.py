@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+import jax
 import jax.numpy as jnp
 
 from .core import damage as D
@@ -113,13 +114,14 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
                 request: Any, base_packets: D.Packets, base_offense: D.Offense, base_defense: D.Defense,
                 hp: Any, max_hp: Any, shields: D.Shields, status: UnitStatus, kills: Kills,
                 holder_stats: ItemStats, cc: CC | None = None, ev: RuneEvents | None = None,
-                attack_launch: Attack | None = None,
+                attack_launch: Attack | None = None, hits: Attack | None = None,
                 sync_max_health: bool = True, carry: bool = True, main_capacity: int = MAIN_PACKET_CAPACITY,
                 follow_up_capacity: int = FOLLOW_UP_CAPACITY) -> CombatTickOut:
     """``page`` is the (C, R) rune page-count matrix (all-zero: no runes). ``ev``'s attack/cast/cc/kills/own are
     overwritten by this call's arguments. Packets beyond the static ``main_capacity`` / ``follow_up_capacity``
     are dropped and counted in ``packet_overflow``, which must stay 0. ``attack_launch`` separates a new
-    ranged launch from an older missile's landed ``attack``."""
+    ranged launch from an older missile's landed ``attack``. ``hits`` optionally contains packed (H, C)
+    landed records, with ``attack`` as its first row; their ``launched`` flags request ability on-attack procs."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     items, runes = state.items, state.runes
     cc_ev = cc if cc is not None else CC(jnp.zeros((c, n), bool), jnp.zeros((c, n), bool))
@@ -161,20 +163,62 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
     launch = attack if attack_launch is None else attack_launch
     items, eff = E.on_attack(items, own, ctx, units, launch); parts.append(eff)
     runes, eff = RE.on_attack(runes, page, ctx, units, ev._replace(attack=launch)); parts.append(eff)
-    items, eff = E.on_hit(items, own, ctx, units, attack); parts.append(eff)
-    again = spellblade.extra_on_hit_attack(items.spellblade)
-    phantom = marksman.phantom_hit_due(items.marksman, ctx) & attack.hit
-    again = again._replace(hit=again.hit | phantom, target=jnp.where(phantom, attack.target, again.target))
-    items, eff = E.on_hit(items, own, ctx, units, again); parts.append(eff)
-    extra = marksman.extra_on_hit_targets(items.marksman, ctx)
-    order = jnp.argsort(jnp.where(extra, 0, 1), axis=1)
-    for k in range(EXTRA_ON_HIT_SLOTS):
-        tgt = order[:, k].astype(jnp.int32)
-        ok = jnp.take_along_axis(extra, order[:, k:k + 1], axis=1)[:, 0]
-        z = jnp.zeros((c,), jnp.float32)
-        items, eff = E.on_hit(items, own, ctx, units, Attack(jnp.zeros((c,), bool), ok, tgt, z, jnp.zeros((c,), bool)))
+
+    def land(items, runes, attack, first):
+        parts = []
+        if hits is not None:
+            def launch_ability(states):
+                items, runes = states
+                items, ei = E.on_attack(items, own, ctx, units, attack)
+                ae = ev._replace(attack=attack, attack_started=jnp.zeros((c,), bool),
+                                 attack_cancelled=jnp.zeros((c,), bool), attack_reset=jnp.zeros((c,), bool))
+                runes, er = RE.on_attack(runes, page, ctx, units, ae)
+                return items, runes, merge_effects([ei, er], c, n)
+            shape = jax.eval_shape(launch_ability, (items, runes))[2]
+            empty = jax.tree.map(lambda a: jnp.zeros(a.shape, a.dtype), shape)
+            items, runes, eff = jax.lax.cond(jnp.any(attack.launched), launch_ability,
+                                            lambda states: (*states, empty), (items, runes))
+            parts.append(eff)
+        phantom_pending = items.marksman.phantom_pending
+        items, eff = E.on_hit(items, own, ctx, units, attack); parts.append(eff)
+        again = spellblade.extra_on_hit_attack(items.spellblade)
+        phantom = marksman.phantom_hit_due(items.marksman, ctx) & attack.hit & (first | phantom_pending)
+        again = again._replace(hit=(again.hit & first) | phantom,
+                               target=jnp.where(phantom, attack.target, again.target))
+        items, eff = E.on_hit(items, own, ctx, units, again); parts.append(eff)
+        extra = marksman.extra_on_hit_targets(items.marksman, ctx) & (first | attack.launched)[:, None]
+        order = jnp.argsort(jnp.where(extra, 0, 1), axis=1)
+        for k in range(EXTRA_ON_HIT_SLOTS):
+            tgt = order[:, k].astype(jnp.int32)
+            ok = jnp.take_along_axis(extra, order[:, k:k + 1], axis=1)[:, 0]
+            z = jnp.zeros((c,), jnp.float32)
+            items, eff = E.on_hit(items, own, ctx, units, Attack(jnp.zeros((c,), bool), ok, tgt, z,
+                                                               jnp.zeros((c,), bool)))
+            parts.append(eff)
+        runes, eff = RE.on_hit(runes, page, ctx, units, ev._replace(attack=attack)); parts.append(eff)
+        return items, runes, parts
+
+    hit_overflow = jnp.int32(0)
+    items, runes, first_parts = land(items, runes, attack, jnp.ones((c,), bool))
+    parts.extend(first_parts)
+    if hits is not None:
+        eff = jax.tree.map(jnp.zeros_like, merge_effects(first_parts, c, n))
+        eff = eff._replace(packets=D.empty_packets(main_capacity))
+        # Current on-hit and on-attack hooks grant no shields; heals/mana/CC fold across landings.
+        assert eff.shields.amount.shape[1] == 0
+
+        def more_hits(i, carry):
+            items, runes, acc, overflow = carry
+            attack = jax.tree.map(lambda a: a[i], hits)
+            items, runes, effects = land(items, runes, attack, jnp.zeros((c,), bool))
+            eff = merge_effects(effects, c, n)
+            packets, dropped = D.compact_packets(D.concat_packets(acc.packets, eff.packets), main_capacity)
+            acc = merge_effects([acc._replace(packets=D.empty_packets(0)),
+                                 eff._replace(packets=D.empty_packets(0))], c, n)._replace(packets=packets)
+            return items, runes, acc, overflow + dropped
+        count = jnp.max(jnp.sum(hits.hit, axis=0))
+        items, runes, eff, hit_overflow = jax.lax.fori_loop(1, count, more_hits, (items, runes, eff, hit_overflow))
         parts.append(eff)
-    runes, eff = RE.on_hit(runes, page, ctx, units, ev); parts.append(eff)
     items, eff, act = E.active(items, own, ctx, units, request); parts.append(eff)
     ev = ev._replace(potion_drunk=jnp.maximum(ev.potion_drunk, items.consumables.drank))
     items, eff = E.periodic(items, own, ctx, units); parts.append(eff)
@@ -252,7 +296,7 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
     outs = RE.outputs(runes, page, ctx, ev_p)
     new_state = CombatState(items, runes, clocks, target, jnp.where(sync_max_health, dyn_silent, state.dyn_silent),
                             carried)
-    dropped = overflow + overflow2 + overflow3 + report.resolved.overflow + follow_up.resolved.overflow
+    dropped = hit_overflow + overflow + overflow2 + overflow3 + report.resolved.overflow + follow_up.resolved.overflow
     return CombatTickOut(new_state, hp, max_hp, shields, status, dropped, report, follow_up,
                          total, act, dyn, starters.pending_transforms(items.starters, own),
                          items.consumables.consume_row, outs, ev_p)

@@ -416,7 +416,10 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     cd = jnp.zeros((c, 4), bool).at[:, 2].set(back & m)
     return state, out(c, n, packets=D.concat_packets(p_q, p_q3, p_w, p_e, p_r), cc=cc, dash=dash, shield=shield,
                       cooldown_start=cd, base_cooldown=_base_cd(kctx), cast_lockout=f32(jnp.where(r_fire, R_LOCK, 0.0)),
-                      on_hit_target=jnp.where(m, on_hit, -1).astype(jnp.int32), on_attack_proc=m & (on_hit >= 0))
+                      on_hit_target=jnp.where(m, on_hit, -1).astype(jnp.int32), on_attack_proc=m & (on_hit >= 0),
+                      on_hit_raw=jnp.take_along_axis(q_raw, jnp.maximum(on_hit, 0)[:, None], axis=1)[:, 0],
+                      on_hit_crit=jnp.take_along_axis(roll, jnp.maximum(on_hit, 0)[:, None], axis=1)[:, 0],
+                      on_hit_cast_id=jnp.where(jnp.any(is_first, axis=1), state.q_cast_id, q3_id))
 
 
 def on_attack(state: State, kctx, units, launch) -> tuple[State, KitOut]:

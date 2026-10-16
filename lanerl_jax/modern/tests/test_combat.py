@@ -148,3 +148,27 @@ def test_all_runes_together_through_jitted_combat_tick():
         assert int(out.packet_overflow) == 0
         assert np.all(np.isfinite(np.asarray(hp))) and np.all(np.asarray(hp) <= np.asarray(mx) + 1e-3)
     assert float(hp[1]) < 3000.0 and float(hp[0]) < 3000.0
+
+
+@pytest.mark.parametrize("capacity, dropped", [(16, 0), (2, 2)])
+def test_colliding_hits_stack_runes_and_count_dropped_on_hits(capacity, dropped):
+    from lanerl_jax.modern.tests import rune_harness as RH
+
+    u, own, item, ctx, dfn, off = setup(((1043,), ()))
+    state = M.init_combat(2, 3)
+    hit = H.attack(hit=(True, False), target=(1, -1), launched=(False, False))
+    hits = jax.tree.map(lambda a: jnp.stack([a, a, a]), hit)
+    launch = H.attack(hit=(False, False), target=(2, -1), launched=(True, False))
+    out = jax.jit(lambda st: M.combat_tick(
+        st, own, RH.perks([8005], []), ctx, u, attack=hit, hits=hits, attack_launch=launch,
+        cast=H.cast(started=(False, False)), request=jnp.zeros((2,), jnp.int32),
+        base_packets=D.empty_packets(0), base_offense=off, base_defense=dfn,
+        hp=u.hp, max_hp=u.max_hp, shields=D.init_shields(3), status=R.init_status(3),
+        kills=H.kills(3), holder_stats=item, main_capacity=capacity))(state)
+    assert bool(out.state.runes.precision.pta_amp[0])
+    assert float(out.state.runes.precision.pta_stacks[0]) == 0.0
+    assert int(out.packet_overflow) == dropped
+    if dropped == 0:
+        p = out.report.packets
+        assert int(jnp.sum(p.valid & (p.item == 1043) & (p.dst == 1))) == 3
+        assert H.packet_targets(out.report.packets, item=-8005) == [1]

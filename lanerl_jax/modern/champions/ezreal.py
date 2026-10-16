@@ -398,7 +398,7 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     refund_cd = jnp.where((q_hit & m)[:, None], Q_REFUND, 0.0) * jnp.ones((1, 4), jnp.float32)
     return state, out(c, n, packets=D.concat_packets(p_q, p_mark, p_e, p_r, p_det), dash=blink,
                       base_cooldown=jnp.where(m[:, None], cooldown_row(NAME, r), 0.0),
-                      on_hit_target=jnp.where(m & q_hit, q_t, -1).astype(jnp.int32), on_attack_proc=m & q_hit,
+                      on_hit_target=jnp.where(m & q_hit, q_t, -1).astype(jnp.int32), on_attack_proc=m & q_hit, on_hit_raw=q_raw, on_hit_cast_id=q_mid,
                       mana_gain=f32(jnp.where(m & det, refund, 0.0)), cooldown_refund=f32(refund_cd))
 
 

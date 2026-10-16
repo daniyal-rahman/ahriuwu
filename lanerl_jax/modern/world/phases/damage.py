@@ -85,12 +85,13 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
     own = Owned(I.owned_counts(champ.inventory), cfg.item_allowed)
     out = combat_tick(s.combat._replace(items=items0), own, cfg.rune_pages, ictx,
-                      U.item_units(s), attack=sc.attack, attack_launch=sc.attack_launch,
+                      U.item_units(s), attack=sc.attack, attack_launch=sc.attack_launch, hits=sc.hits,
                       cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,
                       hp=s.hp, max_hp=s.max_hp, shields=shields_in, status=s.status, kills=s.prev.kills,
                       holder_stats=sc.static, cc=cc_items, ev=ev,
                       main_capacity=cfg.layout.packet_capacity, follow_up_capacity=cfg.layout.follow_up_capacity)
+    out = out._replace(packet_overflow=out.packet_overflow + sc.hit_over)
     hp, max_hp, shields, status = out.hp, out.max_hp, out.shields, out.status
     kits, k_dmg = K.on_damage(kits, kctx, units, out.report)
     return s, sc._replace(out=out, kdef=kdef, k_dmg=k_dmg, cc_now=cc_now, cc_items=cc_items, hp=hp, max_hp=max_hp,

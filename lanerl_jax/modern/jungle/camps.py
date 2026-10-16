@@ -869,26 +869,25 @@ def gust_bonus_ms(state: JungleState, now) -> Any:
 
 
 def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ctx, *, attack_hit, attack_target,
-                   damaged_champion=None, in_brush=None) -> tuple[JungleState, JungleEffects]:
+                   damaged_champion=None, in_brush=None, landed_hits=None) -> tuple[JungleState, JungleEffects]:
     """Crest of Cinders on-hit slow and burn, burn ticks, pet attacks and heals, bonus treats and the evolution
     buffs (Scorchclaw embers on ``damaged_champion``, Gustwalker on entering ``in_brush``, Mosstomper shield).
 
-    ``attack_hit``/``attack_target`` (C,) are champion basic-attack hits this tick (ranged arrivals included).
+    ``landed_hits`` optionally supplies every landed target (C, N), including ranged arrivals.
     """
     now = _f(ctx.now)
     c = state.blue_until.shape[0]
     n = units.x.shape[0]
     dots = state.dots
     pet = state.pet
-    hit = jnp.asarray(attack_hit, bool) & jnp.asarray(ctx.alive, bool)
-    tgt = jnp.asarray(attack_target, jnp.int32)
-    ti = jnp.clip(tgt, 0, n - 1)
-    tkind = jnp.asarray(units.kind)[ti]
-    hostile = (tgt >= 0) & (jnp.asarray(units.team)[ti] != ctx.team) & jnp.asarray(units.alive)[ti] \
-        & ((tkind == KIND_CHAMPION) | (tkind == KIND_MINION) | (tkind == KIND_MONSTER))
+    if landed_hits is None:
+        hit = jnp.asarray(attack_hit, bool) & jnp.asarray(ctx.alive, bool)
+        tgt = jnp.asarray(attack_target, jnp.int32)
+        landed_hits = (jnp.arange(n)[None, :] == tgt[:, None]) & hit[:, None] & (tgt >= 0)[:, None]
+    hostile = (units.team[None, :] != ctx.team[:, None]) & units.alive[None, :] \
+        & ((units.kind == KIND_CHAMPION) | (units.kind == KIND_MINION) | (units.kind == KIND_MONSTER))[None, :]
     # ---- Crest of Cinders on-hit: slow, burn over 3 instances; hits on a burning target only refresh ----
-    red_on = hit & hostile & (state.red_until > now)
-    on = jnp.zeros((c, n), bool).at[jnp.arange(c), ti].set(red_on)                          # (C, N)
+    on = landed_hits & hostile & ctx.alive[:, None] & (state.red_until > now)[:, None]
     any_on = jnp.any(on, axis=0)
     src = jnp.argmax(on, axis=0).astype(jnp.int32)
     lvl_src = _f(ctx.level)[src]

@@ -12,6 +12,7 @@ from ... import mechanics as M
 from ...champions.core import merge_out
 from ...core import damage as D
 from ...core import types as W
+from ...core.arrays import first_true
 from ...items import effects as IE
 from ...items import inventory as I
 from ...items.effects.core import Attack, Owned
@@ -26,6 +27,49 @@ from ..scratch import TickScratch
 from ..state import ModernOrders, ModernState
 
 CAST_ID_STRIDE = 256        # attack cast ids tick*256+unit+1 stay < 2^30 (K.KIT_ID_BASE) for 2^22 ticks (~38.8 h)
+
+
+def _pack_hits(hits, *metadata):
+    """Keep each holder's landings in order, without a shared per-holder hit slot."""
+    h, c = hits.hit.shape
+    idx, count = jax.vmap(lambda m: first_true(m, h), in_axes=1, out_axes=(1, 0))(hits.hit)
+    take = lambda a: a[jnp.minimum(idx, h - 1), jnp.arange(c)[None, :]]
+    hits = jax.tree.map(take, hits)
+    valid = jnp.arange(h)[:, None] < count[None, :]
+    hits = hits._replace(hit=hits.hit & valid, launched=hits.launched & valid)
+    return hits, tuple(take(a) for a in metadata)
+
+
+def _hit_targets(hits, n):
+    c = hits.hit.shape[1]
+    return jnp.zeros((c, n), bool).at[jnp.arange(c)[None, :], jnp.clip(hits.target, 0, n - 1)].max(hits.hit)
+
+
+def _kit_hits(kits, ctx, units, hits, capacity):
+    c, n = ctx.unit.shape[0], units.x.shape[0]
+    at = lambda i: jax.tree.map(lambda a: a[i], hits)
+    kits, first = K.on_hit(kits, ctx, units, at(0))
+    # Only missile users can have several basic landings in the current roster.
+    if not any(hasattr(k, "attack_missile_speed") for k in K.kits_of(kits)):
+        return kits, first, jnp.int32(0)
+    acc = merge_out([first], c, n)
+    packets, overflow = D.compact_packets(acc.packets, capacity)
+    # Adaptive Defenses is the only on-hit shield; its p_on latch allows one grant per holder.
+    assert acc.shield.amount.shape[1] <= 1
+    acc = acc._replace(packets=packets)
+
+    def body(i, carry):
+        kits, acc, overflow = carry
+        kits, eff = K.on_hit(kits, ctx, units, at(i))
+        packets, dropped = D.compact_packets(D.concat_packets(acc.packets, eff.packets), capacity)
+        shield = jax.tree.map(lambda a, b: jnp.where(eff.shield.amount > 0, b, a), acc.shield, eff.shield)
+        empty = jax.tree.map(lambda a: a[:, :0], first.shield)
+        merged = merge_out([acc._replace(packets=D.empty_packets(0), shield=empty),
+                            eff._replace(packets=D.empty_packets(0), shield=empty)], c, n)
+        return kits, merged._replace(packets=packets, shield=shield), overflow + dropped
+
+    count = jnp.max(jnp.sum(hits.launched, axis=0))
+    return jax.lax.fori_loop(1, count, body, (kits, acc, overflow))
 
 
 def minion_pushing(s: ModernState, cfg: WorldConfig, lane_ai, now) -> tuple[Any, Any]:
@@ -102,7 +146,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     # Champion attacks on wards are ward hits, not packets or on-hit.
     on_ward = (s.kind[atgt] == W.KIND_WARD) & (att.target >= 0)
     hit_c = launched[:c] & ~ranged_c & ~on_ward[:c]
-    attack = Attack(launched[:c], hit_c, att.target[:c], jnp.where(launched[:c], craw, 0.0), crit)
+    attack = Attack(launched[:c], hit_c, att.target[:c], jnp.where(launched[:c], craw, 0.0), crit,
+                    cast_id=cast_ids[:c])
     attack_launch = attack
     push_bonus, push_div = minion_pushing(s, cfg, lane_ai, now)
     lane_pk = LA.attack_packets(units, W.AttackLaunch(launched & (s.kind != W.KIND_CHAMPION), att.target,
@@ -163,31 +208,31 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         jnp.where(hit_ward, jnp.arange(n), -1).astype(jnp.int32))
     arrived = D.packets(arrive, missiles.src, missiles.dst, missiles.raw, missiles.dtype, missiles.flags,
                         cast_id=missiles.cast_id)
-    arrivals = arrive[None, :] & (missiles.src[None, :] == jnp.arange(c)[:, None])
-    arrive_c = jnp.any(arrivals, axis=1)
-    slot = jnp.argmax(arrivals, axis=1)
-    # On-hit reads the landed missile; on-attack keeps this tick's independent launch event.
-    attack = attack._replace(hit=attack.hit | arrive_c,
-                             target=jnp.where(arrive_c, missiles.dst[slot], attack.target),
-                             raw=jnp.where(arrive_c, missiles.raw[slot], attack.raw),
-                             is_crit=jnp.where(arrive_c, missiles.crit[slot], attack.is_crit))
+    arrivals = arrive[:, None] & (missiles.src[:, None] == jnp.arange(c)[None, :])
+    mfield = lambda a: jnp.broadcast_to(a[:, None], arrivals.shape)
+    fields = (jnp.concatenate([attack.hit[None, :], arrivals]),
+              jnp.concatenate([attack.target[None, :], mfield(missiles.dst)]),
+              jnp.concatenate([attack.raw[None, :], mfield(missiles.raw)]),
+              jnp.concatenate([attack.is_crit[None, :], mfield(missiles.crit)]))
+    ids = jnp.concatenate([cast_ids[None, :c], mfield(missiles.cast_id)])
+    basic = Attack(jnp.zeros_like(fields[0]), *fields, cast_id=ids)
+    ranged_hit = jnp.concatenate([ranged_c[None, :], jnp.ones_like(arrivals)])
+    basic, (ranged_hit,) = _pack_hits(basic, ranged_hit)
     launch_c = W.AttackLaunch(attack_launch.launched, attack_launch.target, ranged_c, crit, cast_ids[:c])
     kits, k_att = K.on_attack(kits, kctx, units, launch_c)
-    kits, k_hit = K.on_hit(kits, kctx, units, launch_c._replace(
-        launched=attack.hit, target=attack.target, is_crit=attack.is_crit,
-        cast_id=jnp.where(arrive_c, missiles.cast_id[slot], cast_ids[:c])))
-    champ_hit = jnp.zeros((n, n), bool).at[:c].set((attack.hit[:, None]
-                                                    & (jnp.arange(n)[None, :] == attack.target[:, None])))
+    kits, k_hit, hit_over = _kit_hits(kits, kctx, units,
+                                    W.AttackLaunch(basic.hit, basic.target, ranged_hit, basic.is_crit, basic.cast_id),
+                                    cfg.layout.packet_capacity)
+    champ_hit = jnp.zeros((n, n), bool).at[:c].set(_hit_targets(basic, n))
     towers, og_pk = LA.overgrowth_packets(s.towers, units, champ_hit, now=now,
                                           team_level=V.decimal_team_level(s))
     kit_all = merge_out([kit_out, k_att, k_hit], c, n)
-    # Abilities that apply on-hit effects (Fiora Lunge) reach items and runes as a landed hit, not an attack launch.
     oh = kit_all.on_hit_target
-    attack = attack._replace(hit=attack.hit | (oh >= 0), target=jnp.where(oh >= 0, oh, attack.target),
-                             launched=attack.launched | ((oh >= 0) & kit_all.on_attack_proc))
-    proc = (oh >= 0) & kit_all.on_attack_proc
-    attack_launch = attack_launch._replace(launched=attack.launched,
-                                           target=jnp.where(proc, oh, attack_launch.target))
+    ability = Attack((oh >= 0) & kit_all.on_attack_proc, oh >= 0, oh,
+                     kit_all.on_hit_raw, kit_all.on_hit_crit, cast_id=kit_all.on_hit_cast_id)
+    hits = jax.tree.map(lambda a, b: jnp.concatenate([a, b[None, :]]), basic, ability)
+    hits, _ = _pack_hits(hits)
+    attack = jax.tree.map(lambda a: a[0], hits)
     jfx = None
     if cfg.jungle is not None:
         # Scorchclaw reads last tick's damage matrix.
@@ -195,9 +240,11 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         dmg_champ = jnp.where(jnp.any(dm_cc, axis=1), jnp.argmax(dm_cc, axis=1), -1).astype(jnp.int32)
         jungle, jfx = J.combat_effects(jungle, cfg.jungle, units, ictx, attack_hit=attack.hit,
                                        attack_target=attack.target, damaged_champion=dmg_champ,
+                                       landed_hits=_hit_targets(hits, n),
                                        in_brush=V.in_brush(cfg, s.x[:c], s.y[:c], s.terrain_variant))
     return s, sc._replace(att=att, launched=launched, started=started, cancelled=cancelled, reset=reset,
-                          attack=attack, attack_launch=attack_launch, missiles=missiles, m_over=m_over,
+                          attack=attack, attack_launch=attack_launch, hits=hits, hit_over=hit_over,
+                          missiles=missiles, m_over=m_over,
                           direct=direct, arrived=arrived,
                           og_pk=og_pk, extra_atk=extra_atk, obj_cc=obj_cc, ward_hits=ward_hits,
                           ward_hitter=ward_hitter, kits=kits, towers=towers, kit_all=kit_all, jfx=jfx,

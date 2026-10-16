@@ -551,3 +551,14 @@ def test_gustwalker_brush_entry_is_readable_from_state(table):
     got = np.asarray(J.gust_bonus_ms(w.state, 100.0 + J.GUST_DECAY_S / 2))
     assert got[0] == pytest.approx(0.15) and got[1] == 0.0
     assert float(J.gust_bonus_ms(w.state, 100.0 + J.GUST_DECAY_S)[0]) == 0.0
+
+
+def test_red_buff_applies_to_every_landed_target(table):
+    w = World(table, now=60.0)
+    w.spawn()
+    w.state = w.state._replace(red_until=w.state.red_until.at[0].set(100.0))
+    monster = M0 + slots_of(table, "Order Red")[0]
+    hits = jnp.zeros((2, w.units().x.shape[0]), bool).at[0, 1].set(True).at[0, monster].set(True)
+    fx = _effects(w, landed_hits=hits)
+    assert sorted(d for s, d, _, _ in _valid(fx.packets) if s == 0) == [1, monster]
+    assert float(fx.cc.slow[0, 1]) == float(fx.cc.slow[0, monster]) == pytest.approx(0.10)
