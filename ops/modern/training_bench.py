@@ -252,8 +252,8 @@ def matrix(a):
                                           status="oom" if oom else "error")
                             failures.append(result)
                         with (a.output / "results.jsonl").open("a") as out:
-                            out.write(json.dumps(dict(case=name, **result)) + "\n")
-                        print(json.dumps(dict(case=name, **result)), flush=True)
+                            out.write(json.dumps({**result, "case": name}) + "\n")
+                        print(json.dumps({**result, "case": name}), flush=True)
     if any(x["status"] != "oom" for x in failures):
         raise SystemExit(1)
 

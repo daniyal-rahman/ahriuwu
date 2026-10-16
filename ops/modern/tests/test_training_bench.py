@@ -32,5 +32,32 @@ class RateTests(unittest.TestCase):
                     rates(*args)
 
 
+class MatrixFailureTests(unittest.TestCase):
+    def test_oom_cells_preserve_results_and_continue(self):
+        import argparse
+        import contextlib
+        import io
+        import json
+        from pathlib import Path
+        import tempfile
+        from ops.modern.training_bench import matrix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'manifest.json').write_text('{"files": {}}')
+            for engine in ('modern', 'legacy'):
+                (root / engine).mkdir()
+            (root / 'training_bench.py').write_text(
+                'import sys\nprint("RESOURCE_EXHAUSTED", file=sys.stderr)\nsys.exit(1)\n')
+            args = argparse.Namespace(root=root, output=root / 'results', presets=['matched'],
+                env_counts=[256], layouts=['top'], samples=1, rollout=128, seed=0, backend='gpu')
+            with contextlib.redirect_stdout(io.StringIO()):
+                matrix(args)
+            rows = [json.loads(x) for x in (args.output / 'results.jsonl').read_text().splitlines()]
+            self.assertEqual(len(rows), 4)
+            self.assertTrue(all(x['status'] == 'oom' for x in rows))
+            self.assertEqual(len({x['case'] for x in rows}), 4)
+
+
 if __name__ == '__main__':
     unittest.main()

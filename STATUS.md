@@ -69,11 +69,16 @@ route/vendor inputs, under `/mnt/nfs/shared/champ-expansion/modern043-pinned-TEM
 and natural defaults measure real rollout+policy and full PPO independently at 256/1024/4096 envs,
 modern top/full layouts. Reports env, sampled-agent and learner-agent decisions/s, normalized game
 seconds/wall-s, full update seconds, separate init/compile/first execution, and device peak bytes.
-Four metric-math tests pass locally; desktop CPU import/assets/trainer-shape validation 6725 is queued.
-GPU training matrix 6724 (exclusive, 8h) is queued; no training throughput result or speedup claimed.
+Four metric-math tests plus the OOM continuation test pass locally. Desktop CPU validation 6725
+COMPLETED/0:0 in 7m14s: real asset/bank setup and PPO shape tracing pass for both engines/presets
+(envs4, rollout2, top lane); this is validation, not a compiled PPO execution or GPU timing result.
+GPU training matrix 6729 (exclusive, 8h) is queued; 6724 was cancelled before running to stage
+the tested OOM collector fix in `modern043-pinned-v2-TEMP/` (original sources/snapshot preserved).
+No training throughput result or speedup claimed.
 Saved submitted 6088/6092 scripts reveal missing `--exclusive`/strict shell mode and inaccessible cwd,
 contrary to MODERN-040's earlier description. Cancelled only those IDs; replacement simulation benchmark
 6722 (exclusive, 1h30) and profile 6723 (exclusive, 1h, afterany:6722) preserve their original scenarios
 and source snapshots. All jobs have NFS cwd/logs, fail-on-error scripts, no reboot/admin changes or watcher.
 Desktop reports Linux, `Gres=gpu:1` but no GPU in `CfgTRES`/partition TRES; CPU jobs also occupy it.
-GPU queue reasons alternate resources/unavailable. Scheduler repair is outside this task.
+GPU queue reasons alternate resources/unavailable. Read-only NVIDIA query sees RTX5080, driver580.173.02,
+18MiB used; GPU is visible. Scheduler repair is outside this task.
