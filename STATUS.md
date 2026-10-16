@@ -18,15 +18,12 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 `/mnt/nfs/shared/build-research/`) compile out item code no champion can hold. Every capacity has a counter in
 `TickEvents` and in the trainer's `sim_overflow_max`, which must stay 0.
 
-**Kit pruning (2026-10-16, MODERN-040).** Recovered `throughput/kit-roster` at `38be6c4e` into this isolated
-checkout: world state and hook dispatch contain only the loadouts' kits, with an explicit larger roster option.
-Full-map and top-lane 3600-tick CPU goldens against `8067b443` are identical on every retained leaf, summary
-and overflow counter (427 unused-kit leaves removed). Completed validation jobs: 6084 (6 trainer tests), 6086
-(42 world tests), 6087 (58 world/interface tests). Non-world suite 6085 remains active on danilogin; its new
-roster assertion needed normalization of the optional Jayce damage override (None and zero are equivalent).
-Focused corrected validation passed (2 tests, 53.64 s) in Slurm step 6085.0; standalone 6145 was cancelled
-before starting to reuse the existing allocation. GPU benchmark 6088 and dependent profile 6092 remain pending while desktop
-is in Windows; no measured speedup claimed, no duplicate GPU jobs or watchers started.
+**Kit pruning (2026-10-16, MODERN-040).** Each world compiles state and hooks only for its loadouts' kits,
+plus an optional explicit roster. Before integration with Ezreal, full-map and top-lane 3600-tick CPU goldens
+against `8067b443` match every retained leaf, summary and overflow counter (427 unused-kit leaves removed).
+Trainer/world/interface checks passed (6084, 6086, 6087); non-world suite 6085 remains active on danilogin.
+The corrected roster assertion passed in Slurm step 6085.0. GPU benchmark 6088 and dependent profile 6092
+remain queued while desktop is in Windows; speedup is unmeasured. Final combined validation is below.
 
 **Free wins held back.**
 - `--packet-capacity`: runs peak at 3-6 packets per tick against 512/256 slots. Drop it for 1v1; measure on real
@@ -38,7 +35,11 @@ is in Windows; no measured speedup claimed, no duplicate GPU jobs or watchers st
 - Walkability (`terrain.row_gaps`): exact `is_walkable` from per-row nearest-blocked gaps, golden-identical;
   +54% top lane / +25% full map on the GTX 1060.
 
-**Champions (2026-10-16, MODERN-027..039, MODERN-041).** Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa, Camille, K'Sante and Jayce are registered (any pairing). Ezreal is implemented and registered with focused tests passing; full regression remains pending. Ornn is dropped; the accepted cross-role roster is in docs/modern/ROSTER.md. Every known difference from the live game is listed per kit in docs/modern/CHAMPIONS.md; the interaction-level ones were fixed (Darius pull measured from replays, dash terrain rule, size -> gameplay radius, dash speed). Golden-identical for Garen vs Jax. No training run with the new champions yet.
+**Champions (2026-10-16, MODERN-027..039, MODERN-041).** Garen, Jax, Nasus, Renekton, Darius, Malphite,
+Aatrox, Fiora, Yone, Ambessa, Camille, K'Sante and Jayce are registered (any pairing). Ezreal is implemented
+and registered with focused tests passing; full regression remains pending. Ornn is dropped; the accepted
+cross-role roster is in docs/modern/ROSTER.md. Known differences are listed per kit in CHAMPIONS.md.
+No training experiment with the new champions yet.
 
 **Open.**
 - GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.
@@ -47,8 +48,13 @@ is in Windows; no measured speedup claimed, no duplicate GPU jobs or watchers st
 
 **Roster expansion (2026-10-16, MODERN-041/042).** Ezreal's 16 kit tests, 3 world tests and 79 focused
 regressions passed (6089/6090), plus trainer 6/6 (6103). Top-lane golden 6091 matches all 1159 pre-existing
-leaves at six checkpoints through 3600 ticks (55 Ezreal leaves added). Full suite remains pending desktop
-Linux availability: robust fail-on-error jobs 6146 (50 modules) and 6147 (18 world modules) supersede
-interrupted 6104/6105; no full-suite pass claimed. Code snapshot: `/mnt/nfs/shared/champ-expansion/snap-ezreal-TEMP`.
+leaves at six checkpoints through 3600 ticks (55 Ezreal leaves added).
+
+After integrating Ezreal and kit pruning, final validation is queued on desktop: 6150 (50 non-world modules),
+6151 (18 world modules), 6152 (trainer), 6153 (full/top goldens against the pruned reference). Jobs use
+fail-on-error runners from `/mnt/nfs/shared/champ-expansion/validation-TEMP/` and immutable source snapshot
+`/mnt/nfs/shared/champ-expansion/roster-integrated-e1b7a22c-TEMP`. They supersede 6146/6147, which superseded
+interrupted 6104/6105. Desktop is down in Windows; no combined full-suite pass claimed.
+
 Caitlyn remains research only: corrected Headshot extraction 6148 queued on desktop (20 games); the old
 extractor misattributed unrelated distant HP losses. Net dash profiles do not yet settle the recoil distance.
