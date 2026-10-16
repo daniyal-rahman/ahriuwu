@@ -126,6 +126,8 @@ class KitOut(NamedTuple):
     alt_base_cooldown: Any = None    # (C, 3) its base cooldown before haste
     mana_gain: Any = None            # (C,) mana restored (Jayce's Lightning Field on hit; not a negative cost, which
                                      # Actualizer would scale); None = 0
+    cooldown_refund: Any = None      # (C, 4) seconds taken off the current Q/W/E/R cooldowns after this tick's starts
+                                     # (Ezreal's Mystic Shot); None = 0
 
 
 class KitDefense(NamedTuple):
@@ -294,7 +296,8 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
             swap_cooldowns=_or(prev.swap_cooldowns, p.swap_cooldowns),
             alt_cooldown_start=_or(prev.alt_cooldown_start, p.alt_cooldown_start),
             alt_base_cooldown=_last_pos(prev.alt_base_cooldown, p.alt_base_cooldown),
-            mana_gain=_add(prev.mana_gain, p.mana_gain))
+            mana_gain=_add(prev.mana_gain, p.mana_gain),
+            cooldown_refund=_add(prev.cooldown_refund, p.cooldown_refund))
     return acc
 
 

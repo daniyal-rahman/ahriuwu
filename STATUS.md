@@ -28,9 +28,17 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 - Walkability (`terrain.row_gaps`): exact `is_walkable` from per-row nearest-blocked gaps, golden-identical;
   +54% top lane / +25% full map on the GTX 1060.
 
-**Champions (2026-10-13, MODERN-027..039).** Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa, Camille, K'Sante and Jayce are registered (any pairing); Ornn is next (client bins and wiki pages cached 2026-10-13). Every known difference from the live game is listed per kit in docs/modern/CHAMPIONS.md; the interaction-level ones were fixed (Darius pull measured from replays, dash terrain rule, size -> gameplay radius, dash speed). Golden-identical for Garen vs Jax. No training run with the new champions yet.
+**Champions (2026-10-16, MODERN-027..039, MODERN-041).** Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa, Camille, K'Sante and Jayce are registered (any pairing). Ezreal is implemented and registered with focused tests passing; full regression remains pending. Ornn is dropped; the accepted cross-role roster is in docs/modern/ROSTER.md. Every known difference from the live game is listed per kit in docs/modern/CHAMPIONS.md; the interaction-level ones were fixed (Darius pull measured from replays, dash terrain rule, size -> gameplay radius, dash speed). Golden-identical for Garen vs Jax. No training run with the new champions yet.
 
 **Open.**
 - GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.
 - No training experiment on the modern world yet; decisions open: reward weights, input latency
   (`--action-delay-ticks`), start state, shop handling.
+
+**Roster expansion (2026-10-16, MODERN-041/042).** Ezreal's 16 kit tests, 3 world tests and 79 focused
+regressions passed (6089/6090), plus trainer 6/6 (6103). Top-lane golden 6091 matches all 1159 pre-existing
+leaves at six checkpoints through 3600 ticks (55 Ezreal leaves added). Full suite remains pending desktop
+Linux availability: robust fail-on-error jobs 6146 (50 modules) and 6147 (18 world modules) supersede
+interrupted 6104/6105; no full-suite pass claimed. Code snapshot: `/mnt/nfs/shared/champ-expansion/snap-ezreal-TEMP`.
+Caitlyn remains research only: corrected Headshot extraction 6148 queued on desktop (20 games); the old
+extractor misattributed unrelated distant HP losses. Net dash profiles do not yet settle the recoil distance.

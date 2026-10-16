@@ -42,6 +42,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cds = jnp.where(kit_all.cooldown_start, cooldown(kit_all.base_cooldown, haste), cds)
     ro = out.rune_outputs
     cds = cds.at[:, :3].multiply((1.0 - ro.basic_cd_refund)[:, None]).at[:, 3].multiply(1.0 - ro.ult_cd_refund)
+    if kit_all.cooldown_refund is not None:                           # flat kit refunds (Ezreal's Mystic Shot)
+        cds = jnp.maximum(cds - kit_all.cooldown_refund, 0.0)
     alt = champ.alt_cooldowns
     if alt is not None and kit_all.swap_cooldowns is not None:
         # The inactive form's Q/W/E (Jayce's other stance) tick, start and are refunded like the active ones, then a

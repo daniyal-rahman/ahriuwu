@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa and Camille, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa, Camille, K'Sante, Jayce and Ezreal, 26.19 (client 16.19.8230722)
 
-**Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`, `ambessa.py`, `camille.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
-`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa and Camille.
+**Status (2026-10-15).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`, `aatrox.py`, `fiora.py`, `yone.py`, `ambessa.py`, `camille.py`, `ksante.py`, `jayce.py`, `ezreal.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius, Malphite, Aatrox, Fiora, Yone, Ambessa, Camille, K'Sante, Jayce and Ezreal.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -10,7 +10,8 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
 - **CLIENT**: the pinned BIN snapshots `lanerl_jax/modern/data/26.19/champions/<name>.json` (spell data values,
   cooldowns, mana, record radii and acquisition range), and the full CDragon 16.19 records in
   `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/<name>.bin.json` (Nasus, Malphite, Renekton, Darius and
-  Tryndamere fetched 2026-10-12; Aatrox, Fiora, Yone, Ambessa, Camille, Jayce, K'Sante and Ornn 2026-10-13; checksums in
+  Tryndamere fetched 2026-10-12; Aatrox, Fiora, Yone, Ambessa, Camille, Jayce, K'Sante and Ornn 2026-10-13; the roster
+  picks of `ROSTER.md` 2026-10-15; checksums in
   `SHA256SUMS`): spell calculations,
   `mOverrideAttackTime`, `mRollForCriticalHit`, cast times, spell tags, plus the 16.19 string table tooltips.
   Calculation `mStat` numbers were checked against the item calculations: 2 is AD, 4 is attack speed, 6 is MR,
@@ -18,7 +19,8 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
 - **WIKI**: `Template:Data Garen/*` and `Template:Data Jax/*` ability data and the patch history pages,
   fetched raw on 2026-10-02; `Template:Data {Nasus,Renekton,Darius,Malphite}/*` and their patch histories cached raw in
   `cdragon-16.19/wiki-2026-10-12-champions/`; the Aatrox, Fiora, Yone, Ambessa, Camille, Jayce, K'Sante and Ornn templates,
-  patch histories and hitbox diagrams in `cdragon-16.19/wiki-2026-10-13-champions/`.
+  patch histories and hitbox diagrams in `cdragon-16.19/wiki-2026-10-13-champions/`; the Ezreal templates in
+  `cdragon-16.19/wiki-2026-10-15-champions/`.
 - **PATCH**: Riot patch notes 26.1–26.19. These Summoner's Rift changes apply: 26.1 (Garen E crit is 30% of
   bonus crit damage; Jax passive gains a level-19 breakpoint), 26.5 (Garen Q MS duration, E AD ratio),
   26.12 (Jax Q costs 50 mana, Jax E deals 4% max HP) and 26.14 (Garen R base damage 125/200/275). The Garen
@@ -515,6 +517,47 @@ movement and HP.
 8. A ranged attack's on-hit effects resolve on the missile's own target; if a new attack launches in the same tick
    the missile lands, the launch's target is used for both.
 
+## Ezreal (81)
+
+Rift patches since 26.1 (client values include them): 26.3 (Arcane Shift 60% bonus AD), 26.9 (Mystic Shot 40% AP,
+Essence Flux 90% AP, Trueshot Barrage 110% AP and 150/225/300 + 100% bonus AD + 110% AP to minions and non-epic
+monsters). The 26.17 Ezreal changes (Mystic Shot 110% AD and 1100 range; Trueshot Barrage AP) are under **Classic**
+and the 26.19 Mystic Shot refund 2.5 under **Arena** (the client's `cherry` override); neither applies to the Rift.
+The R data values `DamageReductionPerHit` / `MinimumDamagePercent` belong to the Classic ("jade") tooltip; the Rift
+tooltip has no per-unit falloff. Gameplay radius 65 (no override on the record), attack range 550, base attack speed
+0.625, windup `mAttackDelayCastOffsetPercent` −0.1116, attack missile 2000. Replay measurements (18 games, 20 fps;
+the replays record every Ezreal spell): `/mnt/nfs/shared/champ-expansion/roster-measurements/` (`events.py`,
+`ez-events-6071.out`, `ez_ana.py`, `ez_ana2.py`).
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| EZR.R0 | Default skill order Q E W Q Q R Q E Q E R E E W W R W W. | — | LoLalytics 16.19 Emerald+ bottom, level-15 order and Q > E > W priority (`ezreal-skill-order.txt`) |
+| EZR.P | Rising Spell Force: each enemy hit by an ability gives a stack (Mystic Shot, Essence Flux's mark, Arcane Shift's bolt, each unit Trueshot Barrage passes), up to 5, all refreshed to 6 s; +10% bonus attack speed per stack. | 10% × 5 | CLIENT `AttackSpeedPerStack`, `StackDuration`, `MaxStacks`; WIKI "for each enemy hit" |
+| EZR.Q1 | Mystic Shot (direction): after a 0.25 s cast time, a 2000 u/s missile (half-width 60) flies 1150 and stops on the first enemy (champion, minion or monster) whose hitbox its front reaches. | cd 5.5–4.5, 28–40 mana | CLIENT `spellCastTime`, missile `mSpeed`, `mMissileWidth`, castRangeDisplayOverride 1150; replays: 1718 hits fit 0.25 s + d / 2000, none beyond ~1200 center distance (see limitation 1) |
+| EZR.Q2 | The hit deals 20–120 + 130% AD + 40% AP physical as basic damage (life steal), applies on-hit and on-attack effects (Spellblade, Muramana's on-hit, runes), triggers spell effects with an extra 0-damage spell packet, and takes 1.5 s off every current cooldown, Mystic Shot's included. | — | CLIENT `BaseDamage`, `BaseDamageADRatio`, `BaseDamageAPRatio`, `CDRefund`; WIKI on-hit 100%, "basic damage … additional 0 spell damage", "current cooldowns … including" |
+| EZR.W1 | Essence Flux (direction): after 0.25 s, a 1700 u/s orb (half-width 80) flies 1150, passing minions and non-epic monsters, and marks the first enemy champion, epic monster or structure it touches for 4 s (0 proc damage on application). A new mark replaces the old one. | cd 8, 50 mana | CLIENT `spellCastTime`, missile `mSpeed` 1700 = WIKI (the spell's `missileSpeed` 1200 is not the missile's), `mMissileWidth`, `DetonationTimeout`; WIKI / tooltip targets |
+| EZR.W2 | Ezreal's next landed basic attack (not dodged) or ability hit on the marked unit detonates it: 80–300 + 100% bonus AD + 90% AP magic. Detonated by an ability (Mystic Shot, Arcane Shift's bolt, Trueshot Barrage), Ezreal restores 60 mana plus that ability's cost. | — | CLIENT `BaseDamage`, `Damage` calculation, `ManaReturn`; tooltip "refunds the Mana cost of that Ability plus 60" |
+| EZR.E1 | Arcane Shift (location, not while rooted): after a 0.25 s cast time Ezreal blinks toward the point, at most 475 from where he is then (walls: the Flash landing rule). | cd 26–14, 70 mana | CLIENT `spellCastTime`, castRangeDisplayOverride 475, `cantCastWhileRooted`; WIKI "range … updates if moved during the cast"; replays: 729 blinks 0.27–0.33 s after the record, sizes peaking at 470–480 |
+| EZR.E2 | From where he landed, a bolt homes at 2000 u/s on the nearest enemy (champion, minion or monster; the Essence Flux mark first) within 750 of his center, sight not needed: 80–280 + 60% bonus AD + 75% AP magic. No enemy in range: no bolt. | — | CLIENT `MissileRange`, EzrealEMissile `mSpeed`, `Damage` calculation; WIKI 750 (cr), mark priority, "does not have to be visible" |
+| EZR.R1 | Trueshot Barrage (direction, global): after a 1 s cast time, a 2000 u/s missile (half-width 160) flies 25000 and strikes every enemy it passes once: 350/550/750 + 100% bonus AD + 110% AP magic; minions and non-epic monsters take 150/225/300 + 100% bonus AD + 110% AP. Epic monsters (Voidgrubs, Herald, Baron, drakes) take the full damage. | cd 120/105/90, 100 mana | CLIENT `spellCastTime`, `castRange`, `mSpeed`, `mMissileWidth`, `BaseDamage`, `BaseDamageMinionMonster`, `DamageMinionMonster`; replays: 142 champion hits fit 1.0 s + d / 2000 (median residual −0.02 s) |
+
+### Ezreal limitations
+
+1. Skillshot reach: the missiles fly their `castRangeDisplayOverride` (1150), and a unit is touched when the missile's
+   front reaches its hitbox within the half-width (a flat front). The replays put the farthest Mystic Shot hits at
+   ~1200 center distance (1150 + a 65 hitbox); the record's `castRange` 1200 with a rounded front would reach
+   ~1325. Essence Flux's 1150 is taken from Mystic Shot's measurement (the mark deals no damage, so the replays
+   cannot time it).
+2. Rising Spell Force counts the mark's application as a hit and the mark's detonation as none (INFERRED-M; the wiki
+   says only "each enemy hit by his abilities").
+3. Arcane Shift's bolt picks its target on the tick after the blink (one 1/30 s tick), from where the blink landed;
+   the replays put the bolt's hits ~0.06 s after 0.25 s + d / 2000.
+4. Essence Flux's detonation by an ability uses the mark at the start of the tick: an orb and an ability landing on
+   the same tick do not detonate the new mark. A marked structure is never the bolt's target (the bolt's
+   `mAffectsTypeFlags` match Mystic Shot's, which cannot hit structures).
+5. Cast times are not interrupted by crowd control (the world's convention; death cancels).
+6. Missiles keep flying after Ezreal dies; the bolt is lost if its target dies or becomes untargetable.
+
 ## Approximations that remain
 
 Shared by every kit:
@@ -589,7 +632,8 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `mechanics.wall_exit` | (C,) × 3 | Terrain within a check distance along a ray with a walkable far side (All Out's pull over terrain). |
 | `MAX_RANKS` / `INNATE_RANKS` (`rank_tables`) | per slot | Ranks per slot (default 5/5/5/3) and ranks held without a skill point; skill-up caps basics at ceil(level / 2) and R at 6/11/16, each by the kit's count, and innate ranks are not spent points (Jayce: 6/6/6/1, R innate). `data.champions.cooldowns` returns that many ranks; a spell without a `Cooldown` record has the BIN default 10 s. |
 | `KitOut.swap_cooldowns` / `alt_cooldown_start` / `alt_base_cooldown` | (C,) / (C, 3) | `ChampionLayer.alt_cooldowns` holds the inactive form's Q/W/E cooldowns, ticked, started and refunded like the active ones; a swap exchanges them after this tick's starts (Jayce's stances). |
-| `KitOut.mana_gain` | (C,) | Mana restored this tick, not scaled by Actualizer's cost multiplier (Lightning Field on hit). |
+| `KitOut.mana_gain` | (C,) | Mana restored this tick, not scaled by Actualizer's cost multiplier (Lightning Field on hit; Essence Flux detonated by an ability). |
+| `KitOut.cooldown_refund` | (C, 4) s | Taken off the current Q/W/E/R cooldowns after this tick's starts and rune refunds (Mystic Shot's 1.5 s). |
 | `KitAttackMods.damage_mult` | (C,) | The next attack's damage times this, crits included (Hyper Charge). |
 | `ItemStats.attack_range` | (C,) | Kit-only bucket added to the record's attack range: `ChampionStats.attack_range`, hence reach, acquisition range and `is_ranged` (> 300; Mercury Cannon). |
 | `attack_missile_speed(state, kctx)` | (C,) | The champion's attacks are missiles of this speed (0 = melee); a missile's on-hit effects resolve on its own target (Mercury Cannon). |
@@ -600,4 +644,4 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600; K'Sante 80 / 50 / 400; Jayce 65 / 35 / 200 (acquisition shifts with Mercury Cannon's +375). Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400; Aatrox 65 / 35 / 475; Fiora 65 / 35 / 600; Yone 65 / 32 / 400; Ambessa 65 / 35 / 600; Camille 65 / 35 / 600; K'Sante 80 / 50 / 400; Jayce 65 / 35 / 200 (acquisition shifts with Mercury Cannon's +375); Ezreal 65 / 35 / 550. Records that give the attack as `mAttackCastTime / mAttackTotalTime` (Aatrox, Fiora) use that as the windup percent (wiki Attack speed).

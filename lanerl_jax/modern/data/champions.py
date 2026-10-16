@@ -9,7 +9,7 @@ from functools import lru_cache
 from . import PATCH_DIR
 
 IDS = {"Garen": 86, "Jax": 24, "Nasus": 75, "Renekton": 58, "Darius": 122, "Malphite": 54, "Aatrox": 266, "Fiora": 114, "Yone": 777, "Ambessa": 799, "Camille": 164, "KSante": 897,
-       "Jayce": 126}
+       "Jayce": 126, "Ezreal": 81}
 
 
 @lru_cache(None)

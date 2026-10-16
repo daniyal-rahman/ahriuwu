@@ -20,6 +20,7 @@ from . import aatrox
 from . import ambessa
 from . import camille
 from . import darius
+from . import ezreal
 from . import fiora
 from . import garen
 from . import jax as jax_kit
@@ -32,7 +33,8 @@ from . import yone
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille, ksante, jayce)
+KITS = (garen, jax_kit, nasus, renekton, darius, malphite, aatrox, fiora, yone, ambessa, camille, ksante, jayce,
+        ezreal)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit

@@ -1,0 +1,586 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "baseValue": 4.199999809265137,
+      "__type": "ModifiableFloat"
+    },
+    "attackRangeModifiable": {
+      "baseValue": 550.0,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedPerLevelModifiable": {
+      "baseValue": 2.5,
+      "__type": "ModifiableFloat"
+    },
+    "attackSpeedRatioModifiable": {
+      "baseValue": 0.625,
+      "__type": "ModifiableFloat"
+    },
+    "baseArmorModifiable": {
+      "baseValue": 24.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseDamageModifiable": {
+      "baseValue": 60.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseHPModifiable": {
+      "baseValue": 600.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMR": {
+      "baseValue": 33.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseMoveSpeedModifiable": {
+      "baseValue": 325.0,
+      "__type": "ModifiableFloat"
+    },
+    "baseStaticHPRegenModifiable": {
+      "baseValue": 0.800000011920929,
+      "__type": "ModifiableFloat"
+    },
+    "basicAttack": {
+      "mAttackDelayCastOffsetPercent": -0.11161347478628159,
+      "mAttackProbability": 0.75,
+      "mAttackName": "EzrealBasicAttack",
+      "__type": "AttackSlotData"
+    },
+    "damagePerLevelModifiable": {
+      "baseValue": 3.75,
+      "__type": "ModifiableFloat"
+    },
+    "hpPerLevelModifiable": {
+      "baseValue": 102.0,
+      "__type": "ModifiableFloat"
+    },
+    "hpRegenPerLevelModifiable": {
+      "baseValue": 0.12999999523162842,
+      "__type": "ModifiableFloat"
+    },
+    "mrPerLevel": {
+      "baseValue": 1.100000023841858,
+      "__type": "ModifiableFloat"
+    },
+    "primaryAbilityResource": {
+      "arType": 0,
+      "{726ee5cd}": {
+        "baseValue": 375.0,
+        "__type": "ModifiableFloat"
+      },
+      "{6216bf7b}": {
+        "baseValue": 70.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 1.7000000476837158,
+        "__type": "ModifiableFloat"
+      },
+      "{3a509002}": {
+        "baseValue": 0.20000000298023224,
+        "__type": "ModifiableFloat"
+      },
+      "__type": "AbilityResourceSlotInfo"
+    },
+    "acquisitionRange": 550.0,
+    "pathfindingCollisionRadius": 35.0,
+    "selectionRadius": 115.0
+  },
+  "patch": "26.19",
+  "slots": {
+    "Q": "Characters/Ezreal/Spells/EzrealQAbility/EzrealQ",
+    "W": "Characters/Ezreal/Spells/EzrealWAbility/EzrealW",
+    "E": "Characters/Ezreal/Spells/EzrealEAbility/EzrealE",
+    "R": "Characters/Ezreal/Spells/EzrealRAbility/EzrealR",
+    "Passive": "Characters/Ezreal/Spells/EzrealPassiveAbility/EzrealPassive"
+  },
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/ezreal/ezreal.bin.json",
+  "spells": {
+    "Characters/Ezreal/Spells/EzrealQAbility/EzrealQ": {
+      "calculations": {
+        "Damage": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mDataValue": "BaseDamageADRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            },
+            {
+              "mDataValue": "BaseDamageAPRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          5.75,
+          5.5,
+          5.25,
+          5.0,
+          4.75,
+          4.5,
+          3.5
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          28.0,
+          31.0,
+          34.0,
+          37.0,
+          40.0,
+          43.0
+        ],
+        "{0a3e0478}": 28.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            -5.0,
+            20.0,
+            45.0,
+            70.0,
+            95.0,
+            120.0,
+            145.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CDRefund",
+          "values": [
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5,
+            1.5
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseDamageADRatio",
+          "values": [
+            1.2999999523162842,
+            1.2999999523162842,
+            1.2999999523162842,
+            1.2999999523162842,
+            1.2999999523162842,
+            1.2999999523162842,
+            1.2999999523162842
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseDamageAPRatio",
+          "values": [
+            0.4000000059604645,
+            0.4000000059604645,
+            0.4000000059604645,
+            0.4000000059604645,
+            0.4000000059604645,
+            0.4000000059604645,
+            0.4000000059604645
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Ezreal/Spells/EzrealWAbility/EzrealW": {
+      "calculations": {
+        "Damage": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            },
+            {
+              "mDataValue": "APRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          8.0,
+          8.0,
+          8.0,
+          8.0,
+          8.0,
+          8.0,
+          8.0
+        ],
+        "{0a3e0478}": 8.0,
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          50.0,
+          50.0,
+          50.0,
+          50.0,
+          50.0,
+          50.0
+        ],
+        "{0a3e0478}": 50.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            25.0,
+            80.0,
+            135.0,
+            190.0,
+            245.0,
+            300.0,
+            355.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "ManaReturn",
+          "values": [
+            60.0,
+            60.0,
+            60.0,
+            60.0,
+            60.0,
+            60.0,
+            60.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "DetonationTimeout",
+          "values": [
+            4.0,
+            4.0,
+            4.0,
+            4.0,
+            4.0,
+            4.0,
+            4.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "APRatio",
+          "values": [
+            0.8999999761581421,
+            0.8999999761581421,
+            0.8999999761581421,
+            0.8999999761581421,
+            0.8999999761581421,
+            0.8999999761581421,
+            0.8999999761581421
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Ezreal/Spells/EzrealEAbility/EzrealE": {
+      "calculations": {
+        "Damage": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 0.6000000238418579,
+              "__type": "StatByCoefficientCalculationPart"
+            },
+            {
+              "mDataValue": "EAPRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          26.0,
+          26.0,
+          23.0,
+          20.0,
+          17.0,
+          14.0,
+          10.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          70.0,
+          70.0,
+          70.0,
+          70.0,
+          70.0,
+          70.0
+        ],
+        "{0a3e0478}": 70.0,
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            30.0,
+            80.0,
+            130.0,
+            180.0,
+            230.0,
+            280.0,
+            330.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MissileRange",
+          "values": [
+            750.0,
+            750.0,
+            750.0,
+            750.0,
+            750.0,
+            750.0,
+            750.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "CherryBonusHaste",
+          "values": [
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0,
+            15.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "EAPRatio",
+          "values": [
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75,
+            0.75
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Ezreal/Spells/EzrealRAbility/EzrealR": {
+      "calculations": {
+        "Damage": {
+          "mSimpleTooltipCalculationDisplay": 6,
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamage",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            },
+            {
+              "mDataValue": "RAPRatio",
+              "__type": "StatByNamedDataValueCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        },
+        "DamageMinionMonster": {
+          "mFormulaParts": [
+            {
+              "mDataValue": "BaseDamageMinionMonster",
+              "__type": "NamedDataValueCalculationPart"
+            },
+            {
+              "mStat": 2,
+              "mStatFormula": 2,
+              "mCoefficient": 1.0,
+              "__type": "StatByCoefficientCalculationPart"
+            },
+            {
+              "mCoefficient": 1.100000023841858,
+              "__type": "StatByCoefficientCalculationPart"
+            }
+          ],
+          "__type": "GameCalculation"
+        }
+      },
+      "cooldown": {
+        "values": [
+          120.0,
+          120.0,
+          105.0,
+          90.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "__type": "{0a0eddc9}"
+      },
+      "mana": {
+        "values": [
+          100.0,
+          100.0,
+          100.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "__type": "{630af303}"
+      },
+      "values": [
+        {
+          "name": "BaseDamage",
+          "values": [
+            150.0,
+            350.0,
+            550.0,
+            750.0,
+            950.0,
+            1150.0,
+            1350.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "DamageReductionPerHit",
+          "values": [
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MinimumDamagePercent",
+          "values": [
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896,
+            0.30000001192092896
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "RAPRatio",
+          "values": [
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858,
+            1.100000023841858
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "BaseDamageMinionMonster",
+          "values": [
+            75.0,
+            150.0,
+            225.0,
+            300.0,
+            375.0,
+            450.0,
+            525.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    },
+    "Characters/Ezreal/Spells/EzrealPassiveAbility/EzrealPassive": {
+      "values": [
+        {
+          "name": "AttackSpeedPerStack",
+          "values": [
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "StackDuration",
+          "values": [
+            6.0,
+            6.0,
+            6.0,
+            6.0,
+            6.0,
+            6.0,
+            6.0
+          ],
+          "__type": "SpellDataValue"
+        },
+        {
+          "name": "MaxStacks",
+          "values": [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0
+          ],
+          "__type": "SpellDataValue"
+        }
+      ]
+    }
+  }
+}
