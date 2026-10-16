@@ -58,5 +58,7 @@ also match. Immutable tested source: `/mnt/nfs/shared/champ-expansion/roster-int
 Caitlyn remains research only. Corrected extraction 6148 completed: 1560 Headshot records, 443 with one
 plausible damaged champion, 71 ambiguous, 1046 unmatched. A single candidate is not proof of attribution;
 the exact trap/net attack refund remains unresolved, and net dash profiles do not settle recoil distance.
-Lux is being assessed next while this gap remains open. Actual rollout/PPO comparison against lane-rl/jax
+Lux assessment (MODERN-044) now has eight replay games extracted (6707). R records are LuxRMis, whose
+1 s child cast time fits damage candidates better than the root record's 1.375 s; W uses accelerating
+missiles. No Lux kit registered yet. Actual rollout/PPO comparison against lane-rl/jax
 is in progress in an isolated agent checkout (MODERN-043); no training speedup claim yet.
