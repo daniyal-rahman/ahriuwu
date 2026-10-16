@@ -1,7 +1,20 @@
 """Units and denominators in MODERN-043's training comparison; no JAX needed."""
 import unittest
 
-from ops.modern.training_bench import rates
+from ops.modern.training_bench import compiled_memory, rates
+
+
+class CompiledMemoryTests(unittest.TestCase):
+    def test_aliases_are_not_double_counted(self):
+        from types import SimpleNamespace
+        executable = SimpleNamespace(memory_analysis=lambda: SimpleNamespace(
+            argument_size_in_bytes=100, output_size_in_bytes=60, alias_size_in_bytes=40,
+            temp_size_in_bytes=200, generated_code_size_in_bytes=10))
+        self.assertEqual(compiled_memory(executable)['estimated_execution_bytes'], 320)
+
+    def test_backend_without_memory_analysis(self):
+        from types import SimpleNamespace
+        self.assertIsNone(compiled_memory(SimpleNamespace(memory_analysis=lambda: None)))
 
 
 class RateTests(unittest.TestCase):

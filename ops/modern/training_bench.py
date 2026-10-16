@@ -156,7 +156,55 @@ def setup(a):
         fn = built["collect"]
     else:
         fn = update
+    if getattr(a, "diagnose_memory", False):
+        if a.engine != "modern":
+            raise ValueError("component memory diagnosis requires the modern learner")
+        a.memory_context = built, cfg
     return runner, fn, desc
+
+
+def compiled_memory(executable):
+    stats = executable.memory_analysis()
+    if stats is None:
+        return None
+    fields = ("argument_size_in_bytes", "output_size_in_bytes", "alias_size_in_bytes",
+              "temp_size_in_bytes", "generated_code_size_in_bytes")
+    result = {k: int(getattr(stats, k)) for k in fields}
+    result["estimated_execution_bytes"] = (result["argument_size_in_bytes"] + result["output_size_in_bytes"]
+                                            + result["temp_size_in_bytes"] - result["alias_size_in_bytes"])
+    return result
+
+
+def live_memory():
+    import jax
+    from collections import Counter
+    arrays = jax.live_arrays()
+    sizes = Counter()
+    for x in arrays:
+        sizes[(str(x.shape), str(x.dtype), int(x.nbytes))] += 1
+    return dict(device_stats=jax.local_devices()[0].memory_stats(), live_array_bytes=sum(x.nbytes for x in arrays),
+                largest_live_arrays=[dict(shape=s, dtype=d, bytes=b, count=n)
+                                     for (s, d, b), n in sorted(sizes.items(), key=lambda x: x[0][2], reverse=True)[:20]])
+
+
+def diagnose_components(built, runner, cfg):
+    """Compile learner components on abstract rollout data; never time these as training."""
+    import gc
+    import jax
+    _, _, batch = jax.eval_shape(built["rollout"], runner)
+    mb = jax.tree.map(lambda x: jax.ShapeDtypeStruct((x.shape[0] // cfg.n_minibatches,) + x.shape[1:], x.dtype), batch)
+    forward = built["loss"].forward
+    loss = lambda p, b: built["loss"](p, b, cfg.ppo)
+    targets = (("post_kl_full_forward", forward, batch),
+               ("minibatch_forward", forward, mb),
+               ("minibatch_value_and_grad", jax.value_and_grad(loss, has_aux=True), mb))
+    for name, fn, shape in targets:
+        start = time.perf_counter()
+        executable = jax.jit(fn).lower(runner.params, shape).compile()
+        print(json.dumps(dict(event="component_memory", component=name, compile_s=time.perf_counter() - start,
+                              compiled_memory=compiled_memory(executable))), flush=True)
+        del executable
+        gc.collect()
 
 
 def worker(a):
@@ -178,8 +226,13 @@ def worker(a):
                     pin=json.loads((a.root / "manifest.json").read_text())["pins"][a.engine],
                     scenario=desc, backend=jax.default_backend(), devices=[str(x) for x in jax.devices()],
                     versions=dict(jax=jax.__version__, flax=flax.__version__, optax=optax.__version__, numpy=np.__version__),
-                    init_and_bank_compile_s=init_s, compile_cache=False)
+                    init_and_bank_compile_s=init_s, compile_cache=False,
+                    allocator_env={k: os.environ.get(k) for k in ("XLA_PYTHON_CLIENT_PREALLOCATE",
+                        "XLA_PYTHON_CLIENT_MEM_FRACTION", "XLA_PYTHON_CLIENT_ALLOCATOR", "TF_GPU_ALLOCATOR")})
     emit(dict(event="initialized", **metadata))
+    if a.diagnose_memory:
+        built, cfg = a.memory_context
+        diagnose_components(built, runner, cfg)
     if a.validate_only:
         shapes = jax.eval_shape(fn, runner)
         emit(dict(event="validated", **metadata, output_leaves=len(jax.tree.leaves(shapes))))
@@ -187,6 +240,10 @@ def worker(a):
     t = time.perf_counter()
     executable = jax.jit(fn).lower(runner).compile()
     compile_s = time.perf_counter() - t
+    memory = compiled_memory(executable)
+    emit(dict(event="compiled", compile_s=compile_s, compiled_memory=memory, **live_memory()))
+    if a.diagnose_memory:
+        jax.profiler.save_device_memory_profile(str(a.work / "before-execution.prof"))
     t = time.perf_counter()
     out = jax.block_until_ready(executable(runner))
     first_s = time.perf_counter() - t
@@ -217,7 +274,7 @@ def worker(a):
               median_s=median, min_s=min(samples), max_s=max(samples),
               update_s=median if a.phase == "ppo" else None,
               rollout_s=median if a.phase == "rollout" else None,
-              compile_s=compile_s, first_execution_s=first_s,
+              compile_s=compile_s, first_execution_s=first_s, compiled_memory=memory,
               peak_device_bytes=mem.get("peak_bytes_in_use"), memory_stats=mem,
               **rates(a.envs, a.rollout, median, desc["tick_hz"], desc["step_ticks"], 2, desc["learning_agents"])))
 
@@ -286,6 +343,7 @@ def main():
             s.add_argument("--layouts", nargs="+", choices=("top", "full"), default=["top", "full"])
         else:
             s.add_argument("--validate-only", action="store_true")
+            s.add_argument("--diagnose-memory", action="store_true")
             s.add_argument("--engine", choices=("modern", "legacy"), required=True)
             s.add_argument("--preset", choices=("matched", "natural"), required=True)
             s.add_argument("--envs", type=int, required=True)

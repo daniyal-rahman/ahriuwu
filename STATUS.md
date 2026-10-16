@@ -94,3 +94,13 @@ These are different rulesets/scenarios. Full PPO is memory-blocked: matched256 O
 modern natural256 also OOM. Legacy natural256 PPO completes7.0k env decisions/s, but uses one learner
 against AFK versus modern self-play2, so this is not a matched full-training comparison. Memory
 investigation is delegated in an isolated checkout (MODERN-045), bounded representative cases only.
+
+**PPO OOM diagnosis (2026-10-16, MODERN-045).** Reserved for learner memory work; MODERN-043 results
+and champion work remain with the parent. Added compiled memory analysis before execution, allocator
+settings, largest live arrays and optional live-device profile; isolated full-rollout post-KL forward,
+minibatch forward and backward compile estimates. Bounded diagnostic driver: eight top-lane full-PPO
+cases, rollout128, modern matched64/128, legacy matched64, modern natural128, modern matched/natural256
+at explicit .75/.90 allocator limits. Three synchronized steady updates per successful case, 12-minute
+cell cap, 1h45 exclusive Slurm allocation. Eight lightweight reporting/failure tests pass. Learner and
+simulator unchanged; no remedy or training throughput improvement claimed. GPU is occupied by unrelated
+7433 (scheduled end 2026-10-17 06:28 UTC); no cancellation or overlapping timing.
