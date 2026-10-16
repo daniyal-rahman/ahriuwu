@@ -107,7 +107,7 @@ simulator unchanged; no remedy or training throughput improvement claimed. GPU i
 
 MODERN-045 submission: immutable `/mnt/nfs/shared/champ-expansion/modern045-memory-baseline-TEMP/`
 contains original MODERN-043 engine pins plus diagnostics commit `576bc70d`; all 4301 manifest hashes
-verified. CPU component-compiler validation **7587** (desktop, 2 cores/2GiB, 10min) is pending resources;
+verified. CPU component-compiler validation **7587** passed (desktop, 1 test in8.6s);
 exclusive GPU diagnosis **7588** (1h45, afterok:7587) is pending dependency/desktop availability.
 Logs: `/mnt/nfs/shared/champ-expansion/modern045-components-7587.out` and
 `modern045-ppo-memory-7588.out`; results will be `modern045-memory-baseline-TEMP/results-7588/`.
@@ -129,3 +129,8 @@ separate processes in7606;7608's missing-visibility fixture corrected in7611. Al
 no unrelated jobs touched, no new GPU work, no GPU speedup claim. MODERN-045 memory diagnosis remains
 separate. Unresolved: simultaneous basic/ability hits still share one holder hit record; evidence and
 proposed follow-up in the MODERN-046 ledger rows.
+
+Review fixes integrated as `76a4d59f`; parent independently checked strict equality of all12 golden
+records and Python syntax. A focused follow-up agent (MODERN-047) is reproducing/fixing the remaining
+simultaneous-hit event loss, with targeted regressions and runtime-cost review required. Full-PPO GPU
+memory diagnosis7588 remains queued; its CPU component-compilation prerequisite7587 passed.
