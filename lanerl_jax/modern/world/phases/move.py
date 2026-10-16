@@ -106,14 +106,13 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cy = jnp.where(s_out.teleport_arrive, s_out.teleport_y, cy)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))
     # Kit displacements (Darius E): straight toward the kit's point at its speed, ignoring terrain and collision.
-    # Static per match: only matches with a displacing kit trace the terrain override below (Garen vs Jax compiles as
+    # Static per roster: only worlds with a displacing kit trace the terrain override below (Garen vs Jax compiles as
     # before, golden-identical).
-    kits_here = [K.kit(lo.champion) for lo in cfg.loadouts]
-    can_displace = any(hasattr(k, "displacement") for k in kits_here)
+    can_displace = any(hasattr(k, "displacement") for k in cfg.kits)
     disp, d_x, d_y, d_v = K.displacement(sc.kits, sc.kctx, n)
     # A displacement that starts while the unit is CC-immune (Fiora Riposte) is ignored until it ends.
     imm = K.cc_immune(sc.kits, sc.kctx)
-    if any(hasattr(k, "displacement_immune") for k in kits_here):
+    if any(hasattr(k, "displacement_immune") for k in cfg.kits):
         imm = imm | K.displacement_immune(sc.kits, sc.kctx)                         # (K'Sante's charge)
     ignored = disp[:c] & (imm | champ.disp_ignored)
     champ = champ._replace(disp_ignored=ignored)

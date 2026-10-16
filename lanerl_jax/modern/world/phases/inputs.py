@@ -50,7 +50,7 @@ def skill_up(s: ModernState, cfg: WorldConfig, orders: ModernOrders) -> Any:
     ranks = s.champ.ranks
     level = s.econ.level
     points = E.skill_points(level) + s.champ.bonus_points
-    max_r, innate = KC.rank_tables(cfg.champion_ids)
+    max_r, innate = KC.rank_tables(cfg.champion_ids, cfg.kits)
     spent = jnp.sum(ranks - innate, axis=1)
     order = jnp.asarray([list(V.skill_order(cfg, c)) + [0] * (20 - len(V.skill_order(cfg, c)))
                          for c in range(N_CHAMPIONS)], jnp.int32)
@@ -72,7 +72,7 @@ def queue_casts(s: ModernState, cfg: WorldConfig, orders: ModernOrders, champ, s
     c, n = N_CHAMPIONS, cfg.n_units
     ar = jnp.arange(c)
     rng = KC.unit_target_ranges(cfg.champion_ids, s.kits)                           # (C, 4), per stance
-    prng = KC.point_target_ranges(cfg.champion_ids)
+    prng = KC.point_target_ranges(cfg.champion_ids, cfg.kits)
 
     def needs(slot, target, px, py):
         sl = jnp.clip(slot, 0, 3)
@@ -147,7 +147,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     moving = jnp.where(cast_chase, True, jnp.where(cast_fired, False, moving))
     attack_order = jnp.where(cast_chase, -1, attack_order)
     t_q = jnp.clip(queued.target, 0, n - 1)
-    to_point = KC.point_target_ranges(cfg.champion_ids)[jnp.arange(c), jnp.clip(queued.slot, 0, 3)] > 0
+    to_point = KC.point_target_ranges(cfg.champion_ids, cfg.kits)[jnp.arange(c), jnp.clip(queued.slot, 0, 3)] > 0
     q_goal = jnp.where(to_point[:, None], jnp.stack([queued.x, queued.y], -1), jnp.stack([s.x[t_q], s.y[t_q]], -1))
     goal = jnp.where(cast_chase[:, None], q_goal, goal)
     amove = s.amove

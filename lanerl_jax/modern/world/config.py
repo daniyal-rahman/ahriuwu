@@ -156,10 +156,16 @@ class WorldConfig:
     ward_grid: Any = None               # wards.WardGrid
     layout: Layout = Layout()           # unit blocks (static)
     item_allowed: Any = None            # (C, I) numpy bool: items each champion can ever hold (None: any)
+    roster: tuple = ()                  # champion names whose kits are compiled (``champions.roster``); () = loadouts'
 
     @property
     def n_units(self) -> int:
         return int(self.unit_kind.shape[0])
+
+    @property
+    def kits(self) -> tuple:
+        """Kit modules this world compiles (static): its roster, which holds every loadout's champion."""
+        return K.roster(self.roster or [lo.champion for lo in self.loadouts])
 
 
 
@@ -173,7 +179,8 @@ def _item_allowed(loadouts):
 
 def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, dt=1.0 / 30.0,
                  fog: bool | str = "rays", lanes=(0, 1, 2), jungle: bool = True,
-                 objectives: bool = True, packet_capacity: int = 0, lane_structures: bool = False) -> WorldConfig:
+                 objectives: bool = True, packet_capacity: int = 0, lane_structures: bool = False,
+                 roster=()) -> WorldConfig:
     """Validate loadouts and build the static world (host-side).
 
     ``fog``: ``"rays"`` (default; walls and brush along the ray), ``"fast"`` (brush lookup, walls
@@ -181,7 +188,8 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
     waves spawn (0 bot, 1 mid, 2 top). ``jungle`` / ``objectives``: spawn camps / epic monsters.
     ``packet_capacity``: damage packets per tick (0: ``Layout.packet_capacity`` default). ``lane_structures``: only
     the spawning lanes' turrets and inhibitors, plus the Nexus turrets and Nexuses (a one-lane game never reaches the
-    others).
+    others). ``roster``: further champions whose kits the world compiles (a pool a run may swap into the loadouts,
+    ``"all"`` for every kit); the loadouts' champions are always in it. Kits outside the roster cost nothing.
     """
     if fog not in (False, "fast", "rays"):
         raise ValueError("fog must be 'fast', 'rays' or False")
@@ -234,6 +242,8 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
         if tier in PREREQ:
             prereq[slot] = index[(team, lane, PREREQ[tier])]
     champion_names = [lo.champion for lo in loadouts]
+    pool = [k.NAME for k in K.KITS] if roster == "all" else list(roster)
+    kits = K.roster(pool + champion_names)
     traits = [K.kit(nm).TRAITS for nm in champion_names]
     profile = {"patch": "26.19", "mode": "CLASSIC", "map_id": 11, "lane": "top", "dt": dt,
                "map_arrays_sha256": manifest["arrays_sha256"], "routes": route_meta,
@@ -241,6 +251,7 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
                "lanes": lay.lanes, "jungle": jungle, "objectives": objectives, "lane_structures": lay.lane_structures,
                "vision": f"fog={fog!r}: sight radii, brush{', walls' if fog == 'rays' else ''}, structures always "
                          "visible, attack reveal",
+               "roster": [k.NAME for k in kits],
                "deferred": ["allied champions (ally-targeted effects inert)", "champions without a kit module"]}
     return WorldConfig(
         terrain=terrain, routes=routes, loadouts=tuple(loadouts),
@@ -261,4 +272,5 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
         rift=RIFT.load_rift_terrain() if objectives else None,
         regions=REG.build_regions(grid), footprints=DTR.build_footprints(grid, np.asarray(kinds), np.asarray(xs),
                                                                          np.asarray(ys)),
-        ward_grid=WD.ward_grid(grid), layout=lay, item_allowed=_item_allowed(loadouts))
+        ward_grid=WD.ward_grid(grid), layout=lay, item_allowed=_item_allowed(loadouts),
+        roster=tuple(k.NAME for k in kits))

@@ -18,6 +18,16 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 `/mnt/nfs/shared/build-research/`) compile out item code no champion can hold. Every capacity has a counter in
 `TickEvents` and in the trainer's `sim_overflow_max`, which must stay 0.
 
+**Kit pruning (2026-10-16, MODERN-040).** Recovered `throughput/kit-roster` at `38be6c4e` into this isolated
+checkout: world state and hook dispatch contain only the loadouts' kits, with an explicit larger roster option.
+Full-map and top-lane 3600-tick CPU goldens against `8067b443` are identical on every retained leaf, summary
+and overflow counter (427 unused-kit leaves removed). Completed validation jobs: 6084 (6 trainer tests), 6086
+(42 world tests), 6087 (58 world/interface tests). Non-world suite 6085 remains active on danilogin; its new
+roster assertion needed normalization of the optional Jayce damage override (None and zero are equivalent).
+Focused corrected validation passed (2 tests, 53.64 s) in Slurm step 6085.0; standalone 6145 was cancelled
+before starting to reuse the existing allocation. GPU benchmark 6088 and dependent profile 6092 remain pending while desktop
+is in Windows; no measured speedup claimed, no duplicate GPU jobs or watchers started.
+
 **Free wins held back.**
 - `--packet-capacity`: runs peak at 3-6 packets per tick against 512/256 slots. Drop it for 1v1; measure on real
   5v5 RL runs before changing the default.

@@ -1,10 +1,10 @@
 """Benchmark the modern world tick (``world.tick.step``) under ``jit(vmap(lax.scan))`` (MODERN-017).
 
-Garen-vs-Jax lane world replicated over B environments (independent PRNG keys); scripted "walk to lane and
+Garen-vs-Jax (``--champions``) lane world replicated over B environments (independent PRNG keys); scripted "walk to lane and
 attack the nearest enemy" orders are computed inside the scan.
 
     python -m ops.modern.bench --envs 1 64 512 --ticks 300 [--fog rays|fast|off] [--no-jungle]
-        [--no-objectives] [--lanes 0 1 2]
+        [--no-objectives] [--lanes 0 1 2] [--champions Garen Jax] [--roster all | NAME ...]
 
 Prints one JSON line per batch size: compile and steady seconds, env-ticks per second, packet/missile
 overflow and peak valid packets per tick (main and follow-up pass; capacities 512 / 256).
@@ -42,22 +42,26 @@ def add_world_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--packet-capacity", type=int, default=0, help="damage packets per tick (0: two per unit)")
     ap.add_argument("--allowlist", action="store_true", help="restrict each champion to its top-lane allow-list")
     ap.add_argument("--lane-structures", action="store_true", help="only the spawning lanes' structures")
+    ap.add_argument("--champions", nargs=2, default=["Garen", "Jax"], help="blue and red champion")
+    ap.add_argument("--roster", nargs="+", default=[], help="further kits to compile (a champion pool), or 'all'")
 
 
 def build_world(args):
-    """``(cfg, run)``: the Garen-vs-Jax world for ``args`` and ``run(state, ticks) -> (state, per-tick stats)``."""
+    """``(cfg, run)``: the ``--champions`` world (Garen vs Jax) for ``args`` and ``run(state, ticks) -> (state,
+    per-tick stats)``. Champions other than Garen and Jax take Riot's recommended top page (``data.loadouts``)."""
     from lanerl_jax.modern import world as MS
     from lanerl_jax.modern.runes import catalog as RD
-    from lanerl_jax.modern.data.loadouts import allowed_items
+    from lanerl_jax.modern.data.loadouts import allowed_items, rune_pages
     from lanerl_jax.modern.world import config as MW
     shop = (lambda name: allowed_items(name)) if args.allowlist else (lambda name: ())      # noqa: E731
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE, allowed_items=shop("Garen")),
-          MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(
-              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001)),
-              allowed_items=shop("Jax")))
+    pages = {"Garen": RD.GAREN_DEFAULT_PAGE, "Jax": RD.RunePage(
+        RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))}
+    lo = tuple(MW.Loadout(nm, items=(1055, 2003), rune_page=pages[nm] if nm in pages else rune_pages(nm)[0],
+                          allowed_items=shop(nm)) for nm in args.champions)
     cfg = MW.build_config(lo, fog=False if args.fog == "off" else args.fog, lanes=tuple(args.lanes),
                           jungle=not args.no_jungle, objectives=not args.no_objectives,
-                          packet_capacity=args.packet_capacity, lane_structures=args.lane_structures)
+                          packet_capacity=args.packet_capacity, lane_structures=args.lane_structures,
+                          roster="all" if args.roster == ["all"] else tuple(args.roster))
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
 
     def run(s, ticks):
@@ -88,7 +92,9 @@ def world_label(args) -> dict:
     return {"fog": args.fog, "jungle": not args.no_jungle, "objectives": not args.no_objectives,
             "lanes": list(args.lanes), **({"packet_capacity": args.packet_capacity} if args.packet_capacity else {}),
             **({"allowlist": True} if args.allowlist else {}),
-            **({"lane_structures": True} if args.lane_structures else {})}
+            **({"lane_structures": True} if args.lane_structures else {}),
+            **({"champions": args.champions} if args.champions != ["Garen", "Jax"] else {}),
+            **({"roster": args.roster} if args.roster else {})}
 
 
 def main() -> None:

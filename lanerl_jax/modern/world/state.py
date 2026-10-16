@@ -202,7 +202,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
     hp = hp.at[:c].set(st.max_hp)
     zc = jnp.zeros((c,), jnp.float32)
     first = jnp.asarray([V.skill_order(cfg, i)[0] for i in range(c)])
-    ranks = jnp.zeros((c, 4), jnp.int32).at[jnp.arange(c), first].set(1) + K.rank_tables(cfg.champion_ids)[1]
+    ranks = jnp.zeros((c, 4), jnp.int32).at[jnp.arange(c), first].set(1) + K.rank_tables(cfg.champion_ids, cfg.kits)[1]
     champ = ChampionLayer(
         ranks=ranks, cooldowns=jnp.zeros((c, 4), jnp.float32), mana=st.max_mana, cast_lock_until=zc,
         item_cast_until=zc, move_goal=cfg.fountain, moving=jnp.zeros((c,), bool),
@@ -249,7 +249,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         bounty_gold=jnp.zeros((n,), jnp.float32), bounty_xp=jnp.zeros((n,), jnp.float32),
         bounty_level=jnp.ones((n,), jnp.int32), next_seq=jnp.int32(n), spawn=MM.init_lane_spawn(),
         att=W.init_attack_state(n), missiles=M.init_missiles(64), cc=M.init_cc(n), champ=champ,
-        kits=K.init(c, n), summoners=S.init(loadout), combat=_init_combat(cfg, c, n),
+        kits=K.init(c, n, cfg.kits), summoners=S.init(loadout), combat=_init_combat(cfg, c, n),
         econ=E.init_economy(c, n, [lo.role for lo in cfg.loadouts]), lane_ai=LA.init_lane_ai(n, cfg.layout.ai_slots),
         towers=towers, shields=D.init_shields(n), status=init_status(n),
         prev=LastTick(damage_matrix=jnp.zeros((n, n), bool), death_seen=jnp.zeros((c, n), bool),

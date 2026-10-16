@@ -1,5 +1,7 @@
 """The world tick end to end: gold/XP after real waves, first blood and the death timer, shop purchases, Flash and
 Recall, idle auto-attacks, no overflows. The world and its compiled tick come from ``world_harness``."""
+import dataclasses
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -37,6 +39,14 @@ def test_layout_and_structure_vulnerability():
     # Only outer turrets are vulnerable at game start (TOWERS §2).
     assert targ[turret & (tier == 0)].all() and not targ[turret & (tier > 0)].any()
     assert not targ[(kinds == W.KIND_INHIBITOR) | (kinds == W.KIND_NEXUS)].any()
+
+
+def test_world_compiles_its_roster_only():
+    cfg, _, _ = world()
+    assert cfg.roster == ("Garen", "Jax") and type(MS.init_state(cfg).kits)._fields == ("garen", "jax")
+    pool = dataclasses.replace(cfg, roster=("Jayce", "Jax", "Garen"))
+    assert [k.NAME for k in pool.kits] == ["Garen", "Jax", "Jayce"]
+    assert type(MS.init_state(pool).kits)._fields == ("garen", "jax", "jayce")
 
 
 def test_ambient_gold_waves_and_no_overflow():

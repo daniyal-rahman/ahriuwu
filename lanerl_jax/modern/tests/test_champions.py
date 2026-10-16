@@ -773,3 +773,29 @@ def test_jit_all_hooks():
         assert a.dtype == b.dtype and a.shape == b.shape
     assert bool(st1.garen.e_on[0]) and bool(st1.jax.e_on[1])
     assert int(np.asarray(outs[1].packets.valid).sum()) == 0     # Garen spin 1 completes 3/n s after the cast
+
+
+def test_roster_compiles_only_its_kits():
+    """A roster state carries only its kits (registry order) and plays them exactly as the every-kit state."""
+    roster = K.roster(["Jax", "Garen", "Jax"])
+    assert roster == (K.garen, K.jax_kit) and K.roster(None) == K.KITS
+    st_r, st_all = K.init(2, 6, roster), K.init(2, 6)
+    assert type(st_r)._fields == ("garen", "jax") and K.kits_of(st_r) == roster
+    assert type(st_r) is K.state_type(roster) and type(st_all) is K.ChampionState
+    k, u = ctx(), units()
+
+    def run(st):
+        st, o1 = K.cast(st, k, u, order([2, 2]))
+        st, o2 = K.on_hit(st, k, u, launch([True, True], [1, 0]))
+        mods = K.attack_mods(st, k)
+        # None and zero both mean no damage override (Jayce's optional hook).
+        if mods.damage_mult is None:
+            mods = mods._replace(damage_mult=jnp.zeros(k.unit.shape, jnp.float32))
+        return st, (valid(o1.packets), valid(o2.packets)), (K.stats(st, k), K.defense(st, k), mods)
+    (a, pa, fa), (b, pb, fb) = run(st_r), run(st_all)
+    for x, y in zip(jax.tree_util.tree_leaves((a, pa, fa)), jax.tree_util.tree_leaves((b.garen, b.jax, pb, fb)),
+                    strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
+    np.testing.assert_array_equal(K.rank_tables(k.champion_id, roster)[0], K.rank_tables(k.champion_id)[0])
+    with pytest.raises(ValueError):
+        K.roster(["Teemo"])

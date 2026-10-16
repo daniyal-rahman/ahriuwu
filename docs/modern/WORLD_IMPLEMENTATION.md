@@ -163,7 +163,12 @@ Other carried values:
    `attack_range`, …); minion waves, camp spawns and epic monsters all go through `UnitWrite` +
    `world.units.write_units` (the ward rows mirror the ward state every tick). The unused `lane_wp` column is gone.
 4. **Champion registry.** `champions.KITS`: a kit module carries its `NAME`, `ID`, `SKILL_ORDER`, rune `TRAITS`,
-   unit-target ranges and hooks; config, views, observations and dispatch read the registry.
+   unit-target ranges and hooks; config, views, observations and dispatch read the registry. A world compiles only
+   its roster (`WorldConfig.roster` / `.kits`; `build_config(roster=)` adds a champion pool, default the loadouts'
+   champions; `roster="all"` restores every kit): `ChampionState` has one field per roster kit and every hook
+   iterates the state's kits (MODERN-040). Worlds with different rosters have different state pytrees and compiled
+   programs; swapping champions requires a roster containing those champions. The observation's champion one-hots
+   stay over every registered kit.
 5. **Last-tick latches.** `ModernState.prev` (`LastTick`), above.
 6. **Naming.** This world is the `lanerl_jax.modern` package with one data directory; the legacy-lane bridge is
    `sim/modern_bridge.py`.

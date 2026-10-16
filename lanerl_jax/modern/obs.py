@@ -37,7 +37,8 @@ from .screen import target_on_screen
 from .world.views import champion_stats
 
 PROFILE = "modern-world-v1"
-MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion one-hots
+MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion one-hots (every kit, not the roster:
+                                                # the policy input does not depend on what a world compiles)
 MODERN_ENTITY_DIM = 20
 N_SLOTS, GLOBAL_DIM = 32, 6
 NORM_DIST = NORM_XY = NORM_GOLD = 3000.0
@@ -131,9 +132,9 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
     my_hp = jnp.where(state.max_hp[me] > 0, state.hp[me] / state.max_hp[me], 0.0)
     cid = cfg.champion_ids
     def rank_cd(who, ranks):
-        """(4,) base cooldowns at ``ranks`` of the champion in slot ``who`` (kit registry order)."""
-        out = cooldown_row(K.KITS[-1].NAME, ranks[None])
-        for k in reversed(K.KITS[:-1]):
+        """(4,) base cooldowns at ``ranks`` of the champion in slot ``who`` (the world's roster)."""
+        out = cooldown_row(cfg.kits[-1].NAME, ranks[None])
+        for k in reversed(cfg.kits[:-1]):
             out = jnp.where(cid[who] == k.ID, cooldown_row(k.NAME, ranks[None]), out)
         return out[0]
     base_cd = rank_cd(me, jnp.maximum(c.ranks[me], 1))
@@ -158,7 +159,7 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         state.econ.quest.complete[me].astype(jnp.float32), in_combat.astype(jnp.float32),
         st.move_speed[me] / 500.0, st.attack_range[me] / 600.0,
         (E.skill_points(level[me]) + c.bonus_points[me]
-         - jnp.sum(c.ranks[me] - K.rank_tables(cid)[1][me])).astype(jnp.float32) / 4.0,
+         - jnp.sum(c.ranks[me] - K.rank_tables(cid, cfg.kits)[1][me])).astype(jnp.float32) / 4.0,
         state.wards.trinket.charges[me].astype(jnp.float32) / 2.0])
     assert self_vec.shape[0] == MODERN_WORLD_SELF_DIM
 
