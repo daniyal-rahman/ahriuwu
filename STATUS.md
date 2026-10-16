@@ -84,3 +84,13 @@ and source snapshots. All jobs have NFS cwd/logs, fail-on-error scripts, no rebo
 Desktop reports Linux, `Gres=gpu:1` but no GPU in `CfgTRES`/partition TRES; CPU jobs also occupy it.
 GPU queue reasons alternate resources/unavailable. Read-only NVIDIA query sees RTX5080, driver580.173.02,
 18MiB used; GPU is visible. Scheduler repair is outside this task.
+
+**Measured throughput (MODERN-043, 2026-10-16).** GPU jobs 6722/6723 completed. Kit pruning improves
+simulation top1024 134.7k ->148.8k ticks/s (+10.5%), top4096 168.3k ->178.6k (+6.1%), full1024
+42.7k ->46.9k (+9.8%). Training matrix6734 was cancelled after6h30 during the final cell; completed
+results survive in modern043-pinned-v3-TEMP/results-6734/. Matched10Hz top-lane rollout+policy:
+modern1024 36.0k vs legacy21.7k environment decisions/s (+65.7%); modern4096 35.8k (saturation).
+These are different rulesets/scenarios. Full PPO is memory-blocked: matched256 OOM in both engines;
+modern natural256 also OOM. Legacy natural256 PPO completes7.0k env decisions/s, but uses one learner
+against AFK versus modern self-play2, so this is not a matched full-training comparison. Memory
+investigation is delegated in an isolated checkout (MODERN-045), bounded representative cases only.
