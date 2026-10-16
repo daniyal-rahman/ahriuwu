@@ -115,3 +115,10 @@ Cancelled only own unstarted **7584/7585** after detecting incomplete snapshot a
 verified it before replacement submissions. No new GPU result, allocator conclusion or learner fix yet.
 Next: inspect component memory and real full-PPO results, then justify/test a tight learner change and
 compare against this unchanged baseline. Session ends with 7587/7588 queued; no watcher or agent.
+
+**Focused code-quality review (2026-10-16, MODERN-046).** User-requested isolated review is active over
+modern simulation and training code, prioritizing major bugs, material throughput/memory costs,
+stray/duplicate code and comment/LOC bloat. Clear issues should be fixed with targeted validation;
+behaviour-preserving refactors must retain golden/jaxpr identity. Diagnostics tools remain parent-owned.
+MODERN-045 diagnostics integrated; eight lightweight tests pass on this branch. Measurement jobs
+7587/7588 remain queued, so no allocator remedy or full-PPO speedup is claimed.
