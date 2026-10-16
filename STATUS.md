@@ -61,7 +61,7 @@ the exact trap/net attack refund remains unresolved, and net dash profiles do no
 Lux assessment (MODERN-044) now has eight replay games extracted (6707). R records are LuxRMis, whose
 1 s child cast time fits damage candidates better than the root record's 1.375 s; W uses accelerating
 missiles. No Lux kit registered yet. Actual rollout/PPO comparison against lane-rl/jax
-is in progress in an isolated agent checkout (MODERN-043); no training speedup claim yet.
+is implemented and queued (MODERN-043); no training speedup claim yet.
 
 **Training throughput comparison (2026-10-16, MODERN-043).** `ops/modern/training_bench.py` exports
 immutable modern parent `78abf40f` and lane-rl `bb2e5b46` (4.20, explicitly a different game), plus hashed
@@ -72,8 +72,10 @@ seconds/wall-s, full update seconds, separate init/compile/first execution, and 
 Four metric-math tests plus the OOM continuation test pass locally. Desktop CPU validation 6725
 COMPLETED/0:0 in 7m14s: real asset/bank setup and PPO shape tracing pass for both engines/presets
 (envs4, rollout2, top lane); this is validation, not a compiled PPO execution or GPU timing result.
-GPU training matrix 6729 (exclusive, 8h) is queued; 6724 was cancelled before running to stage
-the tested OOM collector fix in `modern043-pinned-v2-TEMP/` (original sources/snapshot preserved).
+GPU training matrix 6734 (exclusive, 8h) is queued from `modern043-pinned-v3-TEMP/`.
+Unstarted 6729 was superseded to correct observation metadata: dimensions now come from the pinned
+modern module (self width 56), and actions are described as buttons. Original snapshots are preserved.
+Earlier 6724 was superseded for the tested OOM collector fix.
 No training throughput result or speedup claimed.
 Saved submitted 6088/6092 scripts reveal missing `--exclusive`/strict shell mode and inaccessible cwd,
 contrary to MODERN-040's earlier description. Cancelled only those IDs; replacement simulation benchmark

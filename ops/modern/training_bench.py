@@ -96,6 +96,7 @@ def setup(a):
     import jax.numpy as jnp
     if a.engine == "modern":
         from lanerl_jax.modern import train as T
+        from lanerl_jax.modern import obs as O
         cfg = T.ModernVecConfig(n_envs=a.envs, rollout_steps=a.rollout)
         if a.preset == "matched":
             cfg = cfg._replace(policy=cfg.policy._replace(core="gru", core_norm=True,
@@ -112,7 +113,10 @@ def setup(a):
                     packet_capacity=world.layout.packet_capacity, loadouts=[repr(x) for x in world.loadouts],
                     reset="16 scripted 60s hold-point starts; 600s episode", tick_hz=30,
                     differences="modern items/runes/shop/wards/role quest; full adds all lanes/jungle/objectives",
-                    observation="modern-world-v1; no projectile rows", action="19 heads, 7 masked choice/level buttons")
+                    observation=dict(profile=O.PROFILE, entities=[O.N_SLOTS, O.MODERN_ENTITY_DIM],
+                                     self_width=O.MODERN_WORLD_SELF_DIM, global_width=O.GLOBAL_DIM,
+                                     projectile_rows=False),
+                    action="19 buttons, 7 masked choice/level buttons")
         learn_agents = cfg.learn_agents
     else:
         from lanerl_jax.train import vec_train as T
