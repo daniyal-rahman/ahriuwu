@@ -3,7 +3,8 @@
     entities (32, 20)  valid, ds, dn, hp_frac, 6 type (champion, minion, turret, inhibitor, nexus, other),
                        3 team (ally, enemy, neutral), 3 minion subtype (melee, caster, siege; super = siege),
                        monster, epic monster, ward, control ward
-    self     (32,)     lane_s, lane_n, hp_frac, level/20, gold, cs, 4 cooldown fractions, ad, ap, armor, mr,
+    self     (S,)      S = MODERN_WORLD_SELF_DIM; lane_s, lane_n, hp_frac, level/20, gold, cs,
+                       4 cooldown fractions, ad, ap, armor, mr,
                        is_dead, recalling, is_<kit> for me then the enemy (registry order), mana_frac,
                        shield/max_hp, summoner D/F cooldowns, progress to the next level, quest progress,
                        quest complete, in_combat, move_speed/500, attack_range/600, unspent skill points/4,

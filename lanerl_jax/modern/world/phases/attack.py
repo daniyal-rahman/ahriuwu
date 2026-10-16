@@ -103,6 +103,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     on_ward = (s.kind[atgt] == W.KIND_WARD) & (att.target >= 0)
     hit_c = launched[:c] & ~ranged_c & ~on_ward[:c]
     attack = Attack(launched[:c], hit_c, att.target[:c], jnp.where(launched[:c], craw, 0.0), crit)
+    attack_launch = attack
     push_bonus, push_div = minion_pushing(s, cfg, lane_ai, now)
     lane_pk = LA.attack_packets(units, W.AttackLaunch(launched & (s.kind != W.KIND_CHAMPION), att.target,
                                                       missile_speed > 0, jnp.zeros((n,), bool), cast_ids),
@@ -162,16 +163,19 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         jnp.where(hit_ward, jnp.arange(n), -1).astype(jnp.int32))
     arrived = D.packets(arrive, missiles.src, missiles.dst, missiles.raw, missiles.dtype, missiles.flags,
                         cast_id=missiles.cast_id)
-    arrive_c = jnp.zeros((c,), bool).at[jnp.clip(missiles.src, 0, c - 1)].max(arrive & (missiles.src < c))
-    # A champion's attack missile lands on its own target (the attack order may have moved on); a launch in the
-    # same tick keeps the launch's target.
-    arrive_dst = jnp.full((c,), -1, jnp.int32).at[jnp.clip(missiles.src, 0, c - 1)].max(
-        jnp.where(arrive & (missiles.src < c), missiles.dst, -1).astype(jnp.int32))
-    hit_target = jnp.where(arrive_c & ~launched[:c], arrive_dst, attack.target)
-    attack = attack._replace(hit=attack.hit | arrive_c, target=hit_target)
-    launch_c = W.AttackLaunch(attack.launched, attack.target, ranged_c, crit, cast_ids[:c])
+    arrivals = arrive[None, :] & (missiles.src[None, :] == jnp.arange(c)[:, None])
+    arrive_c = jnp.any(arrivals, axis=1)
+    slot = jnp.argmax(arrivals, axis=1)
+    # On-hit reads the landed missile; on-attack keeps this tick's independent launch event.
+    attack = attack._replace(hit=attack.hit | arrive_c,
+                             target=jnp.where(arrive_c, missiles.dst[slot], attack.target),
+                             raw=jnp.where(arrive_c, missiles.raw[slot], attack.raw),
+                             is_crit=jnp.where(arrive_c, missiles.crit[slot], attack.is_crit))
+    launch_c = W.AttackLaunch(attack_launch.launched, attack_launch.target, ranged_c, crit, cast_ids[:c])
     kits, k_att = K.on_attack(kits, kctx, units, launch_c)
-    kits, k_hit = K.on_hit(kits, kctx, units, launch_c._replace(launched=attack.hit))
+    kits, k_hit = K.on_hit(kits, kctx, units, launch_c._replace(
+        launched=attack.hit, target=attack.target, is_crit=attack.is_crit,
+        cast_id=jnp.where(arrive_c, missiles.cast_id[slot], cast_ids[:c])))
     champ_hit = jnp.zeros((n, n), bool).at[:c].set((attack.hit[:, None]
                                                     & (jnp.arange(n)[None, :] == attack.target[:, None])))
     towers, og_pk = LA.overgrowth_packets(s.towers, units, champ_hit, now=now,
@@ -181,6 +185,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     oh = kit_all.on_hit_target
     attack = attack._replace(hit=attack.hit | (oh >= 0), target=jnp.where(oh >= 0, oh, attack.target),
                              launched=attack.launched | ((oh >= 0) & kit_all.on_attack_proc))
+    proc = (oh >= 0) & kit_all.on_attack_proc
+    attack_launch = attack_launch._replace(launched=attack.launched,
+                                           target=jnp.where(proc, oh, attack_launch.target))
     jfx = None
     if cfg.jungle is not None:
         # Scorchclaw reads last tick's damage matrix.
@@ -190,7 +197,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                                        attack_target=attack.target, damaged_champion=dmg_champ,
                                        in_brush=V.in_brush(cfg, s.x[:c], s.y[:c], s.terrain_variant))
     return s, sc._replace(att=att, launched=launched, started=started, cancelled=cancelled, reset=reset,
-                          attack=attack, missiles=missiles, m_over=m_over, direct=direct, arrived=arrived,
+                          attack=attack, attack_launch=attack_launch, missiles=missiles, m_over=m_over,
+                          direct=direct, arrived=arrived,
                           og_pk=og_pk, extra_atk=extra_atk, obj_cc=obj_cc, ward_hits=ward_hits,
                           ward_hitter=ward_hitter, kits=kits, towers=towers, kit_all=kit_all, jfx=jfx,
                           jungle=jungle, units=units)

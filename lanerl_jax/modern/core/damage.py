@@ -170,7 +170,8 @@ def shield_value(sh: Shields, now: Any) -> Any:
 
 
 def grant_shield(sh: Shields, unit: Any, amount: Any, kind: Any, now: Any,
-                 duration: Any, *, decay_hold: Any = jnp.inf, enabled: Any = True, source: Any = 0) -> Shields:
+                 duration: Any, *, decay_hold: Any = jnp.inf, enabled: Any = True, source: Any = 0,
+                 order: Any = None) -> Shields:
     """Insert one shield into the emptiest-soonest slot (SHIELD.40); a ``source`` > 0 grant first removes the
     unit's earlier shield of that source."""
     ok = jnp.asarray(enabled) & (jnp.asarray(amount) > 0.0)
@@ -179,7 +180,7 @@ def grant_shield(sh: Shields, unit: Any, amount: Any, kind: Any, now: Any,
     value = shield_value(sh, now)
     slot_score = jnp.where(value[unit] > 0.0, sh.expires_at[unit], -jnp.inf)
     slot = jnp.argmin(slot_score)
-    order = jnp.max(sh.order) + 1
+    order = jnp.max(sh.order) + 1 if order is None else order
 
     def put(arr, val):
         return arr.at[unit, slot].set(jnp.where(ok, jnp.asarray(val, arr.dtype), arr[unit, slot]))
@@ -361,7 +362,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
         return value, typed
 
     def body(carry, x):
-        hp, max_hp, sh, fired = carry
+        hp, max_hp, sh, fired, next_order = carry
         valid, d, dmg, dtype, exe = x
         alive = hp[d] > 0.0
         go = valid & alive
@@ -373,7 +374,8 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
             & (hp[d] - jnp.maximum(dmg - pre_shield, 0.0) < LIFELINE_THRESHOLD * max_hp[d])
         sh = grant_shield(sh, d, dfn.lifeline_shield[d], dfn.lifeline_shield_kind[d], now,
                           dfn.lifeline_duration[d], decay_hold=dfn.lifeline_decay_hold[d],
-                          enabled=trigger)
+                          enabled=trigger, order=next_order)
+        next_order = next_order + (trigger & (dfn.lifeline_shield[d] > 0.0)).astype(sh.order.dtype)
         bonus = jnp.where(trigger, dfn.lifeline_bonus_health[d], 0.0).astype(hp.dtype)
         hp = hp.at[d].add(bonus.astype(hp.dtype))
         max_hp = max_hp.at[d].add(bonus.astype(max_hp.dtype))
@@ -400,7 +402,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
         killed = go & (new_hp <= 0.0)
         hp = hp.at[d].set(jnp.where(go, new_hp, hp[d]).astype(hp.dtype))
         out = (jnp.where(go, absorbed, 0.0), jnp.where(go, stored, 0.0), loss, killed)
-        return (hp, max_hp, sh, fired), out
+        return (hp, max_hp, sh, fired, next_order), out
 
     # Sequential packets go to a fixed buffer, independent of the emission grid size.
     n_packets = p.valid.shape[0]
@@ -412,7 +414,8 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
     idx, _ = first_true(seq, cap)
     take = lambda a, fill: jnp.concatenate([a, jnp.asarray([fill], a.dtype)])[idx]
     xs = (take(seq, False), take(p.dst, 0), take(final, 0.0), take(p.dtype, PHYSICAL), take(execute, False))
-    carry0 = (hp, max_hp, shields, jnp.zeros((n_units,), bool))
+    # Only Lifeline grants change shield order inside this loop; avoid a full-unit reduction per packet.
+    carry0 = (hp, max_hp, shields, jnp.zeros((n_units,), bool), jnp.max(shields.order) + 1)
     # Only real packets are stepped (padding is a no-op): a vmapped batch runs as long as its busiest env.
     count = jnp.minimum(jnp.sum(seq), cap)
     outs0 = (jnp.zeros((cap,), jnp.float32), jnp.zeros((cap,), jnp.float32), jnp.zeros((cap,), jnp.float32),
@@ -422,7 +425,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
         carry, outs = c
         carry, y = body(carry, jax.tree.map(lambda a: a[i], xs))
         return carry, tuple(o.at[i].set(jnp.asarray(v, o.dtype)) for o, v in zip(outs, y))
-    (hp_s, max_hp, shields, fired), (absorbed_c, stored_c, loss_c, killed_c) = jax.lax.fori_loop(
+    (hp_s, max_hp, shields, fired, _), (absorbed_c, stored_c, loss_c, killed_c) = jax.lax.fori_loop(
         0, count, step_one, (carry0, outs0))
 
     def back(vals, dtype):

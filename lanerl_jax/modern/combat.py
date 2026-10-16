@@ -113,11 +113,13 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
                 request: Any, base_packets: D.Packets, base_offense: D.Offense, base_defense: D.Defense,
                 hp: Any, max_hp: Any, shields: D.Shields, status: UnitStatus, kills: Kills,
                 holder_stats: ItemStats, cc: CC | None = None, ev: RuneEvents | None = None,
+                attack_launch: Attack | None = None,
                 sync_max_health: bool = True, carry: bool = True, main_capacity: int = MAIN_PACKET_CAPACITY,
                 follow_up_capacity: int = FOLLOW_UP_CAPACITY) -> CombatTickOut:
     """``page`` is the (C, R) rune page-count matrix (all-zero: no runes). ``ev``'s attack/cast/cc/kills/own are
     overwritten by this call's arguments. Packets beyond the static ``main_capacity`` / ``follow_up_capacity``
-    are dropped and counted in ``packet_overflow``, which must stay 0."""
+    are dropped and counted in ``packet_overflow``, which must stay 0. ``attack_launch`` separates a new
+    ranged launch from an older missile's landed ``attack``."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     items, runes = state.items, state.runes
     cc_ev = cc if cc is not None else CC(jnp.zeros((c, n), bool), jnp.zeros((c, n), bool))
@@ -156,8 +158,9 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
     parts = []
     items, eff = E.on_cast(items, own, ctx, units, cast); parts.append(eff)
     runes, eff = RE.on_cast(runes, page, ctx, units, ev); parts.append(eff)
-    items, eff = E.on_attack(items, own, ctx, units, attack); parts.append(eff)
-    runes, eff = RE.on_attack(runes, page, ctx, units, ev); parts.append(eff)
+    launch = attack if attack_launch is None else attack_launch
+    items, eff = E.on_attack(items, own, ctx, units, launch); parts.append(eff)
+    runes, eff = RE.on_attack(runes, page, ctx, units, ev._replace(attack=launch)); parts.append(eff)
     items, eff = E.on_hit(items, own, ctx, units, attack); parts.append(eff)
     again = spellblade.extra_on_hit_attack(items.spellblade)
     phantom = marksman.phantom_hit_due(items.marksman, ctx) & attack.hit
@@ -249,7 +252,8 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
     outs = RE.outputs(runes, page, ctx, ev_p)
     new_state = CombatState(items, runes, clocks, target, jnp.where(sync_max_health, dyn_silent, state.dyn_silent),
                             carried)
-    return CombatTickOut(new_state, hp, max_hp, shields, status, overflow + overflow2 + overflow3, report, follow_up,
+    dropped = overflow + overflow2 + overflow3 + report.resolved.overflow + follow_up.resolved.overflow
+    return CombatTickOut(new_state, hp, max_hp, shields, status, dropped, report, follow_up,
                          total, act, dyn, starters.pending_transforms(items.starters, own),
                          items.consumables.consume_row, outs, ev_p)
 

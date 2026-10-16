@@ -116,9 +116,16 @@ verified it before replacement submissions. No new GPU result, allocator conclus
 Next: inspect component memory and real full-PPO results, then justify/test a tight learner change and
 compare against this unchanged baseline. Session ends with 7587/7588 queued; no watcher or agent.
 
-**Focused code-quality review (2026-10-16, MODERN-046).** User-requested isolated review is active over
-modern simulation and training code, prioritizing major bugs, material throughput/memory costs,
-stray/duplicate code and comment/LOC bloat. Clear issues should be fixed with targeted validation;
-behaviour-preserving refactors must retain golden/jaxpr identity. Diagnostics tools remain parent-owned.
-MODERN-045 diagnostics integrated; eight lightweight tests pass on this branch. Measurement jobs
-7587/7588 remain queued, so no allocator remedy or full-PPO speedup is claimed.
+**Modern-package review (2026-10-16, MODERN-046).** Fixed ranged on-hit target/raw/crit/cast-ID loss and
+separated launch events; sequential damage-buffer drops now reach the world/trainer overflow metric.
+Hoisted the full-unit shield-order max out of the per-packet loop, preserving exact grant-order values;
+trimmed stale comments/docs. Desktop CPU7606 COMPLETED/0:0 in11m42s:104 focused checks and full/top3600-tick
+goldens, all12 checkpoint records exactly equal (862/732 leaves, summaries, peak counters; overflow0).
+Red7597 reproduced both initial bugs; corrected supplemental7611 COMPLETED/0:0 reproduces the parent's
+missing Profane Cleave and passes both fixed ranged-arrival cases. Sources/logs under
+`/mnt/nfs/shared/champ-expansion/modern046-review-TEMP/` and `modern046-*.out`.
+Unstarted7601 superseded;7602 failed before Python (sh/pipefail);7604 hit8GiB after58 passes, resolved by
+separate processes in7606;7608's missing-visibility fixture corrected in7611. All own review jobs ended;
+no unrelated jobs touched, no new GPU work, no GPU speedup claim. MODERN-045 memory diagnosis remains
+separate. Unresolved: simultaneous basic/ability hits still share one holder hit record; evidence and
+proposed follow-up in the MODERN-046 ledger rows.

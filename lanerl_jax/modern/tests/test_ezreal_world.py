@@ -81,3 +81,46 @@ def test_arcane_shift_blinks_475_toward_the_point():
     s = run(s, MS.no_orders(), 10)
     np.testing.assert_allclose(float(s.x[0]) - SX, Z.E_BLINK, atol=5.0)
     np.testing.assert_allclose(float(s.y[0]), SY, atol=5.0)
+
+
+@pytest.mark.parametrize("launching", [False, True])
+def test_arriving_attack_detonates_mark_while_launching_at_another_unit(launching):
+    from lanerl_jax.modern.core import damage as D
+    from lanerl_jax.modern.core import types as W
+    from lanerl_jax.modern.items.catalog import catalog
+
+    s = placed((SX, SY), (SX + 540.0, SY))
+    target = world()[0].layout.minion0
+    s = s._replace(
+        kind=s.kind.at[target].set(W.KIND_MINION), team=s.team.at[target].set(1),
+        alive=s.alive.at[target].set(True), targetable=s.targetable.at[target].set(True),
+        visible=s.visible.at[:, target].set(True),
+        x=s.x.at[target].set(SX + 300.0), y=s.y.at[target].set(SY),
+        hp=s.hp.at[target].set(1000.0), max_hp=s.max_hp.at[target].set(1000.0),
+        radius=s.radius.at[target].set(48.0),
+        att=s.att._replace(target=s.att.target.at[0].set(target),
+                           target_seq=s.att.target_seq.at[0].set(s.spawn_seq[target]),
+                           windup_left=s.att.windup_left.at[0].set(DT / 2 if launching else 0.0),
+                           cooldown_left=s.att.cooldown_left.at[0].set(1.0)))
+    inv = s.champ.inventory
+    s = s._replace(champ=s.champ._replace(inventory=inv._replace(
+        item=inv.item.at[0, 0].set(catalog().row(6698)))))               # Profane Hydra
+    kit = s.kits.ezreal
+    kit = kit._replace(mark_on=kit.mark_on.at[0].set(True), mark_unit=kit.mark_unit.at[0].set(1),
+                       mark_seq=kit.mark_seq.at[0].set(s.spawn_seq[1]),
+                       mark_until=kit.mark_until.at[0].set(74.0), mark_cast_id=kit.mark_cast_id.at[0].set(123))
+    ms = s.missiles
+    ms = ms._replace(alive=ms.alive.at[0].set(True), src=ms.src.at[0].set(0), dst=ms.dst.at[0].set(1),
+                     dst_seq=ms.dst_seq.at[0].set(s.spawn_seq[1]), x=ms.x.at[0].set(s.x[1]),
+                     y=ms.y.at[0].set(s.y[1]), speed=ms.speed.at[0].set(Z.ATTACK_MISSILE),
+                     raw=ms.raw.at[0].set(100.0), flags=ms.flags.at[0].set(D.BASIC_ATTACK))
+    s = s._replace(kits=s.kits._replace(ezreal=kit), missiles=ms)
+    s, ev = step(s, orders(attack=[target, -1]))
+    assert bool(ev.launched[0]) == launching
+    assert int(s.att.target[0]) == target
+    assert not bool(s.kits.ezreal.mark_on[0])
+    p = ev.report.packets
+    det = np.asarray(p.valid & (p.cast_id == 123))
+    assert det.sum() == 1
+    assert int(np.asarray(p.dst)[det][0]) == 1
+    assert bool(jnp.any(p.valid & (p.item == 6698) & (p.dst == target)))  # nonzero landed raw enables Cleave

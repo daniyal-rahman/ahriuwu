@@ -80,6 +80,33 @@ def test_combat_tick_compiles():
     assert int(out.packet_overflow) == 0
 
 
+def test_sequential_resolution_overflow_reaches_combat_counter():
+    u, own, item, ctx, dfn, off = setup()
+    state = M.init_combat(2, u.x.shape[0])
+    base = D.packets(jnp.ones((D.RESOLVE_CAPACITY + 1,), bool), 0, 1, 1.0, D.TRUE)
+    out = jax.jit(lambda st: run(st, own, item, ctx, u, dfn, off, u.hp, u.max_hp,
+                                 now=1.0, base=base))(state)
+    assert float(out.hp[1]) == pytest.approx(1000.0 - D.RESOLVE_CAPACITY)
+    assert int(out.report.resolved.overflow) == 1
+    assert int(out.packet_overflow) == 1
+
+
+def test_distinct_launch_and_hit_targets_reach_item_hooks():
+    u, own, item, ctx, dfn, off = setup(((3032, 3115), ()))
+    state = M.init_combat(2, u.x.shape[0])
+    launch = H.attack(target=(2, -1), launched=(True, False), hit=(False, False))
+    hit = H.attack(target=(1, -1), launched=(True, False), hit=(True, False))
+    out = jax.jit(lambda st: M.combat_tick(
+        st, own, M.empty_page(2), ctx, u, attack=hit, attack_launch=launch,
+        cast=H.cast(started=(False, False)), request=jnp.zeros((2,), jnp.int32),
+        base_packets=D.empty_packets(0), base_offense=off, base_defense=dfn,
+        hp=u.hp, max_hp=u.max_hp, shields=D.init_shields(3), status=R.init_status(3),
+        kills=H.kills(3), holder_stats=item))(state)
+    # Yun Tal's Flurry is a champion launch proc; Nashor's damages the landed target.
+    assert float(out.state.items.marksman.yt_as_until[0]) <= float(ctx.now)
+    assert H.packet_targets(out.report.packets, item=3115) == [1]
+
+
 def test_every_rune_is_classified():
     from lanerl_jax.modern.runes import effects as RE
     from lanerl_jax.modern.runes.catalog import rune_catalog

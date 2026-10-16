@@ -68,6 +68,7 @@ class TickScratch(NamedTuple):
     cancelled: Any = None       # ATTACK: (N,) windups cancelled
     reset: Any = None           # ATTACK: (N,) attack resets
     attack: Any = None          # ATTACK: champion Attack (missile arrivals count as hits)
+    attack_launch: Any = None   # ATTACK: launch event before missile arrivals change target/raw/crit
     missiles: Any = None        # ATTACK: Missiles
     m_over: Any = None          # ATTACK: missile overflow
     direct: Any = None          # ATTACK: melee attack packets

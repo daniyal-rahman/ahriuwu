@@ -105,9 +105,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cx = jnp.where(s_out.teleport_arrive, s_out.teleport_x, cx)
     cy = jnp.where(s_out.teleport_arrive, s_out.teleport_y, cy)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))
-    # Kit displacements (Darius E): straight toward the kit's point at its speed, ignoring terrain and collision.
-    # Static per roster: only worlds with a displacing kit trace the terrain override below (Garen vs Jax compiles as
-    # before, golden-identical).
+    # Kit displacements ignore terrain/collision; omit the terrain override for rosters without them.
     can_displace = any(hasattr(k, "displacement") for k in cfg.kits)
     disp, d_x, d_y, d_v = K.displacement(sc.kits, sc.kctx, n)
     # A displacement that starts while the unit is CC-immune (Fiora Riposte) is ignored until it ends.

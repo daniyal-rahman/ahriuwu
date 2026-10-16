@@ -85,7 +85,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
     own = Owned(I.owned_counts(champ.inventory), cfg.item_allowed)
     out = combat_tick(s.combat._replace(items=items0), own, cfg.rune_pages, ictx,
-                      U.item_units(s), attack=sc.attack,
+                      U.item_units(s), attack=sc.attack, attack_launch=sc.attack_launch,
                       cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,
                       hp=s.hp, max_hp=s.max_hp, shields=shields_in, status=s.status, kills=s.prev.kills,
