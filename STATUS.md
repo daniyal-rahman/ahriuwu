@@ -22,8 +22,8 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 plus an optional explicit roster. Before integration with Ezreal, full-map and top-lane 3600-tick CPU goldens
 against `8067b443` match every retained leaf, summary and overflow counter (427 unused-kit leaves removed).
 Trainer/world/interface checks passed (6084, 6086, 6087); non-world suite 6085 completed.
-The corrected roster assertion passed in Slurm step 6085.0. GPU benchmark 6088 and dependent profile 6092
-remain pending; speedup is unmeasured. Desktop Linux is available again; final combined validation is below.
+The corrected roster assertion passed in Slurm step 6085.0. GPU benchmark/profile jobs 6088/6092
+were superseded by exclusive jobs 6722/6723; speedup is unmeasured. Final combined validation is below.
 
 **Free wins held back.**
 - `--packet-capacity`: runs peak at 3-6 packets per tick against 512/256 slots. Drop it for 1v1; measure on real
@@ -42,7 +42,7 @@ cross-role roster is in docs/modern/ROSTER.md. Known differences are listed per 
 No training experiment with the new champions yet.
 
 **Open.**
-- GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.
+- GPU timing remains pending; desktop Linux is available, with exclusive GPU allocations waiting.
 - No training experiment on the modern world yet; decisions open: reward weights, input latency
   (`--action-delay-ticks`), start state, shop handling.
 
@@ -62,3 +62,18 @@ Lux assessment (MODERN-044) now has eight replay games extracted (6707). R recor
 1 s child cast time fits damage candidates better than the root record's 1.375 s; W uses accelerating
 missiles. No Lux kit registered yet. Actual rollout/PPO comparison against lane-rl/jax
 is in progress in an isolated agent checkout (MODERN-043); no training speedup claim yet.
+
+**Training throughput comparison (2026-10-16, MODERN-043).** `ops/modern/training_bench.py` exports
+immutable modern parent `78abf40f` and lane-rl `bb2e5b46` (4.20, explicitly a different game), plus hashed
+route/vendor inputs, under `/mnt/nfs/shared/champ-expansion/modern043-pinned-TEMP/`. Matched GRU/PPO
+and natural defaults measure real rollout+policy and full PPO independently at 256/1024/4096 envs,
+modern top/full layouts. Reports env, sampled-agent and learner-agent decisions/s, normalized game
+seconds/wall-s, full update seconds, separate init/compile/first execution, and device peak bytes.
+Four metric-math tests pass locally; desktop CPU import/assets/trainer-shape validation 6725 is queued.
+GPU training matrix 6724 (exclusive, 8h) is queued; no training throughput result or speedup claimed.
+Saved submitted 6088/6092 scripts reveal missing `--exclusive`/strict shell mode and inaccessible cwd,
+contrary to MODERN-040's earlier description. Cancelled only those IDs; replacement simulation benchmark
+6722 (exclusive, 1h30) and profile 6723 (exclusive, 1h, afterany:6722) preserve their original scenarios
+and source snapshots. All jobs have NFS cwd/logs, fail-on-error scripts, no reboot/admin changes or watcher.
+Desktop reports Linux, `Gres=gpu:1` but no GPU in `CfgTRES`/partition TRES; CPU jobs also occupy it.
+GPU queue reasons alternate resources/unavailable. Scheduler repair is outside this task.
