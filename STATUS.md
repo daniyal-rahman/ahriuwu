@@ -104,3 +104,14 @@ at explicit .75/.90 allocator limits. Three synchronized steady updates per succ
 cell cap, 1h45 exclusive Slurm allocation. Eight lightweight reporting/failure tests pass. Learner and
 simulator unchanged; no remedy or training throughput improvement claimed. GPU is occupied by unrelated
 7433 (scheduled end 2026-10-17 06:28 UTC); no cancellation or overlapping timing.
+
+MODERN-045 submission: immutable `/mnt/nfs/shared/champ-expansion/modern045-memory-baseline-TEMP/`
+contains original MODERN-043 engine pins plus diagnostics commit `576bc70d`; all 4301 manifest hashes
+verified. CPU component-compiler validation **7587** (desktop, 2 cores/2GiB, 10min) is pending resources;
+exclusive GPU diagnosis **7588** (1h45, afterok:7587) is pending dependency/desktop availability.
+Logs: `/mnt/nfs/shared/champ-expansion/modern045-components-7587.out` and
+`modern045-ppo-memory-7588.out`; results will be `modern045-memory-baseline-TEMP/results-7588/`.
+Cancelled only own unstarted **7584/7585** after detecting incomplete snapshot assembly; completed and
+verified it before replacement submissions. No new GPU result, allocator conclusion or learner fix yet.
+Next: inspect component memory and real full-PPO results, then justify/test a tight learner change and
+compare against this unchanged baseline. Session ends with 7587/7588 queued; no watcher or agent.
