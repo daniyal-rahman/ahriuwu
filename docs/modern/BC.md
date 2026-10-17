@@ -113,4 +113,35 @@ ring buffer in the trainer, the sim gate (frozen rollouts of the clone: CS and d
 
 ## 8. The dataset
 
-DATASET_PLACEHOLDER
+`/mnt/nfs/shared/bc_modern_v1` (converter 86f11199, decoder exports b2614e72 for the 344 top-lane games and
+f706f5ce for the 13 Garen-vs-Jax games; built 2026-10-17 by Slurm jobs 7808-7810, about 3 min per 15 games on
+2 CPUs). Observation lag 1 decision, window 0:30-14:00, 8100 decisions per game.
+
+| | all | train | val |
+|---|---|---|---|
+| games | 357 | 321 | 36 |
+| decisions in window | 2,891,700 | 2,600,100 | 291,600 |
+| label-valid decisions | 2,326,688 (80.5%) | 2,089,094 | 237,594 |
+| decisions with a click | 615,341 | 552,597 | 62,744 |
+
+Nine games were skipped for ending before 14:00 (surrenders and remakes, 1-14 min long). 19.5% of
+decisions carry no label; the reasons overlap, and as shares of all decisions they are: a third champion within 2000 units 12.2%,
+Garen outside the lane corridor 8.1%, dead 5.1%, cast with no representable target 0.14%. Per game the
+label-valid count runs 4,628 to 8,003 (median 6,571).
+
+Button shares over the label-valid decisions (identical to three decimals between train and val):
+noop 71.7%, move 26.4%, stop 0.81%, e 0.46%, q 0.42%, w 0.13%, recall 0.07%, ward 0.05%, summoner_f 0.02%,
+summoner_d 0.01%, r 0.012%. `attack_move`, `level_*`, `buy`, `sell`, `use_item` and `control_ward` never
+occur (attacks are labelled as unit clicks, item use is not decoded). A majority-class clone scores 71.7%
+button accuracy, so accuracy is not the metric; per-button recall and NLL are.
+
+Label checks aggregated over all games: attacks resolved through `modern_orders_from` 32,336 of 32,586
+(99.2%), stops 18,937 of 18,937, R casts 274 of 289, 48,559 clicks clamped back on to the screen (1.7%),
+64,718 orders superseded within a decision (2.2%), 1,104 casts recorded while the rebuilt cooldown said the
+spell was down (0.04%, the haste and rank reconstruction is not exact).
+
+Opponents: 78 distinct champions, 300 melee and 57 ranged games. 142 games face a registered kit
+(Camille 28, Fiora 21, KSante 15, Aatrox 14, Jax 13, Renekton 12, Darius 9, Ambessa 9, Yone 7, Nasus 5,
+Jayce 5, Malphite 4); the other 215 get a zeroed enemy one-hot. The val split is drawn per game at 10%, so a
+few opponents are absent from val (Camille, Ambessa, Irelia, Gnar) and Shen is over-represented (4 of 11).
+The same players recur across games, so val measures held-out games, not held-out players.
