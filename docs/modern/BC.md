@@ -179,3 +179,16 @@ The same players recur across games, so val measures held-out games, not held-ou
 labels: of the 2,326,688 label-valid decisions 1,290,581 (55%) are held (92,445 of them unit clicks), click
 supervision covers 1,905,922 decisions (82%), and the button shares become move 81.8%, noop 16.2%, stop 0.81%,
 with the cast and summoner shares unchanged. The event-label checks are identical to v1.
+
+## 9. Runs
+
+| run | dataset | epochs | val button NLL | event NLL | click NLL / dist | gate vs afk Jax at 10:00 |
+|---|---|---|---|---|---|---|
+| v1 `modern-bc-v1-e1` (job 7836, 51 min) | v1, events only | 30 | 0.631 (prior ~0.69, majority acc 0.717) | n/a | 7.19 / 16.1 cells | CS 35 (humans 75), deaths 1.9, kills 1.0, lane distance 1100 |
+
+v1: the button head predicts noop 99.6% of the time (move recall 0.8%); the one-per-click labels do not
+carry enough signal, see section 3. In the sim it samples noop 77% and move 21%, farms half the human CS
+against an afk opponent and dies twice in nine minutes, with deaths uncorrelated with its lane distance
+(turret and minion deaths from aimless walking rather than wandering off). The gate itself runs 64 full
+episodes in 4 minutes on the 5080 (`gate-afk-*.json` next to the checkpoint).
+
