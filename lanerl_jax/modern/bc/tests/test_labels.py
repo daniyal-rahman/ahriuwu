@@ -42,7 +42,7 @@ def test_move_attack_repeat_and_cast_rules():
     t, me, units, enemies, minion, champ = _game([])
     actions = [Action(100.05, "path", point=(1400.0, 1100.0), n_waypoints=3),      # decision 0: move
                Action(100.31, "attack", target=minion),                             # decision 3: attack
-               Action(100.72, "attack", target=minion),                             # decision 7: repeat -> noop
+               Action(100.72, "attack", target=minion),                             # decision 7: repeat -> held click
                Action(101.02, "cast", slot=0),                                      # decision 10: Q, no click
                Action(101.21, "cast", slot=3, target=champ),                        # decision 12: R on the champion
                Action(101.41, "cast", slot=7),                                      # decision 14: item: no button
@@ -50,7 +50,7 @@ def test_move_attack_repeat_and_cast_rules():
     lab = label_actions(t, actions, me, units, AXIS, NORMAL, enemies, summoner_slot={4: 1, 5: 0})
     assert lab.button[0] == B["move"] and lab.click_valid[0] and not lab.click_on_unit[0]
     assert lab.button[3] == B["move"] and lab.click_on_unit[3] and lab.click_valid[3]
-    assert lab.button[7] == B["noop"] and lab.n_repeat_attacks == 1
+    assert lab.button[7] == B["move"] and lab.held[7] and lab.click_on_unit[7] and lab.n_repeat_attacks == 1
     assert lab.button[10] == B["q"] and not lab.click_valid[10] and lab.uses_screen[10] == 1.0
     assert lab.button[12] == B["r"] and lab.click_on_unit[12]
     assert not lab.representable[14] and lab.button[14] == B["noop"]
@@ -84,3 +84,25 @@ def test_canonical_summoners_put_flash_in_d():
     assert canonical_summoners([14, 4]) == ((4, 14), {4: 1, 5: 0})
     assert canonical_summoners([4, 12]) == ((4, 12), {4: 0, 5: 1})
     assert canonical_summoners([14, 12]) == ((14, 12), {4: 0, 5: 1})
+
+
+def test_held_labels_follow_the_active_order():
+    """Between events the active order is the label: the move destination while walking, the attack target
+    while auto-attacking; a cast of R ends it, standing still ends a move, `hold=False` fills nothing."""
+    t, me, units, enemies, minion, champ = _game([])
+    walking = me + np.arange(len(t))[:, None] * np.array([30.0, 0.0])            # 30 units per decision, +x
+    actions = [Action(100.05, "path", point=(1800.0, 1000.0), n_waypoints=2),      # decision 0: move
+               Action(100.52, "attack", target=minion),                             # decision 5: attack
+               Action(101.02, "cast", slot=3, target=champ)]                        # decision 10: R
+    lab = label_actions(t, actions, walking, units, AXIS, NORMAL, enemies)
+    assert not lab.held[0] and lab.button[0] == B["move"]
+    assert lab.held[1:5].all() and (lab.button[1:5] == B["move"]).all() and not lab.click_on_unit[1:5].any()
+    assert lab.click_valid[1:5].all() and lab.screen_x[2] < lab.screen_x[1]       # the destination comes closer
+    assert not lab.held[5] and lab.held[6:10].all() and lab.click_on_unit[6:10].all()
+    assert lab.button[10] == B["r"] and not lab.held[10] and not lab.held[11:].any()
+    assert (lab.button[11:] == B["noop"]).all()
+    # Standing still ends a held move; without `hold` nothing is filled.
+    lab = label_actions(t, actions[:1], me, units, AXIS, NORMAL, enemies)
+    assert lab.held[1] and not lab.held[3:].any()
+    lab = label_actions(t, actions, walking, units, AXIS, NORMAL, enemies, hold=False)
+    assert not lab.held.any() and lab.button[1] == B["noop"]

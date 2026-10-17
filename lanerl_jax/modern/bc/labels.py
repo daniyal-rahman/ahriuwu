@@ -43,6 +43,9 @@ CAST_BUTTON = {0: "q", 1: "w", 2: "e", 3: "r", 4: "summoner_d", 5: "summoner_f",
 #: Casts that take no cursor for the cloned champion (Garen: Q, W, E are self casts; recall).
 SELF_CAST_SLOTS = {0, 1, 2, 13}
 _PRIORITY = {"move": 0, "stop": 1, "attack": 2, "cast": 3}
+_HOLD_STILL_S = 0.3           # an active move whose champion has not moved for this long is over
+_HOLD_STILL_UNITS = 5.0       # per decision (0.1 s): below this the champion is standing
+_HOLD_ATTACK_RANGE = 1500.0   # an attack target further than this is no longer being attacked
 _STOP_RADIUS = 80.0           # a stop is at the champion (within this), while an earlier path's end is farther
 _STOP_NO_ATTACK_S = 0.6       # ... and no attack follows within this
 _EDGE = 0.97                  # how far inside the screen's edge a pulled-back click lands
@@ -58,6 +61,7 @@ class Labels(NamedTuple):
     representable: np.ndarray  # (T,) bool: the decision's action has a button
     clamped: np.ndarray       # (T,) bool: the click was pulled back onto the screen
     source: np.ndarray        # (T,) index into the action list, -1 none
+    held: np.ndarray          # (T,) bool: filled from the order active at the time, not an event
     n_superseded: int
     n_repeat_attacks: int
 
@@ -91,11 +95,15 @@ def screen_cell(ds: float, dn: float):
 
 
 def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_xy: Dict[int, np.ndarray],
-                  axis: np.ndarray, normal: np.ndarray, enemies: set, summoner_slot=None) -> Labels:
+                  axis: np.ndarray, normal: np.ndarray, enemies: set, summoner_slot=None,
+                  hold: bool = True) -> Labels:
     """Label the decisions at times `t`. `me_xy` (T, 2) is the champion's position at each decision;
     `unit_xy[id]` (T, 2) for every unit an action can target (NaN where unknown); `axis`/`normal` the
     champion's lane frame; `enemies` the ids of enemy units; `summoner_slot` maps replay cast slots 4/5 to the
-    policy's summoner slots (`replay.canonical_summoners`; identity by default)."""
+    policy's summoner slots (`replay.canonical_summoners`; identity by default). With `hold`, decisions
+    between events are labelled with the order still active: a move to the destination the champion is
+    walking to, or a click on the unit it is auto-attacking (`held`); they stop when the champion arrives,
+    stands still, loses the target, is given a new order, stops, recalls or ults."""
     summoner_slot = summoner_slot or {4: 0, 5: 1}
     n = len(t)
     b = MODERN_BUTTON_INDEX
@@ -177,6 +185,37 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
         else:
             representable[k] = False
         source[k] = chosen[k]
+    held = np.zeros(n, bool)
+    if hold:
+        active = None                                       # ("move", point) or ("attack", target)
+        still = 0
+        for k in range(n):
+            moved = k > 0 and math.dist(me_xy[k], me_xy[k - 1]) > _HOLD_STILL_UNITS
+            still = 0 if moved else still + 1
+            if source[k] >= 0:
+                a, kind = actions[source[k]], kinds[source[k]]
+                if kind == "move":
+                    active = ("move", a.point)
+                elif kind == "attack":
+                    active = ("attack", a.target) if button[k] == b["move"] else active
+                elif kind == "stop" or (kind == "cast" and a.slot in (3, 13)):
+                    active = None
+                continue
+            if active is None:
+                continue
+            if active[0] == "move":
+                if math.dist(active[1], me_xy[k]) < _STOP_RADIUS or still * DECISION_DT >= _HOLD_STILL_S:
+                    active = None
+                    continue
+                click(k, *active[1], unit=False)
+            else:
+                p = unit_point(k, active[1])
+                if p is None or math.dist(p, me_xy[k]) > _HOLD_ATTACK_RANGE:
+                    active = None
+                    continue
+                click(k, *p, unit=True)
+            button[k] = b["move"]
+            held[k] = True
     uses = np.asarray(screen_usage(button), np.float32)
     return Labels(button, sx, sy, uses, click_valid & representable, on_unit, representable, clamped, source,
-                  n_superseded, n_repeat)
+                  held, n_superseded, n_repeat)

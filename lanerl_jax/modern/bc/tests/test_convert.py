@@ -45,7 +45,8 @@ def test_lagged_pairs_actions_with_older_observations():
                     global_vec=np.zeros((T, 6), np.float32), champion_stats=np.zeros((T, 2, 11), np.float32),
                     button=np.zeros(T, np.int32), screen_x=np.zeros(T, np.int32), screen_y=np.zeros(T, np.int32),
                     uses_screen=np.zeros(T, np.float32), click_valid=np.zeros(T, bool),
-                    click_on_unit=np.zeros(T, bool), label_valid=np.ones(T, bool), in_scope=np.ones(T, bool),
+                    click_on_unit=np.zeros(T, bool), label_valid=np.ones(T, bool), held=np.zeros(T, bool),
+                        in_scope=np.ones(T, bool),
                     obs_index=np.arange(T, dtype=np.int32), t=np.arange(T) * 0.1, meta={})
     lag = base.lagged(2)
     assert np.array_equal(lag.obs_index, [0, 0, 0, 1, 2, 3]) and lag.entities[4, 0, 0] == 2.0

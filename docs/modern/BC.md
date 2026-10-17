@@ -78,6 +78,19 @@ unit and a sloped one on the ground (`targets.py`).
 **Scope.** `label_valid = in_scope & representable`: the champion alive, within the trainer's 1400-unit
 corridor around the top lane extended to the fountains, no champion but the two laners within 2000 units.
 
+**Held labels (dataset v2 onwards).** Labelling only the instant of a click leaves 72% of decisions as
+noop while the champion is walking or auto-attacking, and the instant a human re-clicks is not predictable
+from the observation: run v1 (events only) reached val button NLL 0.631 against a prior of about 0.69 and
+predicted noop 99.6% of the time. So between events the labeller now fills the order still active: a move to
+the destination the champion is walking to (the screen cell is recomputed each decision as it approaches),
+or a click on the unit it is auto-attacking. A held move ends on arrival (80 units), after 0.3 s standing
+still, or at the next order; a held attack when the target is lost or further than 1500 units; both at a
+stop, recall or R. `held` marks them in the dataset and the trainer weights them `--hold-weight` (0.3) so the
+decision moments still dominate. In the sim, re-issuing the same order each decision is harmless. On one
+game this lifts click supervision from 21% to 87% of valid decisions and noop to 11%; the price is more
+clamped clicks (12%, far destinations pulled to the screen edge) and 6% of ground clicks that the world's
+hit-test reads as an attack because a unit sits under the destination.
+
 ## 4. Checks built into the converter
 
 Per game (`label_check` in the `.json`): attacks and R casts resolving through `modern_orders_from` to an
@@ -107,9 +120,25 @@ profiles), counts, label checks, what was patched or not from the replay.
 
 ## 7. From BC to RL
 
-`modern/train.py --init-from <bc checkpoint> --kl-prior <coef>` with `enemy_scale .5` (own income plus the
-lead at 2:1), `xp_scale` a fifth of gold per unit, approach shaping 0. Still to build: the observation lag
-ring buffer in the trainer, the sim gate (frozen rollouts of the clone: CS and deaths at 10 minutes).
+`modern/train.py --init-from <bc checkpoint> --kl-prior <coef> --observation-lag 1` with `enemy_scale .5`
+(own income plus the lead at 2:1), `xp_scale` a fifth of gold per unit, approach shaping 0, and the converter's
+world (`--lanes 2 --no-jungle --no-objectives --lane-structures`).
+
+`--observation-lag N` makes the trainer act on the world as it was N decisions earlier: `ModernEnvState`
+carries a ring of N observations (oldest first); each decision reads the oldest entry, pushes the current
+state's observation, and the bootstrap value uses the same lagged entry. A fresh episode's ring holds the start
+state N times, so its first N decisions see the start state, which matches how the datasets are lagged
+(within the game, never across the window start). The datasets use lag 1 (100 ms), so BC checkpoints must be
+run with `--observation-lag 1`; lag 0 shows them a world 100 ms newer than anything they were trained on.
+
+The gate, `python -m lanerl_jax.modern.bc.gate CKPT --opponent afk|frozen|self` (`slurm/modern_bc_gate.sbatch`),
+runs the checkpoint frozen in the converter's world, sampling actions as the trainer does, for one full
+episode per env (64 envs, 1:00 to 10:00 by default) and writes next to the checkpoint the per-episode blue CS,
+gold, XP, deaths, kills, mean lane distance and button shares plus red's CS, gold and XP. What to read: CS and
+deaths against an afk Jax (can it farm at all, does it walk into the turret), then against a frozen Jax policy
+from the sim thread's runs (does it trade), compared with the humans in the dataset: at 10:00 the 357 Garens hold median 75 CS (p10 57, p90 94), level 8,
+and have died 1.4 times on average (28% not at all, 41% twice or more; counted from the self vector's dead
+flag, so a flickering flag would inflate it).
 
 ## 8. The dataset
 

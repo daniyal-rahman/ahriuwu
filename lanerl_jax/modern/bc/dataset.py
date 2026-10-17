@@ -63,7 +63,7 @@ def _combat_type(export: Path, champion_id: int) -> int:
     return int(f["values"][rows[np.argmin(f["update_index"][rows])]])
 
 
-def plan(out: Path, lag) -> dict:
+def plan(out: Path, lag, hold: bool = True) -> dict:
     games, skipped = [], []
     for dataset in DATASETS:
         for game_dir in sorted((dataset / "games").iterdir()):
@@ -92,7 +92,7 @@ def plan(out: Path, lag) -> dict:
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
-    result = dict(lag=lag, champion=CHAMPION, window_s=list(LANE_WINDOW_S),
+    result = dict(lag=lag, hold=hold, champion=CHAMPION, window_s=list(LANE_WINDOW_S),
                   min_game_s=MIN_GAME_S, val_share=VAL_SHARE, vocabulary=vocabulary,
                   datasets={str(d): decoder_commit(d) for d in DATASETS},
                   games=games, skipped=skipped)
@@ -112,7 +112,7 @@ def convert(out: Path, task: int, tasks: int):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
             continue
-        bc = convert_game(Path(g["path"]))
+        bc = convert_game(Path(g["path"]), hold=p.get("hold", True))
         bc = bc.lagged(lag, seed=_seed(g["game"]))
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
         bc.save(out / "games")
@@ -149,6 +149,7 @@ def finalize(out: Path) -> dict:
                                   third_champion=c["third_champion"],
                                   not_representable=c["not_representable"]),
                     attacks_resolved=f"{c['lc_attacks_resolved']}/{c['lc_attacks']}",
+                    held=c["held"], held_on_unit=c["held_on_unit"],
                     stops=c["lc_stops"], stops_resolved=c["lc_stops_resolved"],
                     r_resolved=f"{c['lc_r_resolved']}/{c['lc_r_casts']}", click_valid=c["click_valid"],
                     cooldown_conflicts=c["cooldown_conflicts"])
@@ -156,7 +157,7 @@ def finalize(out: Path) -> dict:
     commits = sorted({r["converter_commit"] for r in rows})
     manifest = dict(
         plan=dict((k, v) for k, v in p.items() if k not in ("games", "skipped")),
-        converter_commit=commits, observation_lag=p["lag"], vocabulary=p["vocabulary"],
+        converter_commit=commits, observation_lag=p["lag"], hold=p.get("hold", True), vocabulary=p["vocabulary"],
         stats=dict(names=list(STAT_NAMES), scale=list(STAT_SCALE)), buttons=list(BUTTONS_WITH_STOP),
         cooldown_fields_read=False, profiles=dict(obs="modern-world-v1", actions="modern-world-v2"),
         totals=dict(all=totals(rows), train=totals([r for r in rows if r["split"] == "train"]),
@@ -182,6 +183,7 @@ def main():
     a = sub.add_parser("plan")
     a.add_argument("out", type=Path)
     a.add_argument("--lag", type=parse_lag, default=1)
+    a.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
     a = sub.add_parser("convert")
     a.add_argument("out", type=Path)
     a.add_argument("task", type=int)
@@ -190,7 +192,7 @@ def main():
     a.add_argument("out", type=Path)
     args = parser.parse_args()
     if args.command == "plan":
-        p = plan(args.out, args.lag)
+        p = plan(args.out, args.lag, hold=not args.no_hold)
         print(len(p["games"]), "games,", len(p["skipped"]), "skipped,",
               Counter(g["split"] for g in p["games"]))
     elif args.command == "convert":

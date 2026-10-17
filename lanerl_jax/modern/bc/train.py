@@ -66,6 +66,7 @@ class Game(NamedTuple):
     valid: np.ndarray           # (T,) bool
     click: np.ndarray           # (T,) bool
     on_unit: np.ndarray         # (T,) bool
+    held: np.ndarray            # (T,) bool: label filled from the active order (datasets without it: False)
 
 
 def load_games(dataset: Path, split: str, limit: int | None = None) -> list[Game]:
@@ -81,7 +82,8 @@ def load_games(dataset: Path, split: str, limit: int | None = None) -> list[Game
         out.append(Game(g["game"], split, g["opponent_class"], g.get("opponent_kit") is not None,
                         d["entities"].astype(np.float16), d["entity_pad_mask"], d["self_vec"], d["global_vec"],
                         d["button"].astype(np.int32), d["screen_x"].astype(np.int32), d["screen_y"].astype(np.int32),
-                        d["label_valid"], d["click_valid"] & d["label_valid"], d["click_on_unit"]))
+                        d["label_valid"], d["click_valid"] & d["label_valid"], d["click_on_unit"],
+                        d["held"] if "held" in d.files else np.zeros(len(d["button"]), bool)))
         if limit and len(out) >= limit:
             break
     return out
@@ -101,8 +103,9 @@ def windows(games: list[Game], window: int, rng: np.random.Generator | None):
 
 
 def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random.Generator | None,
-             enemy_id_dropout: float = 0.0, stat_dropout: float = 0.0):
-    """Stack windows into a batch dict of arrays [N, window, ...]; `weight` is the loss weight per decision."""
+             enemy_id_dropout: float = 0.0, stat_dropout: float = 0.0, hold_weight: float = 1.0):
+    """Stack windows into a batch dict of arrays [N, window, ...]; `weight` is the loss weight per decision
+    (`hold_weight` for held labels), `held` marks them."""
     n = len(items)
     ent = np.zeros((n, window, 32, 20), np.float32)
     pad = np.ones((n, window, 32), bool)
@@ -114,6 +117,7 @@ def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random
     weight = np.zeros((n, window), np.float32)
     click = np.zeros((n, window), np.float32)
     on_unit = np.zeros((n, window), bool)
+    held = np.zeros((n, window), bool)
     for j, (gi, s) in enumerate(items):
         g = games[gi]
         e = min(s + window, len(g.button))
@@ -125,8 +129,9 @@ def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random
         button[j, :L] = g.button[s:e]
         sx[j, :L] = g.sx[s:e]
         sy[j, :L] = g.sy[s:e]
-        w = g.valid[s:e].astype(np.float32)
+        w = g.valid[s:e].astype(np.float32) * np.where(g.held[s:e], hold_weight, 1.0).astype(np.float32)
         w[:burn_in] = 0.0
+        held[j, :L] = g.held[s:e]
         weight[j, :L] = w
         click[j, :L] = g.click[s:e]
         on_unit[j, :L] = g.on_unit[s:e]
@@ -135,7 +140,7 @@ def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random
         if rng is not None and stat_dropout > 0 and rng.random() < stat_dropout:
             sv[j, :, STAT_COLUMNS] = sv[j, :1, STAT_COLUMNS]
     return dict(entities=ent, mask=pad, self=sv, global_=gv, button=button, sx=sx, sy=sy, weight=weight,
-                click=click, on_unit=on_unit)
+                click=click, on_unit=on_unit, held=held)
 
 
 def make_forward(policy: LanePolicy):
@@ -200,7 +205,8 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
 
     def bucket(name):
         return acc.setdefault(name, dict(n=0.0, ce_b=0.0, correct=0.0, n_c=0.0, ce_c=0.0, exact=0.0, dist=0.0,
-                                         conf=np.zeros((nb, nb))))
+                                         conf=np.zeros((nb, nb)), ce_by=np.zeros(nb), n_by=np.zeros(nb),
+                                         n_ev=0.0, ce_ev=0.0, n_hc=0.0, ce_hc=0.0, dist_hc=0.0))
     items = windows(games, window, None)
     for i in range(0, len(items), batch):
         chunk = items[i:i + batch]
@@ -208,6 +214,7 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
         b = {k: jnp.asarray(v) for k, v in b.items()}
         t = jax.device_get(per_decision(params, b))
         w, c = np.asarray(b["weight"]), np.asarray(b["weight"] * b["click"])
+        held = np.asarray(b["held"])
         for j, (gi, _) in enumerate(chunk):
             g = games[gi]
             for name in ("all", g.group, "kit_known" if g.kit_known else "kit_unknown"):
@@ -217,7 +224,13 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                 a["n_c"] += c[j].sum(); a["ce_c"] += (c[j] * t["ce_c"][j]).sum()
                 a["exact"] += (c[j] * t["exact"][j]).sum(); a["dist"] += (c[j] * t["dist"][j]).sum()
                 m = w[j] > 0
-                np.add.at(a["conf"], (np.asarray(b["button"][j])[m], t["pred_b"][j][m]), 1.0)
+                bt = np.asarray(b["button"][j])
+                np.add.at(a["conf"], (bt[m], t["pred_b"][j][m]), 1.0)
+                np.add.at(a["ce_by"], bt[m], t["ce_b"][j][m]); np.add.at(a["n_by"], bt[m], 1.0)
+                ev = m & ~held[j]
+                a["n_ev"] += ev.sum(); a["ce_ev"] += t["ce_b"][j][ev].sum()
+                hc = (c[j] > 0) & held[j]
+                a["n_hc"] += hc.sum(); a["ce_hc"] += t["ce_c"][j][hc].sum(); a["dist_hc"] += t["dist"][j][hc].sum()
     out = {}
     for name, a in acc.items():
         conf = a["conf"]
@@ -229,7 +242,12 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                          button_acc=a["correct"] / max(a["n"], 1), majority_acc=max(share.values()) if share else 0.0,
                          clicks=int(a["n_c"]), click_nll=a["ce_c"] / max(a["n_c"], 1),
                          click_exact=a["exact"] / max(a["n_c"], 1), click_dist=a["dist"] / max(a["n_c"], 1),
-                         recall=recall, precision=precision, share=share)
+                         recall=recall, precision=precision, share=share,
+                         button_nll_by={MODERN_BUTTONS[k]: float(a["ce_by"][k] / a["n_by"][k]) for k in range(nb)
+                                        if a["n_by"][k] > 0},
+                         event_decisions=int(a["n_ev"]), event_button_nll=a["ce_ev"] / max(a["n_ev"], 1),
+                         held_clicks=int(a["n_hc"]), held_click_nll=a["ce_hc"] / max(a["n_hc"], 1),
+                         held_click_dist=a["dist_hc"] / max(a["n_hc"], 1))
     return out
 
 
@@ -249,6 +267,7 @@ def build_parser():
     p.add_argument("--button-weights", default="", help="name=weight,... (default 1 for every button)")
     p.add_argument("--enemy-id-dropout", type=float, default=0.3)
     p.add_argument("--stat-dropout", type=float, default=0.0)
+    p.add_argument("--hold-weight", type=float, default=0.3, help="loss weight of held (non-event) labels")
     p.add_argument("--core", default="gru", choices=("gru",))
     p.add_argument("--no-core-norm", action="store_true")
     p.add_argument("--no-core-residual", action="store_true")
@@ -332,7 +351,8 @@ def main(argv=None):
         for i in range(0, len(items), a.batch):
             if stopping:
                 break
-            b = batch_of(train, items[i:i + a.batch], a.window, a.burn_in, rng, a.enemy_id_dropout, a.stat_dropout)
+            b = batch_of(train, items[i:i + a.batch], a.window, a.burn_in, rng, a.enemy_id_dropout, a.stat_dropout,
+                         a.hold_weight)
             params, opt_state, info = train_step(params, opt_state, {k: jnp.asarray(v) for k, v in b.items()})
             info = jax.device_get(info)
             for k, v in info.items():

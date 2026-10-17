@@ -160,3 +160,29 @@ def test_end_to_end_tiny_update(opponent):
     assert int(runner3.step) == 5 * cfg.n_envs * 2 * cfg.rollout_steps
     assert float(np.asarray(runner3.env_state.world.t).max()) <= 2.0 + 1e-3   # reset from the bank
     assert len(MODERN_BUTTONS) == 20 and MODERN_BUTTONS[-1] == "stop"
+
+
+def test_observation_lag_acts_on_the_previous_decisions_state():
+    """With ``observation_lag=1`` the policy at decision t sees the world as it was at decision t-1; the first
+    decision of an episode sees the start state, and the bootstrap observation is the lagged one."""
+    e = env()
+    cfg = MV.ModernVecConfig(n_envs=2, rollout_steps=1, n_updates=1, n_minibatches=2, bank_size=2, start_s=1.0,
+                             episode_s=2.0, step_ticks=3, observation_lag=1, stagger_initial=False, policy=SMALL,
+                             ppo=PPOConfig(decision_hz=10.0))
+    bank = MV.prepare_modern_bank(cfg, e, seed=0)
+    built = MV.make_modern_vec_train(cfg, e, bank)
+    obs = jax.jit(jax.vmap(built["obs"]))
+    rollout = jax.jit(built["rollout"])
+    r0 = built["initial_runner"](jax.random.key(0))
+    assert r0.env_state.obs_hist.self_vec.shape == (2, 1, 2, OB.MODERN_WORLD_SELF_DIM)
+    r1, tr1, _ = rollout(r0)
+    r2, tr2, _ = rollout(r1)
+    start = obs(r0.env_state.world)
+    np.testing.assert_allclose(np.asarray(tr1.obs_self[0]), np.asarray(start.self_vec))       # sees the start state
+    np.testing.assert_allclose(np.asarray(r1.env_state.obs_hist.self_vec[:, 0]), np.asarray(start.self_vec))
+    after_one = obs(r1.env_state.world)
+    assert not np.allclose(np.asarray(after_one.self_vec), np.asarray(start.self_vec))         # the world moved
+    np.testing.assert_allclose(np.asarray(tr2.obs_self[0]), np.asarray(start.self_vec))       # still t-1, not t
+    np.testing.assert_allclose(np.asarray(r2.env_state.obs_hist.self_vec[:, 0]), np.asarray(after_one.self_vec))
+    r3, m = jax.jit(built["run_chunk"], static_argnums=1)(r2, 1)
+    assert np.isfinite(np.asarray(m["policy_loss"])).all()

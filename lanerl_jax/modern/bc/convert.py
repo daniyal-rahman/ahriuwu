@@ -98,6 +98,7 @@ class BCGame(NamedTuple):
     click_valid: np.ndarray     # (T,) bool: the click loss applies
     click_on_unit: np.ndarray   # (T,) bool: the click is on a unit (plain target), else ground (sloped)
     label_valid: np.ndarray     # (T,) bool: in scope and representable, the decisions to learn from
+    held: np.ndarray            # (T,) bool: the label is the order still active, not an event (`labels.py`)
     in_scope: np.ndarray        # (T,) bool
     obs_index: np.ndarray       # (T,) int32: the decision whose observation is shown (itself until `lagged`)
     t: np.ndarray               # (T,) float64 game seconds
@@ -424,7 +425,7 @@ def _label_check(g, labels, valid, order, unit_of_slot, slot_unit):
         move_point_error_p90=float(np.percentile(miss, 90)) if len(miss) else None)
 
 
-def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen") -> BCGame:
+def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", hold: bool = True) -> BCGame:
     """One game's decisions over `window` (game seconds) for `champion`, no lag."""
     if champion != G.NAME:
         raise ValueError("the converter rebuilds cooldowns with Garen's kit rules; other champions need theirs")
@@ -470,7 +471,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen") 
     enemies = {u.id for u in g.units if u.team != me_team}
     unit_xy = {u.id: np.stack([g.x[:, i], g.y[:, i]], -1) for i, u in enumerate(g.units)}
     labels = label_actions(t, g.actions, me_xy, unit_xy, np.asarray(frame.axis), np.asarray(frame.normal),
-                           enemies, g.summoner_slot)
+                           enemies, g.summoner_slot, hold=hold)
     f["label"] = np.stack([labels.button, labels.screen_x, labels.screen_y], -1)
 
     def observe(x):
@@ -520,6 +521,8 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen") 
                     third_champion=int(crowded.sum()), not_representable=int((~labels.representable).sum()),
                     clicks_clamped=int(labels.clamped.sum()), click_valid=int((labels.click_valid & label_valid).sum()),
                     superseded=labels.n_superseded, repeat_attacks=labels.n_repeat_attacks,
+                    held=int((labels.held & label_valid).sum()),
+                    held_on_unit=int((labels.held & labels.click_on_unit & label_valid).sum()),
                     cooldown_conflicts=conflicts,
                     buttons={b: int(np.sum((labels.button == i) & label_valid)) for i, b in enumerate(MODERN_BUTTONS)}),
         label_check=_label_check(g, labels, label_valid, order, unit_of_slot, slot_unit),
@@ -532,7 +535,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen") 
                   global_vec=global_vec.astype(np.float32), champion_stats=stats, button=labels.button,
                   screen_x=labels.screen_x, screen_y=labels.screen_y, uses_screen=labels.uses_screen,
                   click_valid=labels.click_valid, click_on_unit=labels.click_on_unit, label_valid=label_valid,
-                  in_scope=in_scope, obs_index=np.arange(T, dtype=np.int32), t=t, meta=meta)
+                  held=labels.held, in_scope=in_scope, obs_index=np.arange(T, dtype=np.int32), t=t, meta=meta)
 
 
 def main():
@@ -541,9 +544,10 @@ def main():
     parser.add_argument("games", type=Path, nargs="+")
     parser.add_argument("--lag", type=parse_lag, default=1, help="observation lag in decisions, N or LO-HI")
     parser.add_argument("--seed", type=int, default=0, help="for a lag range")
+    parser.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
     args = parser.parse_args()
     for game_dir in args.games:
-        bc = convert_game(game_dir).lagged(args.lag, args.seed)
+        bc = convert_game(game_dir, hold=not args.no_hold).lagged(args.lag, args.seed)
         bc.save(args.out)
         print(game_dir.name, json.dumps(bc.meta["counts"]), flush=True)
 

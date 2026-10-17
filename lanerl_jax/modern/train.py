@@ -30,7 +30,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -61,6 +61,7 @@ class ModernVecConfig(NamedTuple):
     start_s: float = 60.0
     step_ticks: int = 3
     action_delay_ticks: int = 0
+    observation_lag: int = 0          # decisions between the world state observed and the action taken
     observation_horizon_s: float | None = None
     stagger_initial: bool = True
     bank_size: int = 16
@@ -90,6 +91,7 @@ class ModernEnvState(NamedTuple):
     world: object           # world.tick.ModernState
     kills: jax.Array        # (2,) int32 enemy-champion deaths this episode
     tower_damage: jax.Array  # (2,) HP the enemy top outer turret lost this episode (team credit)
+    obs_hist: Any = None     # (lag, 2, ...) ModernObservation ring, oldest first; None without observation_lag
 
 
 def default_loadouts(names=("Garen", "Jax")):
@@ -292,6 +294,20 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
         per = [OB.build_modern_observation(world, t, env.frames[t], env.wcfg, horizon_s=horizon) for t in (0, 1)]
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), *per)
 
+    lag = int(cfg.observation_lag)
+    if lag < 0:
+        raise ValueError("observation_lag must be >= 0")
+    if lag:
+        # Every start state's ring holds its own observation ``lag`` times: the first ``lag`` decisions of an
+        # episode act on the start state, like the BC datasets, which are lagged within the game.
+        hist0 = jax.jit(jax.vmap(_obs))(bank.world)
+        bank = bank._replace(obs_hist=jax.tree.map(
+            lambda a: jnp.broadcast_to(a[:, None], (a.shape[0], lag) + a.shape[1:]), hist0))
+
+    def _seen(es: ModernEnvState):
+        """The observation the policy acts on in ``es``: the oldest ring entry, or the state itself."""
+        return jax.tree.map(lambda h: h[0], es.obs_hist) if lag else _obs(es.world)
+
     def _apply(params, obs, carry):
         if recurrent:
             return policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
@@ -303,7 +319,8 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
         def one(es: ModernEnvState, carry, deadline, key):
             k_act, k_reset = jax.random.split(key)
             state = es.world
-            obs = _obs(state)
+            obs_now = _obs(state)
+            obs = jax.tree.map(lambda h: h[0], es.obs_hist) if lag else obs_now
             logits, new_carry = _apply(runner.params, obs, carry)
             if cfg.opponent == "frozen":
                 fixed, fixed_carry = _apply(opponent_params, obs, carry)
@@ -331,7 +348,9 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
                            jnp.broadcast_to(done_full, reward.shape), died.astype(jnp.float32),
                            lane_path_distance(nxt.x[:2], nxt.y[:2], env.segment),
                            jnp.broadcast_to(overflow, reward.shape).astype(jnp.float32))
-            nes = ModernEnvState(nxt, kills, tower_damage)
+            hist = (jax.tree.map(lambda h, o: jnp.concatenate([h[1:], o[None]], 0), es.obs_hist, obs_now)
+                    if lag else None)
+            nes = ModernEnvState(nxt, kills, tower_damage, hist)
             idx = jax.random.randint(k_reset, (), 0, K)
             fresh = jax.tree.map(lambda b: b[idx], bank)
             nes = jax.tree.map(lambda a, b: jnp.where(done, b, a), nes, fresh)
@@ -351,7 +370,7 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
         return runner, tr, carry0
 
     def learn(runner: VecRunner, tr: Transition, carry0):
-        last_obs = jax.vmap(_obs)(runner.env_state.world)
+        last_obs = jax.vmap(_seen)(runner.env_state)
         last_logits, _ = jax.vmap(lambda o, c: _apply(runner.params, o, c))(last_obs, runner.carry)
         return ppo_learn(runner, tr, carry0, last_logits.value, cfg=metric_cfg, tx=tx, loss=loss,
                          batch_fn=_batch, n_learn=n_learn, buttons=MODERN_BUTTONS)
@@ -405,6 +424,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--step-ticks", type=int, default=3, help="30 Hz world ticks per decision")
     p.add_argument("--action-delay-ticks", type=int, default=0,
                    help="input latency in world ticks (< step-ticks); 2 ~ 66 ms")
+    p.add_argument("--observation-lag", type=int, default=0,
+                   help="decisions between the observed state and the action (the BC datasets use 1)")
     p.add_argument("--bank-size", type=int, default=16)
     p.add_argument("--hold-offset", type=float, default=800.0)
     p.add_argument("--hold-jitter", type=float, default=300.0)
@@ -472,6 +493,7 @@ def main(argv=None) -> None:
     buttons_off = tuple(b for b in a.buttons_off.split(",") if b)
     cfg = ModernVecConfig(n_envs=a.envs, rollout_steps=a.rollout, n_updates=a.updates, n_minibatches=a.minibatches,
                           episode_s=a.episode_s, start_s=a.start_s, step_ticks=a.step_ticks, action_delay_ticks=a.action_delay_ticks,
+                          observation_lag=a.observation_lag,
                           bank_size=a.bank_size,
                           hold_offset=a.hold_offset, hold_jitter=a.hold_jitter, opponent=a.opponent,
                           gold_scale=a.gold_scale, xp_scale=a.xp_scale, enemy_scale=a.enemy_scale,

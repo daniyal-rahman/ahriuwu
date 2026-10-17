@@ -18,7 +18,7 @@ def _game(name, n=50, seed=0, group="melee", kit=True):
     return T.Game(name, "train", group, kit, rng.random((n, 32, 20)).astype(np.float16), rng.random((n, 32)) > 0.5,
                   rng.random((n, MODERN_WORLD_SELF_DIM)).astype(np.float32), rng.random((n, 6)).astype(np.float32),
                   button, rng.integers(0, 96, n).astype(np.int32), rng.integers(0, 54, n).astype(np.int32),
-                  rng.random(n) > 0.1, click, click & (rng.random(n) > 0.5))
+                  rng.random(n) > 0.1, click, click & (rng.random(n) > 0.5), click & (rng.random(n) > 0.5))
 
 
 def test_windows_cover_every_decision_once():
@@ -59,3 +59,12 @@ def test_dropout_zeroes_enemy_identity():
     b = T.batch_of(games, T.windows(games, 40, None), 40, 0, rng, enemy_id_dropout=1.0, stat_dropout=1.0)
     assert np.all(b["self"][:, :, T.ENEMY_ID_COLUMNS] == 0.0)
     assert np.all(b["self"][:, 1:, T.STAT_COLUMNS] == b["self"][:, :1, T.STAT_COLUMNS])
+
+
+def test_hold_weight_scales_held_decisions():
+    games = [_game("a", 40)]
+    b1 = T.batch_of(games, T.windows(games, 40, None), 40, 0, None, hold_weight=1.0)
+    b3 = T.batch_of(games, T.windows(games, 40, None), 40, 0, None, hold_weight=0.3)
+    held = b1["held"][0]
+    assert held.any() and np.allclose(b3["weight"][0][held], 0.3 * b1["weight"][0][held])
+    assert np.array_equal(b3["weight"][0][~held], b1["weight"][0][~held])
