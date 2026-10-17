@@ -32,7 +32,7 @@ remain prerequisites for the complete jungle/support roster, especially Lulu.
   Desktop CPU compiler7791 confirms smaller HLO work; restricted top-lane Garen/Ezreal tick
   FLOPs estimates fall 1.16%/1.29%, with unchanged compiled memory. GPU throughput remains unmeasured.
   Validation7792 completed: 211 focused checks passed; all 12 full/top 3600-tick golden
-  records match the accepted reference exactly, with zero overflow. No own job remains active.
+  records match the accepted reference exactly, with zero overflow. Integrated as `38d6d04e`.
 
 These are validation gates for their respective changes, not an additive test total. The full 69-module
 suite preceded the latest review fixes; those fixes have focused regression and golden coverage.
@@ -58,14 +58,16 @@ No learner/allocator changes were made. CPU diagnostic prerequisite7587 passed p
 MODERN-048 improves sim measurement: five consecutive synchronized samples, normalized game-time rates,
 explicit timed game window, minion occupancy, memory/overflow and frozen-game checks. Optional scripted
 ability attempts exercise kits; the queued comparison will include later lane combat after5400 warm ticks.
-Four lightweight timing/baseline-key tests pass. Compiled order/CLI validation7793 is queued on desktop;
+All five timing/baseline-key/order tests and compiled CLI validation7793 passed on desktop;
 exclusive GPU comparison7796 waits afterok:7793, and profiler7795 waits afterany:7796. Earlier unstarted
 7794 was superseded to use Jayce/Garen for the ranged case (the tool uses top-lane rune recommendations;
 Ezreal only has bottom-lane research). Comparison uses identical driver over baseline78abf40f and candidate
 80bd8f0c, with default/later ability workloads, top1024/4096, full1024 and ranged Jayce/Garen1024.
 Immutable sources and driver hash: `/mnt/nfs/shared/champ-expansion/sim048-throughput-TEMP/`.
-A separate isolated agent is investigating an exact damage-path optimization (MODERN-049), with targeted
-regressions and full/top goldens required; it does not touch policy/PPO code.
+MODERN-049 shield optimization is integrated and validated. Exclusive GPU comparison7797 waits afterany:7795
+and isolates that change: baseline80bd8f0c versus optimized38d6d04e, with identical drivers and workloads.
+Pinned sources: `/mnt/nfs/shared/champ-expansion/sim049-throughput-TEMP/`. Jobs7796/7795/7797 remain queued;
+no new GPU throughput result is available. Policy/PPO code is outside this thread's scope.
 
 Next actions:
 1. Validate the revised sim benchmark and remeasure pre/post review code under identical benchmark drivers.
