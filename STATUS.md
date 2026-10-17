@@ -28,6 +28,11 @@ remain prerequisites for the complete jungle/support roster, especially Lulu.
   on-hit records, including item/rune/kit effects and Red Buff targets; combat resolves once per tick.
   139 focused checks passed; all 12 full/top golden records match exactly with zero overflow.
   Compiler estimates: Ezreal FLOPs +0.39%; GPU runtime cost has not been measured.
+- Shield valuation (MODERN-049, 2026-10-17) selects the target row before decay arithmetic.
+  Desktop CPU compiler7791 confirms smaller HLO work; restricted top-lane Garen/Ezreal tick
+  FLOPs estimates fall 1.16%/1.29%, with unchanged compiled memory. GPU throughput remains unmeasured.
+  Validation7792 completed: 211 focused checks passed; all 12 full/top 3600-tick golden
+  records match the accepted reference exactly, with zero overflow. No own job remains active.
 
 These are validation gates for their respective changes, not an additive test total. The full 69-module
 suite preceded the latest review fixes; those fixes have focused regression and golden coverage.

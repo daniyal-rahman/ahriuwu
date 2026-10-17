@@ -177,8 +177,8 @@ def grant_shield(sh: Shields, unit: Any, amount: Any, kind: Any, now: Any,
     ok = jnp.asarray(enabled) & (jnp.asarray(amount) > 0.0)
     same = ok & (jnp.asarray(source) > 0) & (sh.source[unit] == source)
     sh = sh._replace(amount=sh.amount.at[unit].set(jnp.where(same, 0.0, sh.amount[unit])))
-    value = shield_value(sh, now)
-    slot_score = jnp.where(value[unit] > 0.0, sh.expires_at[unit], -jnp.inf)
+    value = shield_value(jax.tree.map(lambda a: a[unit], sh), now)
+    slot_score = jnp.where(value > 0.0, sh.expires_at[unit], -jnp.inf)
     slot = jnp.argmin(slot_score)
     order = jnp.max(sh.order) + 1 if order is None else order
 
@@ -356,9 +356,10 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
     n_units = hp.shape[0]
 
     def typed_value(sh, d, dtype):
-        value = shield_value(sh, now)[d]
-        typed = (sh.kind[d] == SHIELD_ALL) | ((sh.kind[d] == SHIELD_PHYSICAL) & (dtype == PHYSICAL)) \
-            | ((sh.kind[d] == SHIELD_MAGIC) & (dtype == MAGIC))
+        sh = jax.tree.map(lambda a: a[d], sh)
+        value = shield_value(sh, now)
+        typed = (sh.kind == SHIELD_ALL) | ((sh.kind == SHIELD_PHYSICAL) & (dtype == PHYSICAL)) \
+            | ((sh.kind == SHIELD_MAGIC) & (dtype == MAGIC))
         return value, typed
 
     def body(carry, x):
