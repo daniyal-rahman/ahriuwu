@@ -46,14 +46,19 @@ under `/mnt/nfs/shared/champ-expansion/`; 35 cells retained, final cell cancelle
 
 Dani clarified ownership on2026-10-17: this thread owns the simulator, champions, correctness and sim
 throughput under training workloads. Other agents own policy/PPO/learner and the rest of the stack.
-Own PPO diagnostic7588 was stopped after20m43s; partial results are preserved for handoff at
+Own PPO diagnostic7588 was stopped (final elapsed21m20s); partial results are preserved for handoff at
 `/mnt/nfs/shared/champ-expansion/modern045-memory-baseline-TEMP/results-7588/`.
 No learner/allocator changes were made. CPU diagnostic prerequisite7587 passed previously.
 
 MODERN-048 improves sim measurement: five consecutive synchronized samples, normalized game-time rates,
 explicit timed game window, minion occupancy, memory/overflow and frozen-game checks. Optional scripted
 ability attempts exercise kits; the queued comparison will include later lane combat after5400 warm ticks.
-Four lightweight timing/baseline-key tests pass; compiled command/workload validation pending desktop Slurm.
+Four lightweight timing/baseline-key tests pass. Compiled order/CLI validation7793 is queued on desktop;
+exclusive GPU comparison7796 waits afterok:7793, and profiler7795 waits afterany:7796. Earlier unstarted
+7794 was superseded to use Jayce/Garen for the ranged case (the tool uses top-lane rune recommendations;
+Ezreal only has bottom-lane research). Comparison uses identical driver over baseline78abf40f and candidate
+80bd8f0c, with default/later ability workloads, top1024/4096, full1024 and ranged Jayce/Garen1024.
+Immutable sources and driver hash: `/mnt/nfs/shared/champ-expansion/sim048-throughput-TEMP/`.
 A separate isolated agent is investigating an exact damage-path optimization (MODERN-049), with targeted
 regressions and full/top goldens required; it does not touch policy/PPO code.
 

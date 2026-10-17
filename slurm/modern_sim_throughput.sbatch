@@ -36,6 +36,6 @@ else
         done
         "$PY" -m ops.modern.bench --envs 1024 --warm-ticks 5400 --samples 5 --orders abilities
         "$PY" -m ops.modern.bench --envs 1024 --warm-ticks 5400 --samples 5 --orders abilities \
-            --champions Ezreal Garen "${TOP[@]}"
+            --champions Jayce Garen "${TOP[@]}"
     done
 fi
