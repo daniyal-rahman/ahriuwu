@@ -144,6 +144,9 @@ def make_forward(policy: LanePolicy):
         ent, mask, sv, gv = (tm(batch[k]) for k in ("entities", "mask", "self", "global_"))
         n = ent.shape[1]
 
+        # Rematerialise each step in the backward pass: without this the scan keeps every step's
+        # encoder activations alive (batch 128 x window 256 needed ~20 GB on the 5080).
+        @jax.checkpoint
         def step(carry, xs):
             e, m, s, g = xs
             logits, carry = policy.apply(params, e, m, s, g, carry)
