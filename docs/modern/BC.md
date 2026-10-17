@@ -174,3 +174,8 @@ Opponents: 78 distinct champions, 300 melee and 57 ranged games. 142 games face 
 Jayce 5, Malphite 4); the other 215 get a zeroed enemy one-hot. The val split is drawn per game at 10%, so a
 few opponents are absent from val (Camille, Ambessa, Irelia, Gnar) and Shen is over-represented (4 of 11).
 The same players recur across games, so val measures held-out games, not held-out players.
+
+`/mnt/nfs/shared/bc_modern_v2` (converter 73a9dd2d, jobs 7846-7848, 2026-10-17) is the same 357 games with held
+labels: of the 2,326,688 label-valid decisions 1,290,581 (55%) are held (92,445 of them unit clicks), click
+supervision covers 1,905,922 decisions (82%), and the button shares become move 81.8%, noop 16.2%, stop 0.81%,
+with the cast and summoner shares unchanged. The event-label checks are identical to v1.
