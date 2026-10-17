@@ -185,10 +185,19 @@ with the cast and summoner shares unchanged. The event-label checks are identica
 | run | dataset | epochs | val button NLL | event NLL | click NLL / dist | gate vs afk Jax at 10:00 |
 |---|---|---|---|---|---|---|
 | v1 `modern-bc-v1-e1` (job 7836, 51 min) | v1, events only | 30 | 0.631 (prior ~0.69, majority acc 0.717) | n/a | 7.19 / 16.1 cells | CS 35 (humans 75), deaths 1.9, kills 1.0, lane distance 1100 |
+| v2 `modern-bc-v2-hold` (job 7849, 18 min) | v2, held labels, hold weight 0.3 | 30 (best 20) | 0.347 (majority acc 0.816, acc 0.895) | 0.594 | 6.59 / 13.1 cells (held clicks 6.31 / 11.8) | job 7933, pending |
 
 v1: the button head predicts noop 99.6% of the time (move recall 0.8%); the one-per-click labels do not
 carry enough signal, see section 3. In the sim it samples noop 77% and move 21%, farms half the human CS
 against an afk opponent and dies twice in nine minutes, with deaths uncorrelated with its lane distance
 (turret and minion deaths from aimless walking rather than wandering off). The gate itself runs 64 full
 episodes in 4 minutes on the 5080 (`gate-afk-*.json` next to the checkpoint).
+
+v2: held labels change the picture: move recall 0.97, noop recall 0.64, event-only button NLL 0.594. Casts
+are still never the argmax (recall 0 for q/w/e/r, summoners, ward, stop), but their conditional NLL moves
+well below the prior (q 4.23 vs 5.5, e 3.49 vs 5.4, stop 3.95 vs 4.8, summoner_d 7.2 vs 9.2), so a sampled
+policy casts at roughly the right moments more often than chance. Epochs ran at 32 s throughout (v1
+alternated 32 s and 130 s with the same code). Kit-known games score 0.340, unknown 0.350; melee and ranged
+are equal. v3 (job 7934) repeats v2 with class weights x5 on casts, summoners and ward and x3 on stop, 24
+epochs, to see whether the clone can be made to cast without hurting the move head.
 
