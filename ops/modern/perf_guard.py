@@ -27,9 +27,12 @@ def config_key(args, device) -> str:
     from ops.modern.bench import world_label
     w = world_label(args)
     orders = "" if w["orders"] == "lane" else f"|orders={w['orders']}"
+    variants = "".join(f"|{k}={json.dumps(w[k], separators=(',', ':'))}"
+                       for k in ("packet_capacity", "allowlist", "lane_structures", "champions", "roster")
+                       if k in w)
     return (f"{jax.default_backend()}|{device.device_kind}|envs={args.envs}|ticks={args.ticks}"
             f"|warm={args.warm_ticks}|fog={w['fog']}|jungle={int(w['jungle'])}"
-            f"|objectives={int(w['objectives'])}|lanes={','.join(map(str, w['lanes']))}{orders}")
+            f"|objectives={int(w['objectives'])}|lanes={','.join(map(str, w['lanes']))}{orders}{variants}")
 
 
 def measure(args) -> dict:

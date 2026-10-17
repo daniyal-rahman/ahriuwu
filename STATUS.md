@@ -3,7 +3,7 @@
 **Current: 2026-10-17.** This worktree contains the 26.19 modern JAX world in `lanerl_jax/modern/`,
 its trainer in `modern/train.py` + `modern/rl/`, tools in `ops/modern/`, and specs in `docs/modern/`.
 Start here, then read `docs/CODEMAP.md` and `docs/modern/WORLD_IMPLEMENTATION.md`.
-Detailed evidence and job history live in `docs/JAX_FIDELITY_LEDGER.md` (MODERN-027..049).
+Detailed evidence and job history live in `docs/JAX_FIDELITY_LEDGER.md` (MODERN-027..050).
 
 ## Champions and world scope
 
@@ -68,6 +68,10 @@ MODERN-049 shield optimization is integrated and validated. Exclusive GPU compar
 and isolates that change: baseline80bd8f0c versus optimized38d6d04e, with identical drivers and workloads.
 Pinned sources: `/mnt/nfs/shared/champ-expansion/sim049-throughput-TEMP/`. Jobs7796/7795/7797 remain queued;
 no new GPU throughput result is available. Policy/PPO code is outside this thread's scope.
+
+MODERN-050: perf-guard baseline keys now distinguish packet capacity, item allow-lists, lane-structure
+reduction, champions and roster. Default keys remain compatible. Five lightweight summary/key checks pass;
+no simulator behaviour changes. GPU jobs7796/7795/7797 are still pending on2026-10-17.
 
 Next actions:
 1. Validate the revised sim benchmark and remeasure pre/post review code under identical benchmark drivers.

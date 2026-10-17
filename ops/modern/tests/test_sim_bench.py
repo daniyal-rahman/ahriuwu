@@ -38,6 +38,22 @@ class BaselineKeyTests(unittest.TestCase):
             args.orders = 'abilities'
             self.assertEqual(config_key(args, device), lane + '|orders=abilities')
 
+    def test_world_variants_cannot_reuse_the_default_baseline(self):
+        from unittest.mock import patch
+        from ops.modern.perf_guard import config_key
+        defaults = dict(envs=1, ticks=30, warm_ticks=60, fog='rays', no_jungle=True,
+                        no_objectives=True, lanes=[2], packet_capacity=0, allowlist=False,
+                        lane_structures=False, champions=['Garen', 'Jax'], roster=[], orders='lane')
+        device = SimpleNamespace(device_kind='test')
+        variants = dict(packet_capacity=64, allowlist=True, lane_structures=True,
+                        champions=['Jayce', 'Garen'], roster=['all'])
+        with patch('ops.modern.perf_guard.jax.default_backend', return_value='test'):
+            baseline = config_key(SimpleNamespace(**defaults), device)
+            keys = [config_key(SimpleNamespace(**(defaults | {k: v})), device)
+                    for k, v in variants.items()]
+        self.assertNotIn(baseline, keys)
+        self.assertEqual(len(set(keys)), len(variants))
+
 
 class ScriptedOrderTests(unittest.TestCase):
     def test_abilities_are_staggered_without_changing_lane_orders(self):
