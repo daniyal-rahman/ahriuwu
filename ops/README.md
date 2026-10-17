@@ -4,7 +4,7 @@ All in `ops/modern/`, run as `python -m ops.modern.<tool> --help`.
 
 | tool | what it does |
 |---|---|
-| `bench` | Times `jit(vmap(scan(step)))` for several batch sizes and world variants (`--lanes`, `--no-jungle`, `--no-objectives`, `--fog`). |
+| `bench` | Times `jit(vmap(scan(step)))` across batch sizes/world variants; median of synchronized `--samples`, tick/game-time rates and overflow/frozen-game checks. `--orders abilities --warm-ticks 5400` exercises later lane combat. |
 | `profile_tick` | Attributes traced XLA op time to source lines (GPU: disables command buffers). |
 | `perf_guard` | Throughput/memory regression guard against `ops/modern/perf_baseline.json`; `sbatch slurm/modern_perf_guard.sbatch [--cpu] [--update-baseline]` (exclusive node). |
 | `jaxpr_fingerprint` | Name-free fingerprint of the traced tick (full map and top lane). Equal = same computation; use it for no-op refactors. |

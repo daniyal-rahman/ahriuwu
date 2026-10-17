@@ -6,20 +6,23 @@ attack the nearest enemy" orders are computed inside the scan.
     python -m ops.modern.bench --envs 1 64 512 --ticks 300 [--fog rays|fast|off] [--no-jungle]
         [--no-objectives] [--lanes 0 1 2] [--champions Garen Jax] [--roster all | NAME ...]
 
-Prints one JSON line per batch size: compile and steady seconds, env-ticks per second, packet/missile
-overflow and peak valid packets per tick (main and follow-up pass; capacities 512 / 256).
+Use --orders abilities --warm-ticks 5400 for later lane combat, including ability attempts.
+Prints synchronized sample times and their median, tick/game-time throughput, timed game window,
+final minion count, process peak device memory, overflow and peak packet counts. A frozen game or
+any overflow invalidates the measurement. Policy inference and PPO are outside this tool.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import time
 
 import jax
 import jax.numpy as jnp
 
 
-def scripted_orders(s, lane_mid):
+def scripted_orders(s, lane_mid, abilities=False):
     from lanerl_jax.modern import world as MS
     from lanerl_jax.modern.core import types as W
     c = 2
@@ -28,13 +31,22 @@ def scripted_orders(s, lane_mid):
         & (s.kind[None, :] != W.KIND_NEXUS) & (s.kind[None, :] != W.KIND_INHIBITOR)
     near = jnp.where(enemy & (d < 700.0), d, jnp.inf)
     has = jnp.isfinite(jnp.min(near, axis=1))
-    return MS.no_orders()._replace(attack=jnp.where(has, jnp.argmin(near, axis=1).astype(jnp.int32), -1), move=~has,
+    orders = MS.no_orders()._replace(attack=jnp.where(has, jnp.argmin(near, axis=1).astype(jnp.int32), -1), move=~has,
                                    move_x=jnp.broadcast_to(lane_mid[0], (c,)),
                                    move_y=jnp.broadcast_to(lane_mid[1], (c,)))
+    if abilities:
+        holder = jnp.arange(c, dtype=jnp.int32)
+        target = jnp.argmin(jnp.where(enemy, d, jnp.inf), axis=1).astype(jnp.int32)
+        attempt = (s.tick % 30 == holder * 15) & jnp.any(enemy, axis=1)
+        orders = orders._replace(cast_slot=jnp.where(attempt, (s.tick // 30 + holder) % 4, -1),
+                                 cast_target=target, cast_x=s.x[target], cast_y=s.y[target])
+    return orders
 
 
 def add_world_args(ap: argparse.ArgumentParser) -> None:
     """World-variant flags shared by bench, profile_tick and perf_guard."""
+    ap.add_argument("--orders", choices=("lane", "abilities"), default="lane",
+                    help="scripted movement/attacks, optionally attempting each ability in rotation")
     ap.add_argument("--fog", choices=("rays", "fast", "off"), default="rays")
     ap.add_argument("--no-jungle", action="store_true")
     ap.add_argument("--no-objectives", action="store_true")
@@ -66,7 +78,7 @@ def build_world(args):
 
     def run(s, ticks):
         def body(s, _):
-            s, e = MS.step(s, scripted_orders(s, lane_mid), cfg)
+            s, e = MS.step(s, scripted_orders(s, lane_mid, getattr(args, "orders", "lane") == "abilities"), cfg)
             used = (jnp.sum(e.report.packets.valid), jnp.sum(e.follow_up.packets.valid))
             return s, (e.packet_overflow, e.missile_overflow, e.ray_overflow, e.item_overflow, used)
         return jax.lax.scan(body, s, None, length=ticks)
@@ -89,7 +101,7 @@ def warm_up(timed, batch, warm_ticks: int, ticks: int):
 
 
 def world_label(args) -> dict:
-    return {"fog": args.fog, "jungle": not args.no_jungle, "objectives": not args.no_objectives,
+    return {"orders": getattr(args, "orders", "lane"), "fog": args.fog, "jungle": not args.no_jungle, "objectives": not args.no_objectives,
             "lanes": list(args.lanes), **({"packet_capacity": args.packet_capacity} if args.packet_capacity else {}),
             **({"allowlist": True} if args.allowlist else {}),
             **({"lane_structures": True} if args.lane_structures else {}),
@@ -97,38 +109,60 @@ def world_label(args) -> dict:
             **({"roster": args.roster} if args.roster else {})}
 
 
+def sample_summary(seconds, envs, ticks, dt):
+    """Normalize measured world ticks; no policy or learner cost is implied."""
+    import math
+    if not seconds or any(not math.isfinite(x) or x <= 0 for x in seconds):
+        raise ValueError("sample durations must be positive and finite")
+    if envs < 1 or ticks < 1 or not math.isfinite(dt) or dt <= 0:
+        raise ValueError("environment/tick counts and tick duration must be positive")
+    median = statistics.median(seconds)
+    rate = envs * ticks / median
+    return dict(samples_s=seconds, samples=len(seconds), steady_s=median, min_s=min(seconds), max_s=max(seconds),
+                s_per_tick=median / ticks, env_ticks_per_s=rate, simulated_game_seconds_per_wall_s=rate * dt)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--envs", type=int, nargs="+", default=[1, 64])
     ap.add_argument("--ticks", type=int, default=300)
-    ap.add_argument("--warm-ticks", type=int, default=1200, help="ticks before timing (waves on the map)")
+    ap.add_argument("--warm-ticks", type=int, default=1200, help="world ticks before timing")
+    ap.add_argument("--samples", type=int, default=5, help="consecutive synchronized calls; report median")
     add_world_args(ap)
     args = ap.parse_args()
+    if min(args.envs) < 1 or args.ticks < 1 or args.samples < 1 or args.warm_ticks < 0:
+        ap.error("envs/ticks/samples must be positive and warm-ticks nonnegative")
     from lanerl_jax.modern.jax_cache import enable_compile_cache
+    from lanerl_jax.modern.core import types as W
     enable_compile_cache()
     cfg, run = build_world(args)
     print(json.dumps({"backend": jax.default_backend(), "devices": [str(d) for d in jax.devices()],
                       **world_label(args)}), flush=True)
     for b in args.envs:
         timed = jax.jit(jax.vmap(lambda s: run(s, args.ticks)))
-        t0 = time.time()
+        t0 = time.perf_counter()
         batch, _ = warm_up(timed, init_batch(cfg, b), args.warm_ticks, args.ticks)
-        t_warm = time.time() - t0
-        t0 = time.time()
-        out, _ = timed(batch)
-        jax.block_until_ready(out.t)
-        t_second = time.time() - t0
-        t0 = time.time()
-        out, (po, mo, ro, io, (pm, pf)) = timed(out)
-        jax.block_until_ready(out.t)
-        steady = time.time() - t0
-        print(json.dumps({"envs": b, "ticks": args.ticks, "warm_compile_and_run_s": round(t_warm, 2),
-                          "timed_second_call_s": round(t_second, 2), "steady_s": round(steady, 3),
-                          "s_per_tick": steady / args.ticks, "env_ticks_per_s": b * args.ticks / steady,
-                          "game_time_s": float(out.t[0]), "packet_overflow": int(po.max()),
-                          "missile_overflow": int(mo.max()), "ray_overflow": int(ro.max()),
-                          "item_overflow": int(io.max()), "packets_max": int(pm.max()),
-                          "follow_up_packets_max": int(pf.max())}), flush=True)
+        t_warm = time.perf_counter() - t0
+        start_s = float(batch.t[0])
+        samples, maxima = [], [0] * 6
+        for _ in range(args.samples):
+            t0 = time.perf_counter()
+            batch, stats = jax.block_until_ready(timed(batch))
+            samples.append(time.perf_counter() - t0)
+            po, mo, ro, io, (pm, pf) = stats
+            maxima = [max(a, int(v.max())) for a, v in zip(maxima, (po, mo, ro, io, pm, pf))]
+        frozen = int(jnp.sum(batch.game_over))
+        mem = jax.devices()[0].memory_stats() or {}
+        row = dict(envs=b, ticks=args.ticks, warm_ticks=args.warm_ticks,
+                   warm_compile_and_run_s=t_warm, timed_start_game_s=start_s, game_time_s=float(batch.t[0]),
+                   packet_overflow=maxima[0], missile_overflow=maxima[1], ray_overflow=maxima[2],
+                   item_overflow=maxima[3], packets_max=maxima[4], follow_up_packets_max=maxima[5],
+                   frozen_envs=frozen, alive_minions_mean=float(jnp.sum(batch.alive & (batch.kind == W.KIND_MINION)) / b),
+                   process_peak_device_bytes=mem.get("peak_bytes_in_use"),
+                   **sample_summary(samples, b, args.ticks, cfg.dt))
+        print(json.dumps(row), flush=True)
+        if any(maxima[:4]) or frozen:
+            raise RuntimeError("invalid sim timing: overflow or a frozen completed game")
 
 
 if __name__ == "__main__":

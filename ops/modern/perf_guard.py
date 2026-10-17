@@ -26,9 +26,10 @@ DEFAULT_ENVS = {"gpu": 256, "cpu": 16}
 def config_key(args, device) -> str:
     from ops.modern.bench import world_label
     w = world_label(args)
+    orders = "" if w["orders"] == "lane" else f"|orders={w['orders']}"
     return (f"{jax.default_backend()}|{device.device_kind}|envs={args.envs}|ticks={args.ticks}"
             f"|warm={args.warm_ticks}|fog={w['fog']}|jungle={int(w['jungle'])}"
-            f"|objectives={int(w['objectives'])}|lanes={','.join(map(str, w['lanes']))}")
+            f"|objectives={int(w['objectives'])}|lanes={','.join(map(str, w['lanes']))}{orders}")
 
 
 def measure(args) -> dict:
