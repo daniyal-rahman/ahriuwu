@@ -24,7 +24,7 @@ except ImportError:                                              # pragma: no co
 
 KIND_NONE, KIND_CHAMPION, KIND_MINION, KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS, KIND_MONSTER, KIND_WARD = range(8)
 TEAM_RGB = ((70, 130, 255), (235, 80, 70))
-BG, WALL, LANE = (34, 44, 38), (18, 24, 20), (70, 84, 72)
+BG, WALL, LANE = (52, 66, 56), (16, 20, 18), (84, 100, 86)
 PANEL_W = 300
 
 
@@ -51,32 +51,24 @@ class View:
     def __call__(self, x, y):
         return (float(x) - self.lo[0]) * self.scale, self.size - (float(y) - self.lo[1]) * self.scale
 
-    def r(self, units):
-        return max(float(units) * self.scale, 1.5)
+    def r(self, units, floor=1.5):
+        return max(float(units) * self.scale, floor)
 
 
 def background(d, view, size):
-    """The walkable mask (one pixel per navgrid cell inside the window) and the lane path."""
-    walk, (mx, mz), cell = d["walkable"], d["terrain_min"], float(d["terrain_cell"])
-    img = Image.new("RGB", (size, size), WALL)
+    """The walkable mask sampled per pixel, and the lane path."""
+    walk, (mx, mz), cell = d["walkable"].astype(bool), d["terrain_min"], float(d["terrain_cell"])
     h, w = walk.shape
-    # cells whose centre falls inside the window
-    xs = mx + (np.arange(w) + 0.5) * cell
-    ys = mz + (np.arange(h) + 0.5) * cell
-    px = ((xs - view.lo[0]) * view.scale).astype(int)
-    py = (size - (ys - view.lo[1]) * view.scale).astype(int)
-    keep_x = (px >= 0) & (px < size)
-    keep_y = (py >= 0) & (py < size)
-    arr = np.full((size, size, 3), WALL, np.uint8)
-    sub = walk[np.ix_(keep_y, keep_x)].astype(bool)
-    yy, xx = np.meshgrid(py[keep_y], px[keep_x], indexing="ij")
-    arr[yy[sub], xx[sub]] = BG
+    xs = view.lo[0] + (np.arange(size) + 0.5) / view.scale                 # world x of each pixel column
+    ys = view.lo[1] + (size - (np.arange(size) + 0.5)) / view.scale        # world y of each pixel row
+    cx = np.clip(((xs - mx) / cell).astype(int), 0, w - 1)
+    cy = np.clip(((ys - mz) / cell).astype(int), 0, h - 1)
+    inside = ((xs >= mx) & (xs < mx + w * cell))[None, :] & ((ys >= mz) & (ys < mz + h * cell))[:, None]
+    open_ = walk[cy[:, None], cx[None, :]] & inside
+    arr = np.where(open_[..., None], np.asarray(BG, np.uint8), np.asarray(WALL, np.uint8)).astype(np.uint8)
     img = Image.fromarray(arr)
-    if cell * view.scale > 1.0:                                   # fill gaps when cells are wider than a pixel
-        img = img.resize((size, size), Image.NEAREST)
     draw = ImageDraw.Draw(img)
-    pts = [view(x, y) for x, y in d["lane_path"]]
-    draw.line(pts, fill=LANE, width=max(int(view.r(300)), 2))
+    draw.line([view(x, y) for x, y in d["lane_path"]], fill=LANE, width=max(int(view.r(300)), 2))
     return img
 
 
@@ -99,10 +91,10 @@ def main(argv=None) -> None:
     d = np.load(a.episode, allow_pickle=False)
     buttons = [str(b) for b in d["buttons"]]
     names = [str(n) for n in d["champions"]]
-    kind, team, sub = d["unit_kind"], d["unit_team"], d["unit_sub"]
     T = d["t"].shape[0]
+    per_step = "u_kind" in d.files                                # kind / team / tier per decision (minions spawn)
     fps = float(d["decision_hz"]) * a.speed
-    view = View(d["lane_path"], a.size)
+    view = View(np.concatenate([d["lane_path"], d["fountain"]]), a.size)
     base = background(d, view, a.size)
     font, small, big = _font(15), _font(12), _font(22)
     W, H = a.size + PANEL_W, a.size
@@ -122,6 +114,8 @@ def main(argv=None) -> None:
         img = base.copy()
         draw = ImageDraw.Draw(img)
         x, y, hp, mhp, alive = d["u_x"][i], d["u_y"][i], d["u_hp"][i], d["u_max_hp"][i], d["u_alive"][i]
+        kind, team, sub = ((d["u_kind"][i], d["u_team"][i], d["u_sub"][i]) if per_step
+                           else (d["unit_kind"], d["unit_team"], d["unit_sub"]))
         vis = d["u_visible"][i]                                   # (2, N)
         seen = vis[{"blue": 0, "red": 1}[a.fog]] if a.fog != "off" else np.ones_like(alive, bool)
         order = range(len(kind))
@@ -134,20 +128,20 @@ def main(argv=None) -> None:
             hollow = a.fog == "off" and not vis[0][j]
             fill, outline = (None, col) if hollow else (col, (0, 0, 0))
             if k == KIND_CHAMPION:
-                r = view.r(max(float(d["radius"][j]), 65.0))
+                r = view.r(max(float(d["radius"][j]), 65.0), 9.0)
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill, outline=outline, width=2)
                 draw.text((cx, cy), names[j][0], fill=(255, 255, 255), font=font, anchor="mm")
                 hp_bar(draw, cx, cy - r - 4, 2.4 * r + 16, hp[j] / max(mhp[j], 1.0), col)
             elif k == KIND_MINION:
-                r = view.r(45.0 if sub[j] < 2 else 60.0)
+                r = view.r(45.0 if sub[j] < 2 else 60.0, 3.5)
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill, outline=outline)
                 hp_bar(draw, cx, cy - r - 2, 2 * r + 4, hp[j] / max(mhp[j], 1.0), col)
             elif k == KIND_TURRET:
-                r = view.r(90.0)
+                r = view.r(90.0, 6.0)
                 draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill=fill, outline=outline, width=2)
                 hp_bar(draw, cx, cy - r - 4, 2 * r + 10, hp[j] / max(mhp[j], 1.0), col)
             elif k in (KIND_INHIBITOR, KIND_NEXUS):
-                r = view.r(120.0)
+                r = view.r(120.0, 7.0)
                 draw.polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], fill=fill, outline=outline)
                 hp_bar(draw, cx, cy - r - 4, 2 * r + 10, hp[j] / max(mhp[j], 1.0), col)
             elif k == KIND_WARD:
@@ -167,7 +161,7 @@ def main(argv=None) -> None:
             tgt = int(d["o_attack"][i][c])
             if tgt >= 0:
                 tx, ty = view(x[tgt], y[tgt])
-                r = view.r(110.0)
+                r = view.r(110.0, 8.0)
                 draw.ellipse([tx - r, ty - r, tx + r, ty + r], outline=(255, 230, 60), width=2)
             slot = int(d["o_cast_slot"][i][c])
             if slot >= 0:
@@ -176,13 +170,15 @@ def main(argv=None) -> None:
                 if ct >= 0:
                     px_, py_ = view(x[ct], y[ct])
                 draw.text((px_, py_ - 18), letters[slot], fill=(255, 255, 120), font=big, anchor="mm")
-                r = view.r(140.0)
+                r = view.r(140.0, 12.0)
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(255, 255, 120), width=3)
             ss = int(d["o_summoner_slot"][i][c])
             if ss >= 0:
                 draw.text((cx, cy + 24), "D" if ss == 0 else "F", fill=(255, 160, 255), font=big, anchor="mm")
         # side panel
-        draw.rectangle([a.size, 0, W, H], fill=(16, 16, 20))
+        canvas = Image.new("RGB", (W, H), (16, 16, 20))
+        canvas.paste(img, (0, 0))
+        img, draw = canvas, ImageDraw.Draw(canvas)
         m, s = divmod(int(t), 60)
         draw.text((a.size + 12, 10), f"{m:02d}:{s:02d}   x{a.speed:g}", fill=(230, 230, 230), font=big)
         yy = 50
@@ -208,7 +204,10 @@ def main(argv=None) -> None:
                   fill=(180, 180, 180), font=small)
         draw.text((a.size + 12, H - 40), "yellow ring: attack/cast target\nx: move point", fill=(140, 140, 140),
                   font=small)
-        ff.stdin.write(img.tobytes())
+        raw = img.tobytes()
+        if len(raw) != W * H * 3:
+            raise RuntimeError(f"frame {i}: {img.mode} {img.size} gives {len(raw)} bytes, expected {W * H * 3}")
+        ff.stdin.write(raw)
         frames += 1
     ff.stdin.close()
     if ff.wait() != 0:
