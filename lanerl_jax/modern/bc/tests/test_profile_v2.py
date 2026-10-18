@@ -17,7 +17,7 @@ def _world(blue="Garen", red="Jax"):
 
 def test_v2_carries_the_ids_the_ranks_and_the_descriptor_blocks_and_keeps_the_v1_columns():
     cfg, state, frames = _world()
-    v1 = OB.build_modern_observation(state, 0, frames[0], cfg)
+    v1 = OB.build_modern_observation(state, 0, frames[0], cfg, profile="modern-world-v1")
     v2 = OB.build_modern_observation(state, 0, frames[0], cfg, profile="modern-world-v2")
     a, b = np.asarray(v1.self_vec), np.asarray(v2.self_vec)
     assert a.shape == (OB.MODERN_WORLD_SELF_DIM,) and b.shape == (OB.V2_SELF_DIM,)
@@ -65,8 +65,9 @@ def test_policy_embeds_the_ids_only_for_v2():
     logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
     assert np.all(np.isfinite(np.asarray(logits.button)))
     # v1 policies have no embedding and reject a v2 observation.
-    v1 = LanePolicy(PolicyConfig(core="mlp", d_model=32, ffn_dim=32, ctx_dim=32, core_dim=32, mlp_hidden=32, mlp_layers=1))
-    o1 = OB.build_modern_observation(state, 0, frames[0], cfg)
+    v1 = LanePolicy(make_policy_config("modern-world-v1", core="mlp", d_model=32, ffn_dim=32, ctx_dim=32, core_dim=32,
+                                       mlp_hidden=32, mlp_layers=1))
+    o1 = OB.build_modern_observation(state, 0, frames[0], cfg, profile="modern-world-v1")
     p1 = v1.init(jax.random.key(0), o1.entities, o1.entity_pad_mask, o1.self_vec, o1.global_vec)
     assert "champion_embed" not in p1["params"]
     try:
@@ -109,3 +110,11 @@ def test_champion_table_agrees_with_the_sim_kits():
         pass
     else:
         raise AssertionError("an unknown champion got cast rules")
+
+
+def test_old_checkpoint_configs_without_a_profile_are_read_as_v1():
+    from lanerl_jax.modern.rl.policy import restore_policy_config
+    saved = PolicyConfig(core="gru")._asdict(); del saved["profile"]; saved["self_dim"] = OB.MODERN_WORLD_SELF_DIM
+    pc = restore_policy_config(saved)
+    assert pc.profile == "modern-world-v1" and pc.self_dim == OB.MODERN_WORLD_SELF_DIM
+    assert restore_policy_config(PolicyConfig()._asdict()).profile == "modern-world-v2"

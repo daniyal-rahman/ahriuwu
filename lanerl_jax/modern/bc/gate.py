@@ -28,7 +28,7 @@ from .. import train as MV
 from .. import world as MS
 from ..actions import MODERN_BUTTONS
 from ..jax_cache import enable_compile_cache
-from ..rl.policy import PolicyConfig
+from ..rl.policy import PolicyConfig, restore_policy_config
 from ..rl.ppo import PPOConfig
 from ..rl.run_dir import file_sha256
 
@@ -38,7 +38,7 @@ def _policy_config(ckpt: Path) -> PolicyConfig:
     if manifest.exists():
         saved = json.loads(manifest.read_text()).get("config", {}).get("train", {}).get("policy", {})
         if saved:
-            return PolicyConfig(**saved)
+            return restore_policy_config(saved)
     return PolicyConfig(core="gru")
 
 

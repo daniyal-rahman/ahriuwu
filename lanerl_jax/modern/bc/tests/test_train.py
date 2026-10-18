@@ -7,7 +7,7 @@ import numpy as np
 from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX as B
 from lanerl_jax.modern.bc import train as T
 from lanerl_jax.modern.obs import MODERN_WORLD_SELF_DIM
-from lanerl_jax.modern.rl.policy import LanePolicy, PolicyConfig
+from lanerl_jax.modern.rl.policy import LanePolicy, make_policy_config
 from lanerl_jax.modern.train import DEFAULT_BUTTONS_OFF, SMALL_POLICY
 
 
@@ -37,7 +37,7 @@ def test_windows_cover_every_decision_once():
 def test_loss_is_finite_and_masks_burn_in_and_self_casts():
     games = [_game("a", 40)]
     off = tuple(sorted(B[b] for b in DEFAULT_BUTTONS_OFF))
-    policy = LanePolicy(PolicyConfig(core="gru", core_norm=True, core_residual=True, **SMALL_POLICY), off)
+    policy = LanePolicy(make_policy_config("modern-world-v1", core="gru", core_norm=True, core_residual=True, **SMALL_POLICY), off)
     b = T.batch_of(games, T.windows(games, 16, None), 16, 4, None)
     assert b["weight"][:, :4].sum() == 0 and b["click"][b["button"] == B["q"]].sum() == 0
     jb = {k: jnp.asarray(v) for k, v in b.items()}
@@ -57,8 +57,8 @@ def test_dropout_zeroes_enemy_identity():
     games = [_game("a", 40)]
     rng = np.random.default_rng(0)
     b = T.batch_of(games, T.windows(games, 40, None), 40, 0, rng, enemy_id_dropout=1.0, stat_dropout=1.0)
-    assert np.all(b["self"][:, :, T.enemy_id_columns()] == 0.0)
-    assert np.all(b["self"][:, 1:, T.stat_columns()] == b["self"][:, :1, T.stat_columns()])
+    assert np.all(b["self"][:, :, T.enemy_id_columns("modern-world-v1")] == 0.0)
+    assert np.all(b["self"][:, 1:, T.stat_columns("modern-world-v1")] == b["self"][:, :1, T.stat_columns("modern-world-v1")])
 
 
 def test_hold_weight_scales_held_decisions():

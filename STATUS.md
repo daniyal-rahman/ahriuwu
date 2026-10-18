@@ -96,5 +96,9 @@ Multi-champion work (`docs/modern/MULTICHAMP.md`, approved 2026-10-18): the cham
 `/mnt/nfs/datasets/rofl_champion_catalogs_2619_20261018` + Data Dragon), observation profile
 `modern-world-v2` (identity embeddings + kit descriptors; default stays v1), the converter/trainer/gate plumbing
 and the footer survey of the 16.19 archive (`/mnt/nfs/datasets/rofl_top_survey_2619_20261018`: 7,658 build
-games, 15,316 top-lane champion-games, 157 champions) are in (fb3ddcf7). Next: the v1-vs-v2 regression on
-Garen and Jax, then the bulk top-laner export.
+games, 15,316 top-lane champion-games, 157 champions) are in (fb3ddcf7). The regression passed (two seeds: CS 46/45 vs 37/38, deaths 2.9/3.1 vs 2.5/2.3, lane
+distance 1110/1160 vs 1680/1620) and `modern-world-v2` is the default observation profile; checkpoints
+without a profile field are read as v1. The Jax export is complete (379 games) and its v2 dataset
+(`/mnt/nfs/shared/bc_modern_jax_v2obs`, 367 games) is training the Jax clone (job 8444). The bulk top-lane
+export (`rofl_bc_2619_top_all_native_20261018`, 7,455 games, chunks 8299/8307/8309 queued, more to submit)
+is running on the desktop.

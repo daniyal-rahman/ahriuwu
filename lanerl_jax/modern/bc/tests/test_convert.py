@@ -33,7 +33,7 @@ def test_spell_state_follows_garen_rules():
 
 
 def test_self_columns_match_the_builder_layout():
-    col = C._self_columns()
+    col = C._self_columns("modern-world-v1")
     assert col["ad"] == 10 and col["dead"] == 14 and col["own_Garen"] == 16
     assert col["enemy_Garen"] == 16 + len(K.KITS) and col["trinket"] == OB.MODERN_WORLD_SELF_DIM - 1
 
@@ -58,7 +58,7 @@ def test_real_game_round_trip(tmp_path):
     bc = C.convert_game(GAME, window=(300.0, 330.0))
     T = len(bc.t)
     assert T == 300 and bc.entities.shape == (T, OB.N_SLOTS, OB.MODERN_ENTITY_DIM)
-    assert bc.self_vec.shape == (T, OB.MODERN_WORLD_SELF_DIM) and bc.global_vec.shape == (T, OB.GLOBAL_DIM)
+    assert bc.self_vec.shape == (T, OB.self_dim(OB.PROFILE)) and bc.global_vec.shape == (T, OB.GLOBAL_DIM)
     assert np.isfinite(bc.entities).all() and np.isfinite(bc.self_vec).all()
     assert bc.button.max() < len(MODERN_BUTTONS) and bc.meta["counts"]["label_valid"] > 0
     lc = bc.meta["label_check"]

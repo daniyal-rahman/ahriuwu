@@ -96,6 +96,23 @@ against the 14 sim kits' `UNIT_TARGET_RANGE` in a test. In the sim only the 14 k
 
 ## 7. Regression before switching the default
 
+Result (2026-10-18, runs `modern-bc-v3-castw` on v1 and `modern-bc-v4-garen-v2obs` on v2, same data and recipe,
+64-episode gates vs the afk Jax, two seeds each):
+
+| | v3 (v1 obs) seeds 0 / 1 | v4 (v2 obs) seeds 0 / 1 |
+|---|---|---|
+| weighted validation NLL | 0.580 | 0.596 |
+| CS at 10:00 | 37.0 / 38.1 | 46.0 / 44.7 |
+| deaths | 2.5 / 2.3 | 2.9 / 3.1 |
+| distance from the lane centre | 1680 / 1620 | 1110 / 1160 |
+
+Decision: v2 is the default (`obs.PROFILE`) from commit after fb3ddcf7. Eight more CS and a policy that stays
+in lane outweigh the half-death and the 0.016 of validation loss, which is within the margin set below; the extra
+deaths come with the extra lane time. v1 stays selectable (`--profile modern-world-v1`), and checkpoints written
+before the profile field are read as v1 by their self width (`restore_policy_config`).
+
+Original criteria:
+
 Retrain Garen (v3 recipe: class weights x5 on casts, 24 epochs) and Jax on v2 and compare with the v1 runs:
 weighted validation NLL, per-button recall, and the 64-episode gate (CS, deaths, lane distance) against the
 afk Jax. Pass = no gate metric worse by more than its seed noise (about 3 CS, 0.3 deaths) and validation

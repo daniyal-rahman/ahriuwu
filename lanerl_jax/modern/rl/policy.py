@@ -14,14 +14,14 @@ import jax
 import jax.numpy as jnp
 
 from ..actions import MODERN_BUTTONS
-from ..obs import MODERN_ENTITY_DIM, MODERN_WORLD_SELF_DIM, N_SLOTS, PROFILE, V2_ID_COLUMNS, self_dim
+from ..obs import MODERN_ENTITY_DIM, N_SLOTS, PROFILE, V2_ID_COLUMNS, profile_of, self_dim
 from ..screen import N_SCREEN_X, N_SCREEN_Y
 
 
 class PolicyConfig(NamedTuple):
     n_slots: int = N_SLOTS
     entity_dim: int = MODERN_ENTITY_DIM
-    self_dim: int = MODERN_WORLD_SELF_DIM
+    self_dim: int = self_dim(PROFILE)
     global_dim: int = 6
     d_model: int = 128
     n_layers: int = 2
@@ -48,6 +48,15 @@ class PolicyConfig(NamedTuple):
 def make_policy_config(profile: str = PROFILE, **over) -> "PolicyConfig":
     """A PolicyConfig whose self width matches ``profile``."""
     return PolicyConfig(profile=profile, self_dim=self_dim(profile), **over)
+
+
+def restore_policy_config(saved: dict) -> "PolicyConfig":
+    """A PolicyConfig from a checkpoint manifest; checkpoints written before the ``profile`` field (v1) are
+    recognised by their self width."""
+    saved = dict(saved)
+    if "profile" not in saved and "self_dim" in saved:
+        saved["profile"] = profile_of(int(saved["self_dim"]))
+    return PolicyConfig(**saved)
 
 
 class ActionLogits(NamedTuple):

@@ -1,4 +1,4 @@
-"""Observation of the 26.19 modern world for one champion (profile ``modern-world-v1``).
+"""Observation of the 26.19 modern world for one champion (profiles ``modern-world-v1`` / ``modern-world-v2``, default v2).
 
     entities (32, 20)  valid, ds, dn, hp_frac, 6 type (champion, minion, turret, inhibitor, nexus, other),
                        3 team (ally, enemy, neutral), 3 minion subtype (melee, caster, siege; super = siege),
@@ -42,7 +42,7 @@ from .role_quest import THRESHOLD
 from .screen import target_on_screen
 from .world.views import champion_stats
 
-PROFILE = "modern-world-v1"
+PROFILE = "modern-world-v2"       # the default since 2026-10-18 (docs/modern/MULTICHAMP.md §7); v1 stays selectable
 MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion one-hots (every kit, not the roster:
                                                 # the policy input does not depend on what a world compiles)
 #: ``modern-world-v2`` (docs/modern/MULTICHAMP.md §4): [own index, enemy index, skill tier] as floats, the 28

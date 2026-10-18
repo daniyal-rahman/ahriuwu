@@ -43,7 +43,7 @@ from .actions import PROFILE as MA_PROFILE
 from .core import types as W
 from .data import loadouts as DL
 from .rl.learner import Transition, VecRunner, make_batch_fn, make_learner, ppo_learn
-from .rl.policy import LanePolicy, PolicyConfig, make_policy_config
+from .rl.policy import LanePolicy, PolicyConfig, make_policy_config, restore_policy_config
 from .rl.ppo import PPOConfig, factored_log_prob
 from .runes import catalog as RD
 
@@ -492,7 +492,7 @@ def main(argv=None) -> None:
         saved = json.loads((a.init_from.parent / "manifest.json").read_text()).get("config", {}).get(
             "train", {}).get("policy", {})
         if saved:
-            pcfg = PolicyConfig(**saved)
+            pcfg = restore_policy_config(saved)
     buttons_off = tuple(b for b in a.buttons_off.split(",") if b)
     cfg = ModernVecConfig(n_envs=a.envs, rollout_steps=a.rollout, n_updates=a.updates, n_minibatches=a.minibatches,
                           episode_s=a.episode_s, start_s=a.start_s, step_ticks=a.step_ticks, action_delay_ticks=a.action_delay_ticks,
