@@ -58,9 +58,10 @@ from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
 from ..world.views import visibility
 from .labels import label_actions, cast_rules
 from .replay import BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, read_game
+from ..data import champion_table as CT
 
 __all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "spell_state", "parse_lag",
-           "world_config"]
+           "world_config", "cooldown_tables", "stand_in_kit"]
 
 #: Game clock 0:30 (the first wave leaves the base) to 14:00.
 LANE_WINDOW_S = (30.0, 840.0)
@@ -202,6 +203,17 @@ def spell_state(t, casts, attack_times, rank_at, haste_at):
 _RECEIPT_WINDOW_S = 1.5      # a cast whose slot gets no countdown message within this is timed from the kit table
 
 
+def cooldown_tables(champion: str) -> list[list[float]]:
+    """Base cooldowns by rank per slot: the sim kit's table for a registered kit, else the champion table's."""
+    if champion in K.BY_NAME:
+        return [list(kit_cooldowns(champion, s)) for s in "QWER"]
+    idx = CT.index_of(champion)
+    if idx == 0:
+        raise ValueError(f"{champion!r} has neither a sim kit nor a champion-table row")
+    row = CT.champions()[idx - 1]
+    return [list(CT._cooldown_ranks(d, c))[:c] for d, c in zip(row["slots"], CT.rank_cap(row))]   # no kit: catalog
+
+
 def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
     """(T, 4) seconds of cooldown left from the server's received countdowns (``replay.cooldown_events``,
     exports with the countdown fix): after each message for slot ``s`` the timer is ``t_msg + remaining - t``
@@ -210,7 +222,7 @@ def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
     ``_RECEIPT_WINDOW_S`` is counted in ``fallback``. Returns ``(cooldown (T, 4), fallback)``."""
     t = np.asarray(t, float)
     cooldown = np.zeros((len(t), 4))
-    tables = [list(kit_cooldowns(kit_name, s)) for s in "QWER"]
+    tables = cooldown_tables(kit_name)
     fallback = 0
     for slot in range(4):
         msgs = sorted((te, rem) for te, sl, rem, _dur, _mode in events if sl == slot)
@@ -425,15 +437,36 @@ def _vmapped(fn, fields):
     return jax.tree.map(lambda *a: np.concatenate(a), *parts)
 
 
-def _self_columns():
+def _self_names(profile: str = OB.PROFILE) -> list[str]:
+    """Names of the self-vector columns of a profile (`obs.build_modern_observation`)."""
+    head = ["s", "n", "hp", "level", "gold", "cs", "cd_q", "cd_w", "cd_e", "cd_r", "ad", "ap", "armor", "mr",
+            "dead", "recalling"]
+    tail = ["mana", "shield", "summ_d", "summ_f", "next_level", "quest", "quest_done", "in_combat", "ms",
+            "range", "skill_points", "trinket"]
+    if profile == "modern-world-v2":
+        names = ["own_id", "enemy_id", "tier", *head, *tail, "rank_q", "rank_w", "rank_e", "rank_r",
+                 *CT.side_columns("own"), *CT.side_columns("enemy")]
+    else:
+        names = [*head, *(f"own_{x.NAME}" for x in K.KITS), *(f"enemy_{x.NAME}" for x in K.KITS), *tail]
+    assert len(names) == OB.self_dim(profile)
+    return names
+
+
+def _self_columns(profile: str = OB.PROFILE):
     """Column index of each named self feature (`obs.build_modern_observation`)."""
-    k = len(K.KITS)
-    names = ["s", "n", "hp", "level", "gold", "cs", "cd_q", "cd_w", "cd_e", "cd_r", "ad", "ap", "armor", "mr",
-             "dead", "recalling", *(f"own_{x.NAME}" for x in K.KITS), *(f"enemy_{x.NAME}" for x in K.KITS),
-             "mana", "shield", "summ_d", "summ_f", "next_level", "quest", "quest_done", "in_combat", "ms",
-             "range", "skill_points", "trinket"]
-    assert len(names) == OB.MODERN_WORLD_SELF_DIM == 16 + 2 * k + 12
-    return {n: i for i, n in enumerate(names)}
+    return {n: i for i, n in enumerate(_self_names(profile))}
+
+
+def stand_in_kit(champion: str) -> str:
+    """The sim kit a champion without one borrows for the world template (its identity, descriptors, cooldown
+    normalisation and stats are overwritten from the replay and the champion table): Ezreal when ranged by the
+    table's attack range, else Garen."""
+    if champion in K.BY_NAME:
+        return champion
+    idx = CT.index_of(champion)
+    if idx == 0:
+        raise ValueError(f"{champion!r} is not in the champion table")
+    return "Ezreal" if CT.champions()[idx - 1]["stats"]["attack_range"] > 300 else "Garen"
 
 
 def _label_check(g, labels, valid, order, unit_of_slot, slot_unit):
@@ -469,8 +502,16 @@ def _label_check(g, labels, valid, order, unit_of_slot, slot_unit):
         move_point_error_p90=float(np.percentile(miss, 90)) if len(miss) else None)
 
 
-def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", hold: bool = True) -> BCGame:
-    """One game's decisions over `window` (game seconds) for `champion`, no lag."""
+def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", hold: bool = True,
+                 profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER) -> BCGame:
+    """One game's decisions over `window` (game seconds) for `champion`, no lag. ``profile`` is the observation
+    layout (`obs.PROFILES`); under ``modern-world-v2`` any champion of the build can be the actor (a sim kit stands
+    in for the world template) and ``tier`` is the skill tier the self vector reports."""
+    if profile not in OB.PROFILES:
+        raise ValueError(f"unknown observation profile {profile!r}")
+    v2 = profile == "modern-world-v2"
+    if champion not in K.BY_NAME and not v2:
+        raise ValueError(f"{champion}: no sim kit; convert with profile modern-world-v2")
     t = decision_times(*window)
     g = read_game(game_dir, t, champion)
     T = len(t)
@@ -478,7 +519,8 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     me_team = g.units[i_me].team
     registered = g.opponent_name in K.BY_NAME
     opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
-    cfg = world_config(*((champion, opp_kit) if me_team == BLUE else (opp_kit, champion)))
+    me_kit = stand_in_kit(champion)
+    cfg = world_config(*((me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)))
     frames = _frames(g, cfg)
     frame = frames[me_team]
     me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
@@ -518,7 +560,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
 
     def observe(x):
         s = state_of(x)
-        obs = OB.build_modern_observation(s, s_me, frame, cfg, horizon_s=_HORIZON_S)
+        obs = OB.build_modern_observation(s, s_me, frame, cfg, horizon_s=_HORIZON_S, profile=profile, tier=tier)
         action = tuple(jnp.zeros(2, jnp.int32).at[s_me].set(v) for v in x["label"])
         o = modern_orders_from(action, s, frames)
         order = dict(attack=o.attack[s_me], move_x=o.move_x[s_me], move_y=o.move_y[s_me],
@@ -527,7 +569,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     (entities, pad, self_vec, global_vec, slot_unit), order = _vmapped(observe, f)
 
     # Patches from the replay: the self block's combat stats and the enemy identity.
-    col = _self_columns()
+    col = _self_columns(profile)
     me_stats, opp_stats = g.champion_stats[:, 0], g.champion_stats[:, 1]
     self_vec = np.array(self_vec)
     self_vec[:, col["ad"]] = me_stats[:, 0] / OB.NORM_AD
@@ -540,7 +582,26 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     self_vec[:, col["range"]] = me_stats[:, 9] / 600.0
     patched = ["ad", "ap", "armor", "mr", "mana", "shield", "ms", "range"]
     global_vec = np.array(global_vec)
-    if not registered:
+    own_idx, opp_idx = CT.index_of(champion), CT.index_of(g.opponent_name)
+    if v2:
+        # Identity, descriptors and cooldown normalisation from the champion table, whatever kits the world
+        # template borrowed; the skill tier the dataset declares.
+        self_vec[:, col["own_id"]], self_vec[:, col["enemy_id"]], self_vec[:, col["tier"]] = own_idx, opp_idx, tier
+        desc = CT.descriptors()
+        self_vec[:, col["own_attack_range"]:col["own_attack_range"] + CT.SIDE_DIM] = desc[own_idx]
+        self_vec[:, col["enemy_attack_range"]:col["enemy_attack_range"] + CT.SIDE_DIM] = desc[opp_idx]
+        ranks = np.maximum(f["ranks"][:, s_me], 1)
+        base = CT.cooldowns()[own_idx][np.arange(4)[None, :], np.clip(ranks - 1, 0, CT.MAX_RANKS - 1)]
+        frac = np.where(f["ranks"][:, s_me] > 0, np.clip(f["cooldowns"][:, s_me] / np.maximum(base, 1e-3), 0, 1), 1.0)
+        for i, nm in enumerate(("cd_q", "cd_w", "cd_e", "cd_r")):
+            self_vec[:, col[nm]] = frac[:, i]
+        patched += ["identity and descriptors (champion table)", "cooldown fractions (champion table)"]
+        if not registered:
+            since = t[:, None] - f["seen_cast"][:, other]
+            rank1 = CT.cooldowns()[opp_idx][:, 0] if opp_idx else np.asarray(_UNKNOWN_KIT_RANK1_CD)
+            global_vec[:, 2:] = np.where(f["seen_cast"][:, other] > -1e8, np.clip(since / rank1, 0.0, 1.0), 1.0)
+            patched += ["enemy cast memory (no kit: champion-table rank-1 cooldowns)"]
+    elif not registered:
         for k in K.KITS:
             self_vec[:, col[f"enemy_{k.NAME}"]] = 0.0
         since = t[:, None] - f["seen_cast"][:, other]
@@ -554,8 +615,9 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     label_valid = in_scope & labels.representable
     meta = dict(
         provenance=dict(g.provenance, converter_commit=_converter_commit(),
-                        world_profile=cfg.profile, obs_profile=OB.PROFILE, action_profile="modern-world-v2"),
-        champion=champion, opponent=g.opponent_name, opponent_kit=g.opponent_name if registered else None,
+                        world_profile=cfg.profile, obs_profile=profile, action_profile="modern-world-v2"),
+        champion=champion, champion_kit=me_kit, champion_index=own_idx, opponent=g.opponent_name,
+        opponent_kit=g.opponent_name if registered else None, opponent_index=opp_idx, skill_tier=tier,
         team="blue" if me_team == BLUE else "red", summoners=list(g.summoners), window_s=list(window),
         decisions=T,
         counts=dict(in_scope=int(in_scope.sum()), label_valid=int(label_valid.sum()),

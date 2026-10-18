@@ -32,6 +32,8 @@ import numpy as np
 from .replay import STAT_NAMES, STAT_SCALE, DECODER_SCRIPTS, decoder_commit
 from ..actions import MODERN_BUTTONS as BUTTONS_WITH_STOP
 from .convert import LANE_WINDOW_S, convert_game, parse_lag
+from .. import obs as OB
+from ..data import champion_table as CT
 
 __all__ = ["DATASETS", "MIN_GAME_S", "VAL_SHARE", "plan", "convert", "finalize"]
 
@@ -63,7 +65,8 @@ def _combat_type(export: Path, champion_id: int) -> int:
     return int(f["values"][rows[np.argmin(f["update_index"][rows])]])
 
 
-def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=DATASETS) -> dict:
+def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=DATASETS,
+         profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER) -> dict:
     games, skipped = [], []
     datasets = tuple(Path(d) for d in datasets)
     for dataset in datasets:
@@ -103,7 +106,7 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
-    result = dict(lag=lag, hold=hold, champion=champion, window_s=list(LANE_WINDOW_S),
+    result = dict(lag=lag, hold=hold, champion=champion, profile=profile, tier=tier, window_s=list(LANE_WINDOW_S),
                   min_game_s=MIN_GAME_S, val_share=VAL_SHARE, vocabulary=vocabulary,
                   datasets={str(d): decoder_commit(d) for d in datasets},
                   games=games, skipped=skipped)
@@ -123,7 +126,8 @@ def convert(out: Path, task: int, tasks: int):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
             continue
-        bc = convert_game(Path(g["path"]), champion=p.get("champion", CHAMPION), hold=p.get("hold", True))
+        bc = convert_game(Path(g["path"]), champion=p.get("champion", CHAMPION), hold=p.get("hold", True),
+                          profile=p.get("profile", OB.PROFILE), tier=p.get("tier", CT.ARCHIVE_TIER))
         bc = bc.lagged(lag, seed=_seed(g["game"]))
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
         bc.save(out / "games")
@@ -172,7 +176,7 @@ def finalize(out: Path) -> dict:
         converter_commit=commits, observation_lag=p["lag"], hold=p.get("hold", True), vocabulary=p["vocabulary"],
         stats=dict(names=list(STAT_NAMES), scale=list(STAT_SCALE)), buttons=list(BUTTONS_WITH_STOP),
         cooldown_fields_read=bool(rows) and all(r["cooldown_fields_read"] for r in rows),
-        profiles=dict(obs="modern-world-v1", actions="modern-world-v2"),
+        profiles=dict(obs=p.get("profile", OB.PROFILE), actions="modern-world-v2"), skill_tier=p.get("tier"),
         totals=dict(all=totals(rows), train=totals([r for r in rows if r["split"] == "train"]),
                     val=totals([r for r in rows if r["split"] == "val"])),
         opponents={o: _opponent_row([r for r in rows if r["opponent"] == o])
@@ -199,6 +203,8 @@ def main():
     a.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
     a.add_argument("--champion", default=CHAMPION, help="the cloned champion (a registered modern kit)")
     a.add_argument("--datasets", nargs="+", type=Path, default=list(DATASETS), help="exported batch directories")
+    a.add_argument("--profile", default=OB.PROFILE, choices=OB.PROFILES, help="observation profile")
+    a.add_argument("--tier", type=int, default=CT.ARCHIVE_TIER, help="skill tier recorded in v2 (8 = Master)")
     a = sub.add_parser("convert")
     a.add_argument("out", type=Path)
     a.add_argument("task", type=int)
@@ -207,7 +213,8 @@ def main():
     a.add_argument("out", type=Path)
     args = parser.parse_args()
     if args.command == "plan":
-        p = plan(args.out, args.lag, hold=not args.no_hold, champion=args.champion, datasets=args.datasets)
+        p = plan(args.out, args.lag, hold=not args.no_hold, champion=args.champion, datasets=args.datasets,
+                 profile=args.profile, tier=args.tier)
         print(len(p["games"]), "games,", len(p["skipped"]), "skipped,",
               Counter(g["split"] for g in p["games"]))
     elif args.command == "convert":

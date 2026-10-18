@@ -13,6 +13,10 @@
     affordable (I,)    store rows the shop would sell this champion now
     global   (6,)      clock, enemy_visible, 4x time since the enemy was seen casting Q/W/E/R
 
+Profile ``modern-world-v2`` (``build_modern_observation(..., profile=)``) replaces the two kit one-hots with
+[own index, enemy index, skill tier] in the first three columns, own ranks/5 and the champion table's descriptor
+blocks (docs/modern/MULTICHAMP.md §4); cooldown normalisation then reads the table, not the sim kit.
+
 Only visible, on-screen units are slotted (fogged units are absent, never stale), nearest first per block
 (enemy champion 1, ally minions 12, enemy minions 12, structures 2, anything else 5). Health is quantised to
 the health bar; the enemy's cast memory is normalised by rank-1 cooldowns so its ranks do not leak.
@@ -27,6 +31,7 @@ import numpy as np
 
 from . import champions as K
 from . import economy as E
+from .data import champion_table as CT
 from .champions.core import cooldown_row
 from .core import damage as D
 from .core import types as W
@@ -40,6 +45,18 @@ from .world.views import champion_stats
 PROFILE = "modern-world-v1"
 MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion one-hots (every kit, not the roster:
                                                 # the policy input does not depend on what a world compiles)
+#: ``modern-world-v2`` (docs/modern/MULTICHAMP.md §4): [own index, enemy index, skill tier] as floats, the 28
+#: v1 columns without the one-hots, own ranks/5 (4), then the champion table's descriptor block for own and enemy.
+V2_ID_COLUMNS = 3
+V2_SELF_DIM = V2_ID_COLUMNS + 28 + 4 + 2 * CT.SIDE_DIM
+PROFILES = ("modern-world-v1", "modern-world-v2")
+SELF_DIM = {"modern-world-v1": MODERN_WORLD_SELF_DIM, "modern-world-v2": V2_SELF_DIM}
+
+
+def self_dim(profile: str = PROFILE) -> int:
+    if profile not in SELF_DIM:
+        raise ValueError(f"unknown observation profile {profile!r}")
+    return SELF_DIM[profile]
 MODERN_ENTITY_DIM = 20
 N_SLOTS, GLOBAL_DIM = 32, 6
 NORM_DIST = NORM_XY = NORM_GOLD = 3000.0
@@ -75,8 +92,12 @@ def modern_frames(cfg) -> tuple[LaneFrame, LaneFrame]:
     return (make_lane_frame(outer[0], outer[1], nexus[0]), make_lane_frame(outer[1], outer[0], nexus[1]))
 
 
-def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0) -> ModernObservation:
-    """One champion's observation of the modern world. ``me`` is its unit index (0 or 1)."""
+def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0,
+                             profile: str = PROFILE, tier: int = CT.ARCHIVE_TIER) -> ModernObservation:
+    """One champion's observation of the modern world. ``me`` is its unit index (0 or 1). ``profile`` selects
+    the self-vector layout (``PROFILES``); ``tier`` is the skill tier v2 reports (the archive convention)."""
+    if profile not in SELF_DIM:
+        raise ValueError(f"unknown observation profile {profile!r}")
     n = state.kind.shape[0]
     other = 1 - me
     my_team = state.team[me]
@@ -138,35 +159,48 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         for k in reversed(cfg.kits[:-1]):
             out = jnp.where(cid[who] == k.ID, cooldown_row(k.NAME, ranks[None]), out)
         return out[0]
-    base_cd = rank_cd(me, jnp.maximum(c.ranks[me], 1))
+    v2 = profile == "modern-world-v2"
+    idx = jnp.asarray(CT.riot_lookup())[jnp.clip(cid, 0, CT.riot_lookup().shape[0] - 1)]   # (C,) table index
+    if v2:
+        cd_table = jnp.asarray(CT.cooldowns())                                  # (N + 1, 4, MAX_RANKS)
+        ranks_me = jnp.clip(jnp.maximum(c.ranks[me], 1) - 1, 0, CT.MAX_RANKS - 1)
+        base_cd = cd_table[idx[me]][jnp.arange(4), ranks_me]
+    else:
+        base_cd = rank_cd(me, jnp.maximum(c.ranks[me], 1))
     cooldowns = jnp.where(c.ranks[me] > 0, jnp.clip(c.cooldowns[me] / jnp.maximum(base_cd, 1e-3), 0.0, 1.0), 1.0)
     shield = D.total_shield(state.shields, state.t)[me]
     summ_cd = jnp.clip((state.summoners.ready_at[me, :2] - state.t) / 300.0, 0.0, 1.0)
     cap = jnp.where(state.econ.quest.complete[me], E.QUEST_LEVEL_CAP, E.LEVEL_CAP)
     nxt = E.decimal_level(state.econ.xp[me], cap) - level[me]
     in_combat = (state.t - state.combat.clocks.last_champion_combat[me]) < 5.0
-    self_vec = jnp.stack([
-        s_ / NORM_XY, n_ / NORM_XY, jnp.round(my_hp * HP_BAR_STEPS) / HP_BAR_STEPS,
-        level[me].astype(jnp.float32) / 20.0, state.econ.gold[me] / NORM_GOLD, c.cs[me].astype(jnp.float32) / NORM_CS,
-        cooldowns[0], cooldowns[1], cooldowns[2], cooldowns[3],
-        (st.base_ad[me] + st.bonus_ad[me]) / NORM_AD, st.ap[me] / NORM_AD,
-        (st.base_armor[me] + st.bonus_armor[me]) / NORM_AD, (st.base_mr[me] + st.bonus_mr[me]) / NORM_AD,
-        (~state.alive[me]).astype(jnp.float32), state.econ.recall.channeling[me].astype(jnp.float32),
-        *((cid[me] == k.ID).astype(jnp.float32) for k in K.KITS),
-        *((cid[other] == k.ID).astype(jnp.float32) for k in K.KITS),
-        K.resource_fraction(state.kits, cid, c.mana / jnp.maximum(st.max_mana, 1.0))[me],
-        shield / jnp.maximum(state.max_hp[me], 1.0),
-        summ_cd[0], summ_cd[1], nxt, jnp.clip(state.econ.quest.points[me] / THRESHOLD, 0.0, 1.0),
-        state.econ.quest.complete[me].astype(jnp.float32), in_combat.astype(jnp.float32),
-        st.move_speed[me] / 500.0, st.attack_range[me] / 600.0,
-        (E.skill_points(level[me]) + c.bonus_points[me]
-         - jnp.sum(c.ranks[me] - K.rank_tables(cid, cfg.kits)[1][me])).astype(jnp.float32) / 4.0,
-        state.wards.trinket.charges[me].astype(jnp.float32) / 2.0])
-    assert self_vec.shape[0] == MODERN_WORLD_SELF_DIM
+    head = [s_ / NORM_XY, n_ / NORM_XY, jnp.round(my_hp * HP_BAR_STEPS) / HP_BAR_STEPS,
+            level[me].astype(jnp.float32) / 20.0, state.econ.gold[me] / NORM_GOLD, c.cs[me].astype(jnp.float32) / NORM_CS,
+            cooldowns[0], cooldowns[1], cooldowns[2], cooldowns[3],
+            (st.base_ad[me] + st.bonus_ad[me]) / NORM_AD, st.ap[me] / NORM_AD,
+            (st.base_armor[me] + st.bonus_armor[me]) / NORM_AD, (st.base_mr[me] + st.bonus_mr[me]) / NORM_AD,
+            (~state.alive[me]).astype(jnp.float32), state.econ.recall.channeling[me].astype(jnp.float32)]
+    one_hots = [*((cid[me] == k.ID).astype(jnp.float32) for k in K.KITS),
+                *((cid[other] == k.ID).astype(jnp.float32) for k in K.KITS)]
+    tail = [K.resource_fraction(state.kits, cid, c.mana / jnp.maximum(st.max_mana, 1.0))[me],
+            shield / jnp.maximum(state.max_hp[me], 1.0),
+            summ_cd[0], summ_cd[1], nxt, jnp.clip(state.econ.quest.points[me] / THRESHOLD, 0.0, 1.0),
+            state.econ.quest.complete[me].astype(jnp.float32), in_combat.astype(jnp.float32),
+            st.move_speed[me] / 500.0, st.attack_range[me] / 600.0,
+            (E.skill_points(level[me]) + c.bonus_points[me]
+             - jnp.sum(c.ranks[me] - K.rank_tables(cid, cfg.kits)[1][me])).astype(jnp.float32) / 4.0,
+            state.wards.trinket.charges[me].astype(jnp.float32) / 2.0]
+    if v2:
+        desc = jnp.asarray(CT.descriptors())                                    # (N + 1, SIDE_DIM)
+        ids = [idx[me].astype(jnp.float32), idx[other].astype(jnp.float32), jnp.asarray(tier, jnp.float32)]
+        self_vec = jnp.concatenate([jnp.stack(ids + head + tail), c.ranks[me].astype(jnp.float32) / 5.0,
+                                    desc[idx[me]], desc[idx[other]]])
+    else:
+        self_vec = jnp.stack(head + one_hots + tail)
+    assert self_vec.shape[0] == SELF_DIM[profile]
 
     # ---- global -------------------------------------------------------------------
     enemy_visible = (enemy_champ[0] >= 0).astype(jnp.float32)
-    rank1 = rank_cd(other, jnp.ones((4,), jnp.int32))
+    rank1 = cd_table[idx[other]][:, 0] if v2 else rank_cd(other, jnp.ones((4,), jnp.int32))
     # Witnessed casts only: the enemy was visible to this team when it cast (``seen_cast``).
     since = state.t - c.seen_cast[other]
     since_observed = jnp.where(c.seen_cast[other] > -1e8, jnp.clip(since / jnp.maximum(rank1, 1e-3), 0.0, 1.0), 1.0)

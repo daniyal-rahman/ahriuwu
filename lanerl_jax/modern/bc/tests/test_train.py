@@ -57,8 +57,8 @@ def test_dropout_zeroes_enemy_identity():
     games = [_game("a", 40)]
     rng = np.random.default_rng(0)
     b = T.batch_of(games, T.windows(games, 40, None), 40, 0, rng, enemy_id_dropout=1.0, stat_dropout=1.0)
-    assert np.all(b["self"][:, :, T.ENEMY_ID_COLUMNS] == 0.0)
-    assert np.all(b["self"][:, 1:, T.STAT_COLUMNS] == b["self"][:, :1, T.STAT_COLUMNS])
+    assert np.all(b["self"][:, :, T.enemy_id_columns()] == 0.0)
+    assert np.all(b["self"][:, 1:, T.stat_columns()] == b["self"][:, :1, T.stat_columns()])
 
 
 def test_hold_weight_scales_held_decisions():

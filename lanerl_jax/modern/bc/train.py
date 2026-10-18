@@ -38,17 +38,36 @@ import optax
 
 from .. import champions as K
 from ..actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS
-from ..obs import MODERN_WORLD_SELF_DIM
-from ..rl.policy import LanePolicy, PolicyConfig
+from .. import obs as OB
+from ..rl.policy import LanePolicy, make_policy_config
 from ..train import DEFAULT_BUTTONS_OFF
+from .convert import _self_columns
 from .targets import gaussian_target
 
 __all__ = ["Game", "load_games", "windows", "make_loss", "evaluate", "main"]
 
-_K = len(K.KITS)
-ENEMY_ID_COLUMNS = slice(16 + _K, 16 + 2 * _K)
-#: Self columns patched from the replay's replicated stats (`convert._self_columns`).
-STAT_COLUMNS = np.asarray([10, 11, 12, 13, 16 + 2 * _K + 8, 16 + 2 * _K + 9])     # ad, ap, armor, mr, ms, range
+
+def enemy_id_columns(profile: str = OB.PROFILE):
+    """Self columns that name the enemy champion: the kit one-hot (v1) or the enemy index (v2); zeroed by
+    ``--enemy-id-dropout`` (an unknown opponent; under v2 the descriptor block stays)."""
+    col = _self_columns(profile)
+    if profile == "modern-world-v2":
+        return np.asarray([col["enemy_id"]])
+    return np.asarray([col[f"enemy_{x.NAME}"] for x in K.KITS])
+
+
+def stat_columns(profile: str = OB.PROFILE):
+    """Self columns patched from the replay's replicated stats (`convert._self_columns`): ad, ap, armor, mr, ms, range."""
+    col = _self_columns(profile)
+    return np.asarray([col[n] for n in ("ad", "ap", "armor", "mr", "ms", "range")])
+
+
+def dataset_profile(dataset: Path) -> str:
+    """The observation profile a converted dataset was built with (its manifest, else plan.json, else v1)."""
+    manifest = dataset / "manifest.json"
+    if manifest.exists():
+        return json.loads(manifest.read_text()).get("profiles", {}).get("obs", OB.PROFILE)
+    return json.loads((dataset / "plan.json").read_text()).get("profile", OB.PROFILE)
 
 
 class Game(NamedTuple):
@@ -58,7 +77,7 @@ class Game(NamedTuple):
     kit_known: bool
     entities: np.ndarray        # (T, 32, 20) float16
     pad: np.ndarray             # (T, 32) bool
-    self_vec: np.ndarray        # (T, 56) float32
+    self_vec: np.ndarray        # (T, obs.self_dim(profile)) float32
     global_vec: np.ndarray      # (T, 6) float32
     button: np.ndarray          # (T,) int32
     sx: np.ndarray
@@ -103,13 +122,15 @@ def windows(games: list[Game], window: int, rng: np.random.Generator | None):
 
 
 def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random.Generator | None,
-             enemy_id_dropout: float = 0.0, stat_dropout: float = 0.0, hold_weight: float = 1.0):
+             enemy_id_dropout: float = 0.0, stat_dropout: float = 0.0, hold_weight: float = 1.0,
+             profile: str = OB.PROFILE):
     """Stack windows into a batch dict of arrays [N, window, ...]; `weight` is the loss weight per decision
     (`hold_weight` for held labels), `held` marks them."""
     n = len(items)
+    enemy_cols, stat_cols = enemy_id_columns(profile), stat_columns(profile)
     ent = np.zeros((n, window, 32, 20), np.float32)
     pad = np.ones((n, window, 32), bool)
-    sv = np.zeros((n, window, MODERN_WORLD_SELF_DIM), np.float32)
+    sv = np.zeros((n, window, OB.self_dim(profile)), np.float32)
     gv = np.zeros((n, window, 6), np.float32)
     button = np.zeros((n, window), np.int32)
     sx = np.zeros((n, window), np.int32)
@@ -136,9 +157,9 @@ def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random
         click[j, :L] = g.click[s:e]
         on_unit[j, :L] = g.on_unit[s:e]
         if rng is not None and enemy_id_dropout > 0 and rng.random() < enemy_id_dropout:
-            sv[j, :, ENEMY_ID_COLUMNS] = 0.0
+            sv[j, :, enemy_cols] = 0.0
         if rng is not None and stat_dropout > 0 and rng.random() < stat_dropout:
-            sv[j, :, STAT_COLUMNS] = sv[j, :1, STAT_COLUMNS]
+            sv[j, :, stat_cols] = sv[j, :1, stat_cols]
     return dict(entities=ent, mask=pad, self=sv, global_=gv, button=button, sx=sx, sy=sy, weight=weight,
                 click=click, on_unit=on_unit, held=held)
 
@@ -303,7 +324,11 @@ def main(argv=None):
         bw[MODERN_BUTTON_INDEX[name]] = float(v)
     buttons_off = tuple(b for b in a.buttons_off.split(",") if b)
     off = tuple(sorted(MODERN_BUTTON_INDEX[b] for b in buttons_off))
-    pcfg = PolicyConfig(core=a.core, core_norm=not a.no_core_norm, core_residual=not a.no_core_residual)
+    profile = dataset_profile(a.dataset)
+    if train and train[0].self_vec.shape[1] != OB.self_dim(profile):
+        raise ValueError(f"dataset self width {train[0].self_vec.shape[1]} is not profile {profile}'s")
+    pcfg = make_policy_config(profile, core=a.core, core_norm=not a.no_core_norm,
+                              core_residual=not a.no_core_residual)
     policy = LanePolicy(pcfg, off)
     loss = make_loss(policy, a.sigma, bw)
     rng = np.random.default_rng(a.seed)
@@ -312,7 +337,7 @@ def main(argv=None):
     schedule = optax.warmup_cosine_decay_schedule(0.0, a.lr, min(a.warmup, max(total_steps // 10, 1)), total_steps,
                                                   end_value=a.lr_floor)
     tx = optax.chain(optax.clip_by_global_norm(a.grad_clip), optax.adam(schedule, eps=1e-5))
-    b0 = batch_of(train, windows(train, a.window, None)[:1], a.window, a.burn_in, None)
+    b0 = batch_of(train, windows(train, a.window, None)[:1], a.window, a.burn_in, None, profile=profile)
     params = policy.init(jax.random.key(a.seed), jnp.asarray(b0["entities"][0, 0]), jnp.asarray(b0["mask"][0, 0]),
                          jnp.asarray(b0["self"][0, 0]), jnp.asarray(b0["global_"][0, 0]), policy.initial_carry(()))
     opt_state = tx.init(params)
@@ -328,7 +353,7 @@ def main(argv=None):
         "dataset": {"path": str(a.dataset), "train_games": len(train), "val_games": len(val),
                     "train_decisions": n_train},
         "buttons_off": buttons_off, "button_weights": bw.tolist(), "n_params": n_params,
-        "observation": "modern-world-v1 (converted replays)", "action": "modern-world-v2 (button, sx, sy)"},
+        "observation": f"{profile} (converted replays)", "action": "modern-world-v2 (button, sx, sy)"},
         notes=a.notes)
     print(f"run dir {run.path}; {n_params} params; {steps_per_epoch} steps/epoch", flush=True)
 

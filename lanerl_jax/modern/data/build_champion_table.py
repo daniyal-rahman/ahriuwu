@@ -65,10 +65,16 @@ def slot_descriptor(catalog: dict, slot: int) -> dict:
         raise ValueError(f"{_value(catalog['champion'])}: slot {slot} cast mode {mode!r}")
     rng0 = float(rng[0]) if rng else 0.0
     cooldown = [float(cd[str(r)]) for r in ranks]
+    source = "catalog"
+    if not cooldown:
+        # No interpreted table: the raw ``cooldownTime`` list is rank-indexed from 1 (Ezreal R: [10, 120, 105, 90, ...]).
+        raw_ct = (_value(root.get("raw_spell_definition")) or {}).get("cooldownTime")
+        if isinstance(raw_ct, list) and len(raw_ct) > 1:
+            cooldown, source = [float(v) for v in raw_ct[1:]], "raw_cooldown_time"
     return dict(name=_value(root["name"]), cast_type=CAST_MODE[mode], cast_mode_raw=mode,
                 range=0.0 if rng0 >= RANGE_SENTINEL else rng0,     # 25000 = "unbounded" on directional spells
                 cooldown_by_rank=cooldown or [DEFAULT_COOLDOWN] * 5,
-                cooldown_source="catalog" if cooldown else "default",
+                cooldown_source=source if cooldown else "default",
                 cast_time=float(_value(root["cast_time_seconds"]) or 0.0),
                 missile_speed=float(_value(root["missile_speed_world_units_per_second"]) or 0.0),
                 **{f: bool(tags & set(TAG_FLAGS[f])) for f in FLAGS}, tags=sorted(tags))

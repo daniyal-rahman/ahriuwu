@@ -43,7 +43,7 @@ from .actions import PROFILE as MA_PROFILE
 from .core import types as W
 from .data import loadouts as DL
 from .rl.learner import Transition, VecRunner, make_batch_fn, make_learner, ppo_learn
-from .rl.policy import LanePolicy, PolicyConfig
+from .rl.policy import LanePolicy, PolicyConfig, make_policy_config
 from .rl.ppo import PPOConfig, factored_log_prob
 from .runes import catalog as RD
 
@@ -291,7 +291,8 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
     horizon = cfg.observation_horizon_s or cfg.episode_s
 
     def _obs(world):
-        per = [OB.build_modern_observation(world, t, env.frames[t], env.wcfg, horizon_s=horizon) for t in (0, 1)]
+        per = [OB.build_modern_observation(world, t, env.frames[t], env.wcfg, horizon_s=horizon, profile=pc.profile)
+               for t in (0, 1)]
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), *per)
 
     lag = int(cfg.observation_lag)
@@ -455,6 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kl-prior", type=float, default=0.0)
     p.add_argument("--lr-anneal", action="store_true")
     p.add_argument("--init-from", type=Path, default=None, help="params only")
+    p.add_argument("--profile", default=OB.PROFILE, choices=OB.PROFILES,
+                   help="observation profile (a checkpoint's own profile wins with --init-from)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--ckpt-every", type=int, default=50)
     p.add_argument("--chunk", type=int, default=1, help="updates per device call")
@@ -483,8 +486,8 @@ def main(argv=None) -> None:
     hz = TICK_HZ / a.step_ticks
     over = {k: v for k, v in (("lr", a.lr), ("entropy_coef", a.entropy_coef)) if v is not None}
     ppo = PPOConfig(decision_hz=hz, kl_prior_coef=a.kl_prior, **over)
-    pcfg = PolicyConfig(core=a.core, core_norm=a.core_norm, core_residual=a.core_residual,
-                        detach_critic=a.detach_critic, **(SMALL_POLICY if a.small_policy else {}))
+    pcfg = make_policy_config(a.profile, core=a.core, core_norm=a.core_norm, core_residual=a.core_residual,
+                              detach_critic=a.detach_critic, **(SMALL_POLICY if a.small_policy else {}))
     if a.init_from is not None and (a.init_from.parent / "manifest.json").exists():
         saved = json.loads((a.init_from.parent / "manifest.json").read_text()).get("config", {}).get(
             "train", {}).get("policy", {})
@@ -516,7 +519,7 @@ def main(argv=None) -> None:
         "train": {"policy": pcfg._asdict()}, "command": command, "cwd": str(Path.cwd()),
         "ppo": ppo._asdict(), "vec": {k: v for k, v in cfg._asdict().items() if k not in ("ppo", "policy")},
         "environment": "jax-vectorised-modern-world", "world": world_desc,
-        "observation": OB.PROFILE, "action": f"{MA_PROFILE} (button, sx, sy); choice heads absent",
+        "observation": pcfg.profile, "action": f"{MA_PROFILE} (button, sx, sy); choice heads absent",
         "buttons_off": buttons_off,
         "opponent": {"mirror": "mirror-self-play", "afk": "afk red (noop)", "frozen": f"frozen {a.opponent_from}"}[
             a.opponent],

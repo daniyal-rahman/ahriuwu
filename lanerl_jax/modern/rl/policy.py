@@ -1,7 +1,8 @@
 """Entity-transformer policy with screen-click heads (button, screen_x, screen_y) and a value head.
 
-Trunk: entity attention blocks pooled max+mean, a context layer over the self/global vectors, an MLP,
-then an optional GRU core. Initialisation is the standard PPO recipe: orthogonal(sqrt 2) trunk,
+Trunk: entity attention blocks pooled max+mean, a context layer over the self/global vectors (profile
+``modern-world-v2``: plus learned embeddings of the own / enemy champion index and the skill tier carried in the
+first three self columns), an MLP, then an optional GRU core. Initialisation is the standard PPO recipe: orthogonal(sqrt 2) trunk,
 orthogonal(0.01) action heads (a near-uniform start), orthogonal(1) value head.
 """
 from __future__ import annotations
@@ -13,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from ..actions import MODERN_BUTTONS
-from ..obs import MODERN_ENTITY_DIM, MODERN_WORLD_SELF_DIM, N_SLOTS
+from ..obs import MODERN_ENTITY_DIM, MODERN_WORLD_SELF_DIM, N_SLOTS, PROFILE, V2_ID_COLUMNS, self_dim
 from ..screen import N_SCREEN_X, N_SCREEN_Y
 
 
@@ -37,6 +38,16 @@ class PolicyConfig(NamedTuple):
     core_norm: bool = False        # LayerNorm the GRU input
     core_residual: bool = False    # heads read trunk + GRU output
     detach_critic: bool = False    # the value head does not train the trunk
+    profile: str = PROFILE         # observation profile (obs.PROFILES); v2 embeds the ids in self_vec[:3]
+    n_champion_ids: int = 256      # embedding rows (>= the champion table + 1; table-independent)
+    champion_embed: int = 16       # own and enemy share one table
+    n_tiers: int = 16
+    tier_embed: int = 4
+
+
+def make_policy_config(profile: str = PROFILE, **over) -> "PolicyConfig":
+    """A PolicyConfig whose self width matches ``profile``."""
+    return PolicyConfig(profile=profile, self_dim=self_dim(profile), **over)
 
 
 class ActionLogits(NamedTuple):
@@ -84,7 +95,16 @@ class LanePolicy(nn.Module):
         pooled_max = jnp.max(jnp.where(jnp.isfinite(masked), masked, -1e30), axis=-2)
         pooled_max = jnp.where(jnp.any(keep, axis=-2), pooled_max, 0.0)
         pooled_mean = jnp.sum(jnp.where(keep, tokens, 0.0), axis=-2) / jnp.maximum(jnp.sum(keep, axis=-2), 1.0)
-        ctx = nn.relu(nn.Dense(c.ctx_dim, **TRUNK)(jnp.concatenate([self_vec, global_vec], axis=-1)))
+        if c.profile == "modern-world-v2":
+            ids = jnp.clip(self_vec[..., :V2_ID_COLUMNS].astype(jnp.int32), 0, None)
+            champ = nn.Embed(c.n_champion_ids, c.champion_embed, name="champion_embed")
+            parts = [self_vec[..., V2_ID_COLUMNS:], champ(jnp.minimum(ids[..., 0], c.n_champion_ids - 1)),
+                     champ(jnp.minimum(ids[..., 1], c.n_champion_ids - 1)),
+                     nn.Embed(c.n_tiers, c.tier_embed, name="tier_embed")(jnp.minimum(ids[..., 2], c.n_tiers - 1)),
+                     global_vec]
+        else:
+            parts = [self_vec, global_vec]
+        ctx = nn.relu(nn.Dense(c.ctx_dim, **TRUNK)(jnp.concatenate(parts, axis=-1)))
         h = jnp.concatenate([pooled_max, pooled_mean, ctx], axis=-1)
         for _ in range(c.mlp_layers):
             h = nn.relu(nn.Dense(c.mlp_hidden, **TRUNK)(h))

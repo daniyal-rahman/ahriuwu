@@ -36,7 +36,7 @@ from ..actions import MODERN_BUTTON_INDEX, screen_usage
 from ..screen import CAM_Y, FLOOR_Y, FOV_V_DEG, N_SCREEN_X, N_SCREEN_Y, RESOLUTION, TILT_DEG, target_on_screen
 from .replay import DECISION_DT, Action
 
-__all__ = ["CAST_BUTTON", "SELF_CAST_SLOTS", "CastRules", "cast_rules", "Labels", "lane_to_screen", "screen_cell", "label_actions"]
+__all__ = ["table_cast_rules", "CAST_BUTTON", "SELF_CAST_SLOTS", "CastRules", "cast_rules", "Labels", "lane_to_screen", "screen_cell", "label_actions"]
 
 #: Cast slot -> button. Slots not listed (items, unknown) have none.
 CAST_BUTTON = {0: "q", 1: "w", 2: "e", 3: "r", 4: "summoner_d", 5: "summoner_f", 12: "ward", 13: "recall"}
@@ -51,14 +51,28 @@ class CastRules(NamedTuple):
 
 
 def cast_rules(champion: str) -> CastRules:
-    """``CastRules`` of a registered modern kit: ``UNIT_TARGET_RANGE[s] > 0`` means unit-targeted (Garen R, Jax
-    Q); ``POINT_TARGET_RANGE[s] > 0`` a ground cast (Nasus E); the rest cast on the champion itself."""
+    """``CastRules`` of a champion. A registered modern kit: ``UNIT_TARGET_RANGE[s] > 0`` means unit-targeted
+    (Garen R, Jax Q); ``POINT_TARGET_RANGE[s] > 0`` a ground cast (Nasus E); the rest cast on the champion itself.
+    Any other champion: the champion table's cast types (``self`` / ``unit`` / ``point``, docs/modern/MULTICHAMP.md)."""
     from .. import champions as K
-    kit = K.BY_NAME[champion]
-    unit = tuple(getattr(kit, "UNIT_TARGET_RANGE", (0.0,) * 4))
-    point = tuple(getattr(kit, "POINT_TARGET_RANGE", (0.0,) * 4))
-    return CastRules(self_cast=frozenset({s for s in range(4) if unit[s] <= 0 and point[s] <= 0} | {13}),
-                     unit_target=frozenset(s for s in range(4) if unit[s] > 0))
+    if champion in K.BY_NAME:
+        kit = K.BY_NAME[champion]
+        unit = tuple(getattr(kit, "UNIT_TARGET_RANGE", (0.0,) * 4))
+        point = tuple(getattr(kit, "POINT_TARGET_RANGE", (0.0,) * 4))
+        return CastRules(self_cast=frozenset({s for s in range(4) if unit[s] <= 0 and point[s] <= 0} | {13}),
+                         unit_target=frozenset(s for s in range(4) if unit[s] > 0))
+    return table_cast_rules(champion)
+
+
+def table_cast_rules(champion: str) -> CastRules:
+    """``CastRules`` from the champion table's cast types (any champion of the build; unknown -> all ground casts)."""
+    from ..data import champion_table as CT
+    idx = CT.index_of(champion)
+    if idx == 0:
+        raise ValueError(f"{champion!r} is not in the champion table")
+    types = [CT.CAST_TYPES[i] for i in CT.cast_types()[idx]]
+    return CastRules(self_cast=frozenset({s for s in range(4) if types[s] == "self"} | {13}),
+                     unit_target=frozenset(s for s in range(4) if types[s] == "unit"))
 _PRIORITY = {"move": 0, "stop": 1, "attack": 2, "cast": 3}
 _HOLD_STILL_S = 0.3           # an active move whose champion has not moved for this long is over
 _HOLD_STILL_UNITS = 5.0       # per decision (0.1 s): below this the champion is standing

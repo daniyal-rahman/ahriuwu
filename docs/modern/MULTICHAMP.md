@@ -58,11 +58,19 @@ and gains, per side (own, enemy):
 Sizes: base 9 + 4 x 16 = 73 per side, 146 for both, plus 4 ranks. Self vector = 28 (v1 columns without the
 one-hots) + 150 = 178 floats.
 
-New integer inputs (`self_ids`, int32 (3,)): own champion index, enemy champion index, skill tier. Index 0 is
-"unknown"; champions are 1..173 in Riot-key order from the champion table; tiers are 1..9 Iron..Challenger,
-0 unknown. The 16.19 archive is Master+ (apex-sourced), recorded as tier 7..9 from the footer where known,
-else 0. The policy embeds them (`nn.Embed`, 16 / 16 / 4 wide) and concatenates with the self and global
-vectors before the context layer. Everything else in `LanePolicy` is unchanged.
+Three identity inputs ride in the first three self columns as floats (exact small integers, so no signature
+changes anywhere): own champion index, enemy champion index, skill tier. Index 0 is "unknown"; champions are
+1..173 in Riot-key order from the champion table; tiers are 1..9 Iron..Challenger, 0 unknown. The 16.19
+archive is apex-sourced and the footer carries no rank, so its games are recorded as tier 8 (Master) by
+convention (`champion_table.ARCHIVE_TIER`), the value the sim reports too. The policy (`PolicyConfig.profile ==
+"modern-world-v2"`) embeds them (`nn.Embed`, one 16-wide table shared by own and enemy, 4 for the tier) and
+concatenates them with the remaining self columns and the global vector before the context layer. Everything
+else in `LanePolicy` is unchanged. Sizes as built: self vector 181 = 3 ids + 28 + 4 ranks + 2 x 73.
+
+For the 14 sim kits the table's cooldowns are the sim's own tables (two catalogs lack a root Cooldown field),
+so sim and table agree; 12 slots across other champions have no cooldown in the client data and take the
+10 s default. Cast types: the sim casts skillshots without a click ("self" in its kit rules) where the table
+says "point"; the labeller keeps the kit rule for the 14 kits and uses the table for everyone else.
 
 Cooldown normalisation (own fractions, enemy cast memory) reads the champion table's cooldown-by-rank, not the
 sim kit, so any champion can be the actor. The sim resolves `cfg.champion_ids` (Riot keys) to table rows
@@ -96,7 +104,22 @@ the matchup.
 
 ## 8. Data plan
 
-Filled in from the footer survey (`/mnt/nfs/datasets/rofl_top_survey_2619_20261018/summary.json`, job 8155):
-games per top-lane champion on build 16.19.823.0722, coverage at >= 20 / 50 / 100 games, matchup counts.
-Export cost at decoder v7: about 117 s per actor-export, two top laners per game, 6 workers on the desktop.
-The low-elo 26.20 pool (1,000 games, Iron..Diamond) joins when the decoder thread declares 26.20 parity.
+Footer survey of the 16.19 archive (`/mnt/nfs/datasets/rofl_top_survey_2619_20261018/summary.json`, job 8155,
+14 min, footers only): 11,122 replays, 7,663 on the supported build 16.19.823.0722, 7,658 with one footer-assigned
+top laner per team, 15,316 top-lane champion-games over 157 champions, 2,492 distinct matchups.
+
+| champions with at least | champions | top-lane champion-games | share |
+|---|---|---|---|
+| 1 game | 157 | 15,316 | 100% |
+| 20 games | 94 | 14,850 | 97% |
+| 50 games | 57 | 13,683 | 89% |
+| 100 games | 48 | 13,060 | 85% |
+| 200 games | 31 | 10,632 | 69% |
+
+Most played: Jayce 615, Yone 570, Ambessa 552, Fiora 549, Camille 529, Malphite 464, Renekton 435, Aatrox 399,
+Jax 379, K'Sante 375, Ornn 374, Garen 366, Darius 326, Urgot 316, Gnar 313. Most common matchups: Jayce-Malphite
+41, Ambessa-Renekton 39, Malphite-Yone 38, Ambessa-Camille 35, Camille-Garen 29.
+
+Export cost at decoder v7: about 117 s per actor-export on one desktop CPU; 6 workers gave about 40 games/h
+in practice (the node is shared). The low-elo 26.20 pool (1,000 games, Iron..Diamond) joins when the decoder
+thread declares 26.20 parity.
