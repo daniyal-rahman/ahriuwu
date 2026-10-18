@@ -82,3 +82,10 @@ Next actions:
 5. Expand multiple champions/ally targeting before claiming complete5v5/support implementation.
 
 Existing timings above predate the latest review fixes. New speedups remain unmeasured.
+
+## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
+
+Datasets `bc_modern_v1/v2` and runs v1-v3 are in `docs/modern/BC.md` sections 8-9 (v3 = class-weighted
+casts, gate vs afk Jax: CS 37, deaths 2.5). Running on 2026-10-18: the Jax-top replay export
+(`/mnt/nfs/datasets/rofl_bc_2619_jax_top_native_20261018`, Slurm array 7969, decoder release v7) for a
+Jax clone, and `modern_bc_record.sbatch` (job 7970) recording a v3 episode for `bc/render.py`.

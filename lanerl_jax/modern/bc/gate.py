@@ -70,8 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv=None) -> None:
-    a = build_parser().parse_args(argv)
+def setup(a):
+    """The world, config, jitted trainer pieces and initial runner for ``a`` (``build_parser`` namespace):
+    the checkpoint's params on blue, the chosen opponent on red."""
     if a.opponent == "frozen" and a.opponent_from is None:
         sys.exit("--opponent frozen needs --opponent-from")
     enable_compile_cache()
@@ -99,9 +100,18 @@ def main(argv=None) -> None:
     opponent_params = _load(opp_ckpt, template) if opp_ckpt else None
     built = MV.make_modern_vec_train(cfg, env, bank, opponent_params=opponent_params)
     runner = built["initial_runner"](jax.random.key(a.seed), params)
-    collect = jax.jit(built["collect"])
     print(f"world {names} built in {time.perf_counter() - t0:.0f}s; {a.envs} envs x {a.episodes} episodes of "
           f"{a.episode_s - a.start_s:.0f}s at {hz:.0f} Hz, opponent {a.opponent}", flush=True)
+    return dict(env=env, cfg=cfg, built=built, runner=runner, names=names, opp_ckpt=opp_ckpt, hz=hz, pcfg=pcfg,
+                t0=t0)
+
+
+def main(argv=None) -> None:
+    a = build_parser().parse_args(argv)
+    s = setup(a)
+    env, cfg, hz, names, pcfg, opp_ckpt, runner, t0 = (s[k] for k in ("env", "cfg", "hz", "names", "pcfg",
+                                                                       "opp_ckpt", "runner", "t0"))
+    collect = jax.jit(s["built"]["collect"])
 
     per_episode = int(math.ceil((a.episode_s - a.start_s) * hz))
     max_chunks = int(math.ceil(a.episodes * per_episode / a.rollout)) + 2

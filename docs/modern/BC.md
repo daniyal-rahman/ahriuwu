@@ -185,7 +185,8 @@ with the cast and summoner shares unchanged. The event-label checks are identica
 | run | dataset | epochs | val button NLL | event NLL | click NLL / dist | gate vs afk Jax at 10:00 |
 |---|---|---|---|---|---|---|
 | v1 `modern-bc-v1-e1` (job 7836, 51 min) | v1, events only | 30 | 0.631 (prior ~0.69, majority acc 0.717) | n/a | 7.19 / 16.1 cells | CS 35 (humans 75), deaths 1.9, kills 1.0, lane distance 1100 |
-| v2 `modern-bc-v2-hold` (job 7849, 18 min) | v2, held labels, hold weight 0.3 | 30 (best 20) | 0.347 (majority acc 0.816, acc 0.895) | 0.594 | 6.59 / 13.1 cells (held clicks 6.31 / 11.8) | job 7933, pending |
+| v2 `modern-bc-v2-hold` (job 7849, 18 min) | v2, held labels, hold weight 0.3 | 30 (best 20) | 0.347 (majority acc 0.816, acc 0.895) | 0.594 | 6.59 / 13.1 cells (held clicks 6.31 / 11.8) | CS 41, deaths 3.6, kills 1.0, lane distance 1250 (job 7933) |
+| v3 `modern-bc-v3-castw` (job 7934, 16 min) | v2, class weights x5 casts/summoners/ward, x3 stop | 24 (best 23) | 0.580 weighted (acc 0.882); unweighted q 2.37, e 1.78, stop 3.0 | 0.987 weighted | 6.63 / 13.4 cells | CS 37, deaths 2.5, kills 1.0, lane distance 1680 (job 7965) |
 
 v1: the button head predicts noop 99.6% of the time (move recall 0.8%); the one-per-click labels do not
 carry enough signal, see section 3. In the sim it samples noop 77% and move 21%, farms half the human CS
@@ -198,6 +199,17 @@ are still never the argmax (recall 0 for q/w/e/r, summoners, ward, stop), but th
 well below the prior (q 4.23 vs 5.5, e 3.49 vs 5.4, stop 3.95 vs 4.8, summoner_d 7.2 vs 9.2), so a sampled
 policy casts at roughly the right moments more often than chance. Epochs ran at 32 s throughout (v1
 alternated 32 s and 130 s with the same code). Kit-known games score 0.340, unknown 0.350; melee and ranged
-are equal. v3 (job 7934) repeats v2 with class weights x5 on casts, summoners and ward and x3 on stop, 24
-epochs, to see whether the clone can be made to cast without hurting the move head.
+are equal. In the sim v2 samples move 71%, noop 25%, stop 2%, q and e under 1% each: CS 41 against an afk
+Jax (v1 35, humans 75) but 3.6 deaths (v1 1.9). It walks more and farther than v1 and pays for it under the
+turret and in the minion wave; it still does not trade.
+
+v3 repeats v2 with class weights x5 on casts, summoners and ward and x3 on stop (the reported NLLs are
+weighted, so only the per-button values divided by their weight compare with v2). Casts now reach the argmax:
+recall e 0.28, recall(button) 0.13, q 0.06, w 0.05, ward 0.05; r, summoners and stop still 0. The move head
+pays a little: move recall 0.952 (v2 0.968), noop 0.634 (0.643), click distance 13.4 (13.1). Weighted
+conditional NLLs fall further (q 2.37 vs 4.23, e 1.78 vs 3.49, summoner_d 4.96 vs 7.18). In the sim v3
+samples q 4.5%, stop 3.7%, e 1.2% (v2: under 1%), dies less than v2 (2.5 vs 3.6) but farms a little less
+(CS 37 vs 41) and strays farther from the lane (1680 vs 1250). None of the three clones is near the human
+CS 75 / 1.4 deaths; the gap is the sim's un-cloned skills (last-hit timing under a turret, trading) that
+the RL phase has to supply. `record.py` + `render.py` turn one episode into a video for eyeballing this.
 
