@@ -86,6 +86,15 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
 Datasets `bc_modern_v1/v2` and runs v1-v3 are in `docs/modern/BC.md` sections 8-9 (v3 = class-weighted
-casts, gate vs afk Jax: CS 37, deaths 2.5). Running on 2026-10-18: the Jax-top replay export
-(`/mnt/nfs/datasets/rofl_bc_2619_jax_top_native_20261018`, Slurm array 7969, decoder release v7) for a
-Jax clone, and `modern_bc_record.sbatch` (job 7970) recording a v3 episode for `bc/render.py`.
+casts, gate vs afk Jax: CS 37, deaths 2.5; its episode video is
+`/mnt/nfs/shared/modern-bc/videos/garen-bc-v3-vs-afk-jax-seed1.mp4`). Running on 2026-10-18: the Jax-top
+replay export (`/mnt/nfs/datasets/rofl_bc_2619_jax_top_native_20261018`, Slurm array 7969 + re-run 8126,
+decoder release v7; pilot conversion of two games passed, job 8134) for a Jax clone and the Garen-vs-Jax video.
+
+Multi-champion work (`docs/modern/MULTICHAMP.md`, approved 2026-10-18): the champion table
+(`modern/data/26.19/champion_table.json`, 173 champions from the decoder catalogs
+`/mnt/nfs/datasets/rofl_champion_catalogs_2619_20261018` + Data Dragon), observation profile
+`modern-world-v2` (identity embeddings + kit descriptors; default stays v1), the converter/trainer/gate plumbing
+and the footer survey of the 16.19 archive (`/mnt/nfs/datasets/rofl_top_survey_2619_20261018`: 7,658 build
+games, 15,316 top-lane champion-games, 157 champions) are in (fb3ddcf7). Next: the v1-vs-v2 regression on
+Garen and Jax, then the bulk top-laner export.
