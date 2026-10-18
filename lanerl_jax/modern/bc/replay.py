@@ -135,6 +135,9 @@ def decoder_commit(dataset: Path) -> str:
     reexport = dataset / "native-reexport-result.json"
     if reexport.exists():
         return json.loads(reexport.read_text())["code_commit"][:8]
+    provenance = dataset / "batch-provenance.json"          # batches prepared by the modern-bc thread
+    if provenance.exists():
+        return json.loads(provenance.read_text())["decoder_commit"][:8]
     raise ValueError(f"{dataset} records no decoder commit")
 
 
