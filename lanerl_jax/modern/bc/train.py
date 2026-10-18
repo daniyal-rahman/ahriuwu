@@ -123,10 +123,12 @@ def windows(games: list[Game], window: int, rng: np.random.Generator | None):
 
 def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random.Generator | None,
              enemy_id_dropout: float = 0.0, stat_dropout: float = 0.0, hold_weight: float = 1.0,
-             profile: str = OB.PROFILE):
+             profile: str | None = None):
     """Stack windows into a batch dict of arrays [N, window, ...]; `weight` is the loss weight per decision
-    (`hold_weight` for held labels), `held` marks them."""
+    (`hold_weight` for held labels), `held` marks them. ``profile`` defaults to the games' own layout."""
     n = len(items)
+    if profile is None:
+        profile = OB.profile_of(games[0].self_vec.shape[1])
     enemy_cols, stat_cols = enemy_id_columns(profile), stat_columns(profile)
     ent = np.zeros((n, window, 32, 20), np.float32)
     pad = np.ones((n, window, 32), bool)

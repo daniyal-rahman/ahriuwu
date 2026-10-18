@@ -57,6 +57,14 @@ def self_dim(profile: str = PROFILE) -> int:
     if profile not in SELF_DIM:
         raise ValueError(f"unknown observation profile {profile!r}")
     return SELF_DIM[profile]
+
+
+def profile_of(width: int) -> str:
+    """The profile whose self vector has ``width`` columns."""
+    for name, w in SELF_DIM.items():
+        if w == width:
+            return name
+    raise ValueError(f"no observation profile has a self vector of width {width}")
 MODERN_ENTITY_DIM = 20
 N_SLOTS, GLOBAL_DIM = 32, 6
 NORM_DIST = NORM_XY = NORM_GOLD = 3000.0
