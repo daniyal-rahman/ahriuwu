@@ -419,11 +419,15 @@ FLASH = 4
 
 
 def _cast_point(d) -> Optional[Tuple[float, float]]:
-    """A cast's target point: the decoder's resolved point, else the cast record's cursor vector (``0xd0``),
-    a proxy that holds for summoners and the trinket, whose records carry no resolved target."""
+    """A cast's target point: the decoder's resolved point; for summoners, items and the trinket (slots 4+),
+    whose records carry no resolved target, the record's cursor vector (``0xd0``). An unresolved ability cast
+    (slots 0-3, e.g. a champion whose catalog the batch lacked) has no point: ``0xd0`` is then the caster's
+    own position, not an aim point (decoder thread, 2026-10-18)."""
     p = d.get("target_point_world_xz")
     if p is not None:
         return (float(p[0]), float(p[1]))
+    if d.get("slot") is not None and 0 <= int(d["slot"]) < 4:
+        return None
     w = d.get("wire_vectors_xyz") or {}
     v = w.get("0xd0")
     return (float(v[0]), float(v[2])) if v is not None and len(v) == 3 else None
