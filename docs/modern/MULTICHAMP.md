@@ -120,6 +120,11 @@ Most played: Jayce 615, Yone 570, Ambessa 552, Fiora 549, Camille 529, Malphite 
 Jax 379, K'Sante 375, Ornn 374, Garen 366, Darius 326, Urgot 316, Gnar 313. Most common matchups: Jayce-Malphite
 41, Ambessa-Renekton 39, Malphite-Yone 38, Ambessa-Camille 35, Camille-Garen 29.
 
-Export cost at decoder v7: about 117 s per actor-export on one desktop CPU; 6 workers gave about 40 games/h
-in practice (the node is shared). The low-elo 26.20 pool (1,000 games, Iron..Diamond) joins when the decoder
-thread declares 26.20 parity.
+Export cost at decoder v7: about 117 s per game on one desktop CPU; 6 workers gave about 40 games/h in
+practice (the node is shared). One export per game serves both top laners: with every champion's catalog
+loaded the decoder resolves every champion's casts (confirmed by the decoder thread and by re-exporting one
+game with all 172 catalogs; only the decoder's own training labels are actor-only, and the converter builds
+its own). The bulk batch `/mnt/nfs/datasets/rofl_bc_2619_top_all_native_20261018` holds 7,455 games (203
+already covered by the Garen/Jax batches), ordered by the rarer laner's game count; pilot task 0 (job 8285,
+119 s, both sides convert cleanly), array 1-7454 at 6 workers started 2026-10-18 08:05 UTC. The low-elo 26.20
+pool (1,000 games, Iron..Diamond) joins when the decoder thread declares 26.20 parity.
