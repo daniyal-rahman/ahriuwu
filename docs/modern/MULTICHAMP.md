@@ -111,6 +111,13 @@ in lane outweigh the half-death and the 0.016 of validation loss, which is withi
 deaths come with the extra lane time. v1 stays selectable (`--profile modern-world-v1`), and checkpoints written
 before the profile field are read as v1 by their self width (`restore_policy_config`).
 
+Ablation (run `modern-bc-v4-garen-noenemyid`, job 8515, `--enemy-id-dropout 1.0`: the enemy index is always 0,
+the enemy descriptor block stays): weighted validation NLL 0.594 vs 0.596 with the identity, kit-known 0.566 vs
+0.568, kit-unknown 0.606 vs 0.607, cast recalls q 0.01 / w 0.06 / e 0.28 vs 0.04 / 0.09 / 0.30. On Garen's data
+(78 opponents, most with a handful of games) the descriptors alone carry everything the model uses of the
+matchup; the identity embedding adds nothing measurable yet, which is what thin per-opponent data predicts. It
+stays in for the many-champion data, where repeated matchups can train it.
+
 Original criteria:
 
 Retrain Garen (v3 recipe: class weights x5 on casts, 24 epochs) and Jax on v2 and compare with the v1 runs:
