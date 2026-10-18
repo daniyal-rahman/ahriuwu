@@ -68,3 +68,18 @@ def test_real_game_round_trip(tmp_path):
     meta = json.loads((tmp_path / f"{GAME.name}.json").read_text())
     assert saved["obs_index"][1] == 0 and meta["observation_lag"]["decisions"] == [1, 1]
     assert meta["provenance"]["cooldown_fields_read"] is False
+
+
+def test_received_spell_state_uses_the_timers_then_the_kit_table():
+    t = np.arange(0.0, 60.0, 0.1)
+    # Jax: E sends a 1 s window then its cooldown at the recast; W sends its cooldown; Q sends nothing.
+    events = [(20.0, 2, 1.0, 1.0, 0), (21.6, 2, 16.5, 16.5, 0), (30.0, 1, 6.8, 6.8, 0), (30.0, 8, 5.0, 5.0, 0)]
+    casts = [(10.0, 0), (20.0, 2), (21.6, 2), (30.0, 1), (45.0, 0)]
+    cd, fallback = C.received_spell_state(t, events, casts, "Jax", rank_at=lambda tc, s: 1, haste_at=lambda tc: 0.0)
+    assert cd[205, 2] == pytest.approx(0.5, abs=0.11) and cd[220, 2] == pytest.approx(16.1, abs=0.11)
+    assert cd[300, 1] == pytest.approx(6.8, abs=0.11) and cd[370, 1] == 0.0 and cd[:300, 1].max() == 0.0
+    q_cd = cooldowns("Jax", "Q")[0]
+    assert fallback == 2 and cd[101, 0] == pytest.approx(q_cd - 0.1, abs=0.11) and cd[180, 0] == 0.0
+    assert cd[451, 0] == pytest.approx(q_cd - 0.1, abs=0.11)
+    # An item countdown (slot 8) never touches the ability columns.
+    assert cd[:, 3].max() == 0.0

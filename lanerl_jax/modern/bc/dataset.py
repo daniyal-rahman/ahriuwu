@@ -1,4 +1,4 @@
-"""Build a modern-world behaviour-cloning dataset from the decoded Garen top-lane replays.
+"""Build a modern-world behaviour-cloning dataset from decoded top-lane replays of one champion (Garen by default).
 
     python -m lanerl_jax.modern.bc.dataset plan OUT [--lag 1]      select games, split, vocabulary
     python -m lanerl_jax.modern.bc.dataset convert OUT TASK TASKS  convert every TASKS-th game
@@ -45,9 +45,9 @@ CHAMPION = "Garen"
 _RANGED = 2      # stat.mCombatType
 
 
-def _opponent(manifest):
+def _opponent(manifest, champion=CHAMPION):
     roster = manifest["initial_roster"]
-    me = next(r for r in roster if r["name"] == CHAMPION)
+    me = next(r for r in roster if r["name"] == champion)
     return next(r for r in roster if r["team"] != me["team"]
                 and r["assigned_role"] == me["assigned_role"])
 
@@ -63,9 +63,10 @@ def _combat_type(export: Path, champion_id: int) -> int:
     return int(f["values"][rows[np.argmin(f["update_index"][rows])]])
 
 
-def plan(out: Path, lag, hold: bool = True) -> dict:
+def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=DATASETS) -> dict:
     games, skipped = [], []
-    for dataset in DATASETS:
+    datasets = tuple(Path(d) for d in datasets)
+    for dataset in datasets:
         for game_dir in sorted((dataset / "games").iterdir()):
             export = game_dir / "export"
             manifest_path = export / "manifest.json"
@@ -73,15 +74,19 @@ def plan(out: Path, lag, hold: bool = True) -> dict:
                 skipped.append(dict(game=game_dir.name, reason="no export"))
                 continue
             manifest = json.loads(manifest_path.read_text())
+            if manifest.get("actor_champion", champion) != champion or not any(
+                    r["name"] == champion for r in manifest["initial_roster"]):
+                skipped.append(dict(game=game_dir.name, reason=f"no {champion}"))
+                continue
             if manifest["end_seconds"] < MIN_GAME_S:
                 skipped.append(dict(game=game_dir.name, reason="shorter than 14 min",
                                     seconds=manifest["end_seconds"]))
                 continue
-            opp = _opponent(manifest)
+            opp = _opponent(manifest, champion)
             ranged = _combat_type(export, opp["object_id"]) == _RANGED
             games.append(dict(game=game_dir.name, path=str(game_dir), dataset=str(dataset),
                               opponent=opp["name"], opponent_class="ranged" if ranged else "melee"))
-    vocabulary = [CHAMPION] + sorted({g["opponent"] for g in games} - {CHAMPION})
+    vocabulary = [champion] + sorted({g["opponent"] for g in games} - {champion})
     # Hold out VAL_SHARE of each class: the games whose hash ranks lowest.
     for cls in ("melee", "ranged"):
         members = sorted((g for g in games if g["opponent_class"] == cls),
@@ -92,9 +97,9 @@ def plan(out: Path, lag, hold: bool = True) -> dict:
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
-    result = dict(lag=lag, hold=hold, champion=CHAMPION, window_s=list(LANE_WINDOW_S),
+    result = dict(lag=lag, hold=hold, champion=champion, window_s=list(LANE_WINDOW_S),
                   min_game_s=MIN_GAME_S, val_share=VAL_SHARE, vocabulary=vocabulary,
-                  datasets={str(d): decoder_commit(d) for d in DATASETS},
+                  datasets={str(d): decoder_commit(d) for d in datasets},
                   games=games, skipped=skipped)
     out.mkdir(parents=True, exist_ok=True)
     (out / "plan.json").write_text(json.dumps(result, indent=1))
@@ -112,7 +117,7 @@ def convert(out: Path, task: int, tasks: int):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
             continue
-        bc = convert_game(Path(g["path"]), hold=p.get("hold", True))
+        bc = convert_game(Path(g["path"]), champion=p.get("champion", CHAMPION), hold=p.get("hold", True))
         bc = bc.lagged(lag, seed=_seed(g["game"]))
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
         bc.save(out / "games")
@@ -131,6 +136,7 @@ def finalize(out: Path) -> dict:
         rows.append(dict(game=g["game"], split=g["split"], opponent=g["opponent"],
                          opponent_class=g["opponent_class"], opponent_kit=g.get("opponent_kit"),
                          decoder_commit=meta["provenance"]["decoder_commit"],
+                         cooldown_fields_read=meta["provenance"].get("cooldown_fields_read", False),
                          converter_commit=meta["provenance"]["converter_commit"],
                          counts=meta["counts"], label_check=meta["label_check"], decisions=meta["decisions"]))
 
@@ -159,7 +165,8 @@ def finalize(out: Path) -> dict:
         plan=dict((k, v) for k, v in p.items() if k not in ("games", "skipped")),
         converter_commit=commits, observation_lag=p["lag"], hold=p.get("hold", True), vocabulary=p["vocabulary"],
         stats=dict(names=list(STAT_NAMES), scale=list(STAT_SCALE)), buttons=list(BUTTONS_WITH_STOP),
-        cooldown_fields_read=False, profiles=dict(obs="modern-world-v1", actions="modern-world-v2"),
+        cooldown_fields_read=bool(rows) and all(r["cooldown_fields_read"] for r in rows),
+        profiles=dict(obs="modern-world-v1", actions="modern-world-v2"),
         totals=dict(all=totals(rows), train=totals([r for r in rows if r["split"] == "train"]),
                     val=totals([r for r in rows if r["split"] == "val"])),
         opponents={o: _opponent_row([r for r in rows if r["opponent"] == o])
@@ -184,6 +191,8 @@ def main():
     a.add_argument("out", type=Path)
     a.add_argument("--lag", type=parse_lag, default=1)
     a.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
+    a.add_argument("--champion", default=CHAMPION, help="the cloned champion (a registered modern kit)")
+    a.add_argument("--datasets", nargs="+", type=Path, default=list(DATASETS), help="exported batch directories")
     a = sub.add_parser("convert")
     a.add_argument("out", type=Path)
     a.add_argument("task", type=int)
@@ -192,7 +201,7 @@ def main():
     a.add_argument("out", type=Path)
     args = parser.parse_args()
     if args.command == "plan":
-        p = plan(args.out, args.lag, hold=not args.no_hold)
+        p = plan(args.out, args.lag, hold=not args.no_hold, champion=args.champion, datasets=args.datasets)
         print(len(p["games"]), "games,", len(p["skipped"]), "skipped,",
               Counter(g["split"] for g in p["games"]))
     elif args.command == "convert":

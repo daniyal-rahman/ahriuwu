@@ -56,7 +56,7 @@ from ..frame import make_lane_frame
 from ..train import LANE_HALF_WIDTH, default_loadouts
 from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
 from ..world.views import visibility
-from .labels import label_actions
+from .labels import label_actions, cast_rules
 from .replay import BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, read_game
 
 __all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "spell_state", "parse_lag",
@@ -199,6 +199,41 @@ def spell_state(t, casts, attack_times, rank_at, haste_at):
     return cooldown, conflicts
 
 
+_RECEIPT_WINDOW_S = 1.5      # a cast whose slot gets no countdown message within this is timed from the kit table
+
+
+def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
+    """(T, 4) seconds of cooldown left from the server's received countdowns (``replay.cooldown_events``,
+    exports with the countdown fix): after each message for slot ``s`` the timer is ``t_msg + remaining - t``
+    until the slot's next message. Abilities the server sends no countdown for (Jax's Q) fall back to the kit
+    table hasted at the cast, from the cast time: every cast of a slot without a message within
+    ``_RECEIPT_WINDOW_S`` is counted in ``fallback``. Returns ``(cooldown (T, 4), fallback)``."""
+    t = np.asarray(t, float)
+    cooldown = np.zeros((len(t), 4))
+    tables = [list(kit_cooldowns(kit_name, s)) for s in "QWER"]
+    fallback = 0
+    for slot in range(4):
+        msgs = sorted((te, rem) for te, sl, rem, _dur, _mode in events if sl == slot)
+        times = np.asarray([te for te, _ in msgs], float)
+        for i, (te, rem) in enumerate(msgs):
+            end = msgs[i + 1][0] if i + 1 < len(msgs) else np.inf
+            sel = (t >= te) & (t < end)
+            cooldown[sel, slot] = np.maximum(te + rem - t[sel], 0.0)
+        for tc, sl in sorted(casts):
+            if sl != slot:
+                continue
+            j = int(np.searchsorted(times, tc - 0.05))
+            if j < len(times) and times[j] <= tc + _RECEIPT_WINDOW_S:
+                continue
+            fallback += 1
+            rank = max(rank_at(tc, slot), 1)
+            base = _hasted(tables[slot][min(rank, len(tables[slot])) - 1], haste_at(tc))
+            until = min(tc + base, times[j] if j < len(times) else np.inf)
+            sel = (t >= tc) & (t < until)
+            cooldown[sel, slot] = np.maximum(cooldown[sel, slot], tc + base - t[sel])
+    return cooldown, fallback
+
+
 def _fill(a):
     """Forward-fill NaN rows of an (T, 2) array, then back-fill the start."""
     a = a.copy()
@@ -294,15 +329,24 @@ def _unit_fields(g: ReplayGame, cfg, me_xy):
     return f, unit_of_slot, s_me
 
 
-def _own_fields(g: ReplayGame, s_me: int, T: int):
+def _own_fields(g: ReplayGame, s_me: int, T: int, champion: str = G.NAME):
     """The champion layer, economy, summoner and combat fields the observation reads, per decision; the
-    other slot keeps the template's values (replaced where the opponent's are known: ranks, life)."""
+    other slot keeps the template's values (replaced where the opponent's are known: ranks, life).
+    Cooldowns come from the received countdowns when the export has them (``received_spell_state``), else
+    from Garen's kit rules (``spell_state``); ``conflicts`` counts kit fallbacks or rule conflicts."""
     t = g.t
     casts = [(a.t, a.slot) for a in g.actions if a.kind == "cast" and 0 <= a.slot < 4]
     attacks = [a.t for a in g.actions if a.kind == "attack"]
     at = lambda tc: int(np.clip(np.searchsorted(t, tc), 0, T - 1))  # noqa: E731
-    cooldown, conflicts = spell_state(t, casts, attacks, lambda tc, s: int(g.spell_rank[at(tc), 0, s]),
-                                      lambda tc: float(g.haste[at(tc)]))
+    rank_at = lambda tc, s: int(g.spell_rank[at(tc), 0, s])        # noqa: E731
+    haste_at = lambda tc: float(g.haste[at(tc)])                   # noqa: E731
+    if g.provenance.get("cooldown_fields_read"):
+        cooldown, conflicts = received_spell_state(t, g.cooldown_events, casts, champion, rank_at, haste_at)
+    elif champion == G.NAME:
+        cooldown, conflicts = spell_state(t, casts, attacks, rank_at, haste_at)
+    else:
+        raise ValueError(f"{champion}: the export has no received countdowns and the converter only has "
+                         f"Garen's kit rules")
     # A recall channels for 8.5 s unless the champion does anything else first.
     recalling = np.zeros(T, bool)
     for a in g.actions:
@@ -427,22 +471,20 @@ def _label_check(g, labels, valid, order, unit_of_slot, slot_unit):
 
 def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", hold: bool = True) -> BCGame:
     """One game's decisions over `window` (game seconds) for `champion`, no lag."""
-    if champion != G.NAME:
-        raise ValueError("the converter rebuilds cooldowns with Garen's kit rules; other champions need theirs")
     t = decision_times(*window)
     g = read_game(game_dir, t, champion)
     T = len(t)
     i_me = g.index(g.me)
     me_team = g.units[i_me].team
     registered = g.opponent_name in K.BY_NAME
-    opp_kit = g.opponent_name if registered else "Jax"
+    opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
     cfg = world_config(*((champion, opp_kit) if me_team == BLUE else (opp_kit, champion)))
     frames = _frames(g, cfg)
     frame = frames[me_team]
     me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
 
     f, unit_of_slot, s_me = _unit_fields(g, cfg, me_xy)
-    own, conflicts = _own_fields(g, s_me, T)
+    own, conflicts = _own_fields(g, s_me, T, champion)
     f.update(own)
     template = MS.init_state(cfg)
     other = 1 - s_me
@@ -471,7 +513,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     enemies = {u.id for u in g.units if u.team != me_team}
     unit_xy = {u.id: np.stack([g.x[:, i], g.y[:, i]], -1) for i, u in enumerate(g.units)}
     labels = label_actions(t, g.actions, me_xy, unit_xy, np.asarray(frame.axis), np.asarray(frame.normal),
-                           enemies, g.summoner_slot, hold=hold)
+                           enemies, g.summoner_slot, hold=hold, rules=cast_rules(champion))
     f["label"] = np.stack([labels.button, labels.screen_x, labels.screen_y], -1)
 
     def observe(x):
@@ -527,7 +569,9 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
                     buttons={b: int(np.sum((labels.button == i) & label_valid)) for i, b in enumerate(MODERN_BUTTONS)}),
         label_check=_label_check(g, labels, label_valid, order, unit_of_slot, slot_unit),
         patched_from_replay=patched,
-        not_from_replay=["spell cooldowns: rebuilt from casts (spell_state)", "wards: none",
+        not_from_replay=[("spell cooldowns: received countdowns, kit table where the server sends none "
+                          "(received_spell_state)") if g.provenance.get("cooldown_fields_read")
+                         else "spell cooldowns: rebuilt from casts (spell_state)", "wards: none",
                          "quest: 0", "trinket charges: the world's starting value",
                          "summoner cooldowns: unhasted"],
         observation_lag=dict(decisions=[0, 0]))

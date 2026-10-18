@@ -36,12 +36,29 @@ from ..actions import MODERN_BUTTON_INDEX, screen_usage
 from ..screen import CAM_Y, FLOOR_Y, FOV_V_DEG, N_SCREEN_X, N_SCREEN_Y, RESOLUTION, TILT_DEG, target_on_screen
 from .replay import DECISION_DT, Action
 
-__all__ = ["CAST_BUTTON", "SELF_CAST_SLOTS", "Labels", "lane_to_screen", "screen_cell", "label_actions"]
+__all__ = ["CAST_BUTTON", "SELF_CAST_SLOTS", "CastRules", "cast_rules", "Labels", "lane_to_screen", "screen_cell", "label_actions"]
 
 #: Cast slot -> button. Slots not listed (items, unknown) have none.
 CAST_BUTTON = {0: "q", 1: "w", 2: "e", 3: "r", 4: "summoner_d", 5: "summoner_f", 12: "ward", 13: "recall"}
 #: Casts that take no cursor for the cloned champion (Garen: Q, W, E are self casts; recall).
 SELF_CAST_SLOTS = {0, 1, 2, 13}
+
+
+class CastRules(NamedTuple):
+    """How a champion's Q/W/E/R take their target, from the modern kit (``cast_rules``)."""
+    self_cast: frozenset       # no cursor (the click loss is masked)
+    unit_target: frozenset     # the cursor must be on the target unit; a non-enemy target is not representable
+
+
+def cast_rules(champion: str) -> CastRules:
+    """``CastRules`` of a registered modern kit: ``UNIT_TARGET_RANGE[s] > 0`` means unit-targeted (Garen R, Jax
+    Q); ``POINT_TARGET_RANGE[s] > 0`` a ground cast (Nasus E); the rest cast on the champion itself."""
+    from .. import champions as K
+    kit = K.BY_NAME[champion]
+    unit = tuple(getattr(kit, "UNIT_TARGET_RANGE", (0.0,) * 4))
+    point = tuple(getattr(kit, "POINT_TARGET_RANGE", (0.0,) * 4))
+    return CastRules(self_cast=frozenset({s for s in range(4) if unit[s] <= 0 and point[s] <= 0} | {13}),
+                     unit_target=frozenset(s for s in range(4) if unit[s] > 0))
 _PRIORITY = {"move": 0, "stop": 1, "attack": 2, "cast": 3}
 _HOLD_STILL_S = 0.3           # an active move whose champion has not moved for this long is over
 _HOLD_STILL_UNITS = 5.0       # per decision (0.1 s): below this the champion is standing
@@ -96,15 +113,18 @@ def screen_cell(ds: float, dn: float):
 
 def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_xy: Dict[int, np.ndarray],
                   axis: np.ndarray, normal: np.ndarray, enemies: set, summoner_slot=None,
-                  hold: bool = True) -> Labels:
+                  hold: bool = True, rules: CastRules | None = None) -> Labels:
     """Label the decisions at times `t`. `me_xy` (T, 2) is the champion's position at each decision;
     `unit_xy[id]` (T, 2) for every unit an action can target (NaN where unknown); `axis`/`normal` the
     champion's lane frame; `enemies` the ids of enemy units; `summoner_slot` maps replay cast slots 4/5 to the
     policy's summoner slots (`replay.canonical_summoners`; identity by default). With `hold`, decisions
     between events are labelled with the order still active: a move to the destination the champion is
     walking to, or a click on the unit it is auto-attacking (`held`); they stop when the champion arrives,
-    stands still, loses the target, is given a new order, stops, recalls or ults."""
+    stands still, loses the target, is given a new order, stops, recalls or ults. ``rules`` (``cast_rules``)
+    says which ability slots cast on the champion itself and which need the cursor on the target unit
+    (default: Garen's)."""
     summoner_slot = summoner_slot or {4: 0, 5: 1}
+    rules = rules or CastRules(frozenset(SELF_CAST_SLOTS), frozenset({3}))
     n = len(t)
     b = MODERN_BUTTON_INDEX
     button = np.full(n, b["noop"], np.int32)
@@ -172,10 +192,13 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
         elif a.slot in CAST_BUTTON:
             slot = 4 + summoner_slot[a.slot] if a.slot in (4, 5) else a.slot
             button[k] = b[CAST_BUTTON[slot]]
-            if a.slot in SELF_CAST_SLOTS:
+            if a.slot in rules.self_cast:
                 pass                                   # no cursor; the click loss is masked
             elif a.target is not None and a.target in enemies and unit_point(k, a.target) is not None:
                 click(k, *unit_point(k, a.target), unit=True)
+            elif a.slot in rules.unit_target:
+                representable[k] = False               # a unit cast on an ally, a ward or an unseen unit
+                button[k] = b["noop"]
             elif a.target is not None and unit_point(k, a.target) is not None and a.slot in (4, 5):
                 click(k, *unit_point(k, a.target), unit=True)      # summoners may target any unit
             elif a.point is not None:

@@ -106,3 +106,20 @@ def test_held_labels_follow_the_active_order():
     assert lab.held[1] and not lab.held[3:].any()
     lab = label_actions(t, actions, walking, units, AXIS, NORMAL, enemies, hold=False)
     assert not lab.held.any() and lab.button[1] == B["noop"]
+
+
+def test_cast_rules_come_from_the_kit_and_unit_casts_need_an_enemy_target():
+    from lanerl_jax.modern.bc.labels import cast_rules
+    garen, jax = cast_rules("Garen"), cast_rules("Jax")
+    assert garen.self_cast == frozenset({0, 1, 2, 13}) and garen.unit_target == frozenset({3})
+    assert jax.self_cast == frozenset({1, 2, 3, 13}) and jax.unit_target == frozenset({0})
+    t, me, units, enemies, minion, champ = _game([])
+    ally = 11
+    units[ally] = np.tile(np.array([[1100.0, 1000.0]]), (len(t), 1))
+    actions = [Action(100.05, "cast", slot=0, target=champ),       # decision 0: Q on the enemy champion
+               Action(100.52, "cast", slot=0, target=ally),        # decision 5: Q on an ally: not representable
+               Action(101.02, "cast", slot=1)]                     # decision 10: W, no click
+    lab = label_actions(t, actions, me, units, AXIS, NORMAL, enemies, rules=jax, hold=False)
+    assert lab.button[0] == B["q"] and lab.click_on_unit[0] and lab.click_valid[0]
+    assert not lab.representable[5] and lab.button[5] == B["noop"]
+    assert lab.button[10] == B["w"] and not lab.click_valid[10]

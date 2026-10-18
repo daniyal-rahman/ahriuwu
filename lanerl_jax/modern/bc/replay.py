@@ -25,8 +25,10 @@ What is read, and how it is put on the grid:
 * both laners' combat stats as the game replicated them (`STAT_NAMES`; items, runes and level growth
   included), zero-order hold.
 
-Never read: any ``cooldown.*`` field. Exports made before the decoder tag ``2619-received-countdowns-v2``
-(commit 19cbb838) have known-wrong ability cooldowns; `convert.py` derives cooldowns from the casts instead.
+``cooldown.*`` fields (the server's received countdowns: slot, remaining seconds at receipt, duration) are
+read only from exports whose decoder includes the countdown fix (tag ``2619-received-countdowns-v2``, commit
+19cbb838; ``countdowns_received``). Older exports have known-wrong ability cooldowns; for them `convert.py`
+rebuilds cooldowns from the casts with the champion's kit rules (Garen only).
 
 Not in the replay: fog of war (the replay sees the whole map), the player's camera and clicks, the click
 latency, and wards (not decoded as units).
@@ -112,6 +114,7 @@ class ReplayGame(NamedTuple):
     last_champion_combat: np.ndarray      # (T,) time of the last damage between the champion and an enemy champion
     actions: List[Action]
     opponent_casts: List[Tuple[float, int]]
+    cooldown_events: List[Tuple[float, int, float, float, int]]  # received countdowns (t, slot, remaining, duration, mode); [] if not read
     turret_xy: Dict[Tuple[int, int, str], Tuple[float, float]]   # {(team, lane, tier): (x, y)}
     turret_id: Dict[Tuple[int, int, str], int]
 
@@ -133,6 +136,20 @@ def decoder_commit(dataset: Path) -> str:
     if reexport.exists():
         return json.loads(reexport.read_text())["code_commit"][:8]
     raise ValueError(f"{dataset} records no decoder commit")
+
+
+#: The decoder commit that corrected the received ability countdowns (tag ``2619-received-countdowns-v2``).
+COUNTDOWN_FIX_COMMIT = "19cbb838"
+
+
+@lru_cache(maxsize=None)
+def countdowns_received(dataset: Path) -> bool:
+    """Whether a dataset's decoder commit descends from ``COUNTDOWN_FIX_COMMIT`` (asked of the decoder checkout;
+    an unknown commit counts as not fixed)."""
+    import subprocess
+    r = subprocess.run(["git", "-C", str(DECODER_SCRIPTS), "merge-base", "--is-ancestor", COUNTDOWN_FIX_COMMIT,
+                        decoder_commit(dataset)], capture_output=True, text=True)
+    return r.returncode == 0
 
 
 def lane_distance(x, y, polyline=TOP_LANE) -> np.ndarray:
@@ -218,9 +235,10 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayG
                          f"the decoder checkout has {position_model.VERSION}")
     fields = _Fields(loader.load_event_game(export / "event-training"), loader)
     dataset = game_dir.parent.parent
+    fixed = countdowns_received(dataset)
     provenance = dict(dataset=str(dataset), game=game_dir.name, decoder_commit=decoder_commit(dataset),
                       position_model=manifest["position_model"], replay_sha256=manifest["replay_sha256"],
-                      cooldown_fields_read=False)
+                      cooldown_fields_read=fixed)
 
     roster = manifest["initial_roster"]
     me_row = next(r for r in roster if r["name"] == champion)
@@ -326,6 +344,7 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayG
     cs = np.searchsorted(np.asarray(last_hit_times), t, side="right").astype(np.int32)
     champion_stats = np.stack([_combat_stats(fields, c, t) for c in (me, opponent)], 1)
     actions, opponent_casts = _actions(fields, me, opponent)
+    cooldown_events = _cooldown_events(fields, me) if fixed else []
     return ReplayGame(
         game=game_dir.name, provenance=provenance, me=me, opponent=opponent, opponent_name=opp_row["name"],
         summoners=summoners, summoner_slot=summoner_slot, units=units, t=t, x=x, y=y, hp=hp, max_hp=max_hp, alive=alive, level=level,
@@ -336,7 +355,8 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayG
         haste=fields.asof("stat.mAbilityHasteMod", me, t, default=0.0),
         spell_rank=spell_rank, champion_stats=champion_stats,
         last_champion_combat=_champion_combat(fields, me, enemy_champions, t),
-        actions=actions, opponent_casts=opponent_casts, turret_xy=turret_xy, turret_id=turret_id)
+        actions=actions, opponent_casts=opponent_casts, cooldown_events=cooldown_events, turret_xy=turret_xy,
+        turret_id=turret_id)
 
 
 def _combat_stats(fields: _Fields, champion: int, t) -> np.ndarray:
@@ -407,6 +427,21 @@ def canonical_summoners(ids) -> Tuple[Tuple[int, int], Dict[int, int]]:
     if ids[1] == FLASH and ids[0] != FLASH:
         return (ids[1], ids[0]), {4: 1, 5: 0}
     return (ids[0], ids[1]), {4: 0, 5: 1}
+
+
+def _cooldown_events(fields: _Fields, me: int):
+    """The champion's received countdown events ``(t, slot, remaining, duration, mode)`` in time order. Each is
+    one server message: ``slot`` 0-3 abilities (Jax's Q sends none), 4/5 summoners, 6-11 items, 12 trinket;
+    ``remaining`` seconds left at receipt (the timer the client shows), ``duration`` the full countdown, ``mode``
+    the native operand (1: a remaining-time correction)."""
+    names = ("cooldown.slot", "cooldown.remaining_at_receipt", "cooldown.received_duration", "cooldown.mode")
+    if any(n not in fields.native["fields"] for n in names):
+        return []
+    s = [fields.series(n, me) for n in names]
+    ok = np.logical_and.reduce([x["available"] for x in s])
+    t = s[0]["time_seconds"]
+    return sorted((float(t[i]), int(s[0]["values"][i]), float(s[1]["values"][i]), float(s[2]["values"][i]),
+                   int(s[3]["values"][i])) for i in np.flatnonzero(ok))
 
 
 def _actions(fields: _Fields, me: int, opponent: int):
