@@ -123,3 +123,18 @@ def test_cast_rules_come_from_the_kit_and_unit_casts_need_an_enemy_target():
     assert lab.button[0] == B["q"] and lab.click_on_unit[0] and lab.click_valid[0]
     assert not lab.representable[5] and lab.button[5] == B["noop"]
     assert lab.button[10] == B["w"] and not lab.click_valid[10]
+
+
+def test_a_cast_record_on_an_unknown_slot_does_not_displace_the_real_cast():
+    """Gnar's Q arrives with a second cast record on its mega-form slot (47) in the same decision."""
+    import numpy as np
+    from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX as b
+    from lanerl_jax.modern.bc.labels import CastRules, label_actions
+    from lanerl_jax.modern.bc.replay import Action
+    t = np.arange(0.0, 2.0, 0.1)
+    me = np.zeros((len(t), 2))
+    acts = [Action(0.5, "cast", point=(300.0, 0.0), slot=0), Action(0.5, "cast", point=(300.0, 0.0), slot=47)]
+    rules = CastRules(self_cast=frozenset({13}), unit_target=frozenset())
+    for order in (acts, acts[::-1]):
+        L = label_actions(t, order, me, {}, np.array([1.0, 0.0]), np.array([0.0, 1.0]), set(), {4: 0, 5: 1}, hold=False, rules=rules)
+        assert L.button[5] == b["q"] and L.representable[5] and L.click_valid[5]

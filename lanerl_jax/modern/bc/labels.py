@@ -74,6 +74,13 @@ def table_cast_rules(champion: str) -> CastRules:
     return CastRules(self_cast=frozenset({s for s in range(4) if types[s] == "self"} | {13}),
                      unit_target=frozenset(s for s in range(4) if types[s] == "unit"))
 _PRIORITY = {"move": 0, "stop": 1, "attack": 2, "cast": 3}
+
+
+def _rank(kind: str, a) -> tuple:
+    """Which of two actions in one decision is kept: casts over attacks over stops over moves, and among casts
+    one with a button (``CAST_BUTTON``) over a record on an unknown slot (Gnar's Q arrives with a second record
+    on its mega-form slot 47; that record must not displace the Q)."""
+    return (_PRIORITY[kind], int(kind == "cast" and a.slot in CAST_BUTTON))
 _HOLD_STILL_S = 0.3           # an active move whose champion has not moved for this long is over
 _HOLD_STILL_UNITS = 5.0       # per decision (0.1 s): below this the champion is standing
 _HOLD_ATTACK_RANGE = 1500.0   # an attack target further than this is no longer being attacked
@@ -170,7 +177,7 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
         kinds[i] = kind
         if k in chosen:
             n_superseded += 1
-            if _PRIORITY[kind] < _PRIORITY[kinds[chosen[k]]]:
+            if _rank(kind, a) < _rank(kinds[chosen[k]], actions[chosen[k]]):
                 continue
         chosen[k] = i
 
