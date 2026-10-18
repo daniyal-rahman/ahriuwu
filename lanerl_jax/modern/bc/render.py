@@ -165,11 +165,12 @@ def main(argv=None) -> None:
                 draw.ellipse([tx - r, ty - r, tx + r, ty + r], outline=(255, 230, 60), width=2)
             slot = int(d["o_cast_slot"][i][c])
             if slot >= 0:
-                px_, py_ = view(d["o_cast_x"][i][c], d["o_cast_y"][i][c])
                 ct = int(d["o_cast_target"][i][c])
-                if ct >= 0:
-                    px_, py_ = view(x[ct], y[ct])
-                draw.text((px_, py_ - 18), letters[slot], fill=(255, 255, 120), font=big, anchor="mm")
+                if ct >= 0:                                        # unit cast: ring the target
+                    tx, ty = view(x[ct], y[ct])
+                    r = view.r(110.0, 8.0)
+                    draw.ellipse([tx - r, ty - r, tx + r, ty + r], outline=(255, 255, 120), width=2)
+                draw.text((cx, cy - 22), letters[slot], fill=(255, 255, 120), font=big, anchor="mm")
                 r = view.r(140.0, 12.0)
                 draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(255, 255, 120), width=3)
             ss = int(d["o_summoner_slot"][i][c])
