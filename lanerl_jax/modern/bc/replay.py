@@ -50,6 +50,8 @@ __all__ = ["DECODER_SCRIPTS", "DECISION_DT", "BLUE", "RED", "MINION_SUB", "STAT_
            "lane_distance"]
 
 DECODER_SCRIPTS = Path("/mnt/nfs/projects/ahriuwu-rofl-decoder-2619/scripts/rofl_decode")
+#: The repository every worktree (decoder, this one) shares; readable from both nodes under /mnt/nfs.
+MAIN_GIT_DIR = Path("/mnt/nfs/projects/_archive/ahriuwu-main-administrative-20261001/.git")
 DECISION_DT = 0.1
 BLUE, RED = 0, 1                      # the modern world's team ids (``core.types``: team = champion slot)
 _TEAM = {"ORDER": BLUE, "CHAOS": RED}
@@ -147,11 +149,15 @@ COUNTDOWN_FIX_COMMIT = "19cbb838"
 
 @lru_cache(maxsize=None)
 def countdowns_received(dataset: Path) -> bool:
-    """Whether a dataset's decoder commit descends from ``COUNTDOWN_FIX_COMMIT`` (asked of the decoder checkout;
-    an unknown commit counts as not fixed)."""
+    """Whether a dataset's decoder commit descends from ``COUNTDOWN_FIX_COMMIT``, asked of the shared repository
+    (``MAIN_GIT_DIR``: the decoder worktree's own ``.git`` names a path only the login node has). A commit git
+    cannot resolve raises rather than silently counting as not fixed."""
     import subprocess
-    r = subprocess.run(["git", "-C", str(DECODER_SCRIPTS), "merge-base", "--is-ancestor", COUNTDOWN_FIX_COMMIT,
-                        decoder_commit(dataset)], capture_output=True, text=True)
+    commit = decoder_commit(dataset)
+    r = subprocess.run(["git", f"--git-dir={MAIN_GIT_DIR}", "merge-base", "--is-ancestor", COUNTDOWN_FIX_COMMIT,
+                        commit], capture_output=True, text=True)
+    if r.returncode not in (0, 1):
+        raise RuntimeError(f"git could not tell whether {commit} has the countdown fix: {r.stderr.strip()}")
     return r.returncode == 0
 
 
