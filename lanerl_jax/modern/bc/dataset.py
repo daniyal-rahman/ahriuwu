@@ -73,6 +73,12 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
             if not manifest_path.exists():
                 skipped.append(dict(game=game_dir.name, reason="no export"))
                 continue
+            receipt_path = game_dir / "run-manifest.json"
+            receipt = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+            if receipt.get("status", "success") != "success" or not (export / "event-training" / "manifest.json").exists():
+                # A worker that was preempted mid-export leaves manifest.json without the training tensors.
+                skipped.append(dict(game=game_dir.name, reason="export incomplete", status=receipt.get("status")))
+                continue
             manifest = json.loads(manifest_path.read_text())
             if manifest.get("actor_champion", champion) != champion or not any(
                     r["name"] == champion for r in manifest["initial_roster"]):
