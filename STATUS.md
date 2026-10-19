@@ -100,5 +100,5 @@ games, 15,316 top-lane champion-games, 157 champions) are in (fb3ddcf7). The reg
 distance 1110/1160 vs 1680/1620) and `modern-world-v2` is the default observation profile; checkpoints
 without a profile field are read as v1. The Jax export is complete (379 games) and its v2 dataset
 (`/mnt/nfs/shared/bc_modern_jax_v2obs`, 367 games) is training the Jax clone (job 8444). The bulk top-lane
-export (`rofl_bc_2619_top_all_native_20261018`, 7,455 games, all eight chunks 8299/8307/8309/9451/9452/9454/9455/9456 queued, 2,074 done at 08:15 UTC Oct 19; chunk 8309 waiting on desktop memory (other threads' jobs hold 26 of 29 GB), rerun 10666 for rows 2035-2040)
+export (`rofl_bc_2619_top_all_native_20261018`, 7,455 games, all eight chunks 8299/8307/8309/9451/9452/9454/9455/9456 queued, 2,074 done at 08:15 UTC Oct 19; chunk 8309 waiting on desktop memory (other threads' jobs hold 26 of 29 GB), rerun 10666 for rows 2035-2040; rows 7000-7454 on danilogin (array 10673, 1 at a time); rows 6000-6999 on the Mac via puller job 10710 (00:00-09:00 PT window, see batch README))
 is running on the desktop.
