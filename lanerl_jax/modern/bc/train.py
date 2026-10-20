@@ -89,7 +89,24 @@ class Game(NamedTuple):
     held: np.ndarray            # (T,) bool: label filled from the active order (datasets without it: False)
 
 
-_CACHED = ("entities", "entity_pad_mask", "self_vec", "global_vec", "button", "screen_x", "screen_y",
+class PackedEntities:
+    """(T, 32, 20) float16 entity rows stored without the padding rows (zeros; about 7 of the 32 rows are
+    units), so a whole dataset's cache fits on local disk. Slicing returns the dense rows."""
+
+    def __init__(self, rows, offsets, pad):
+        self.rows, self.offsets, self.pad = rows, offsets, pad
+
+    def __len__(self):
+        return len(self.pad)
+
+    def __getitem__(self, sl: slice) -> np.ndarray:
+        s, e, _ = sl.indices(len(self.pad))
+        out = np.zeros((e - s, *self.pad.shape[1:], self.rows.shape[1]), np.float16)
+        out[~np.asarray(self.pad[s:e])] = self.rows[self.offsets[s]:self.offsets[e]]
+        return out
+
+
+_CACHED = ("entity_pad_mask", "self_vec", "global_vec", "button", "screen_x", "screen_y",
            "label_valid", "click_valid", "click_on_unit", "held")
 
 
@@ -104,9 +121,14 @@ def _arrays(f: Path, cache: Path | None) -> dict:
         c.mkdir(parents=True, exist_ok=True)
         for k in _CACHED:
             if k in d.files:
-                np.save(c / f"{k}.npy", d[k].astype(np.float16) if k == "entities" else d[k])
+                np.save(c / f"{k}.npy", d[k])
+        units = ~d["entity_pad_mask"]
+        np.save(c / "entity_rows.npy", d["entities"].astype(np.float16)[units])
+        np.save(c / "entity_offsets.npy", np.concatenate([[0], np.cumsum(units.sum(1))]).astype(np.int64))
         (c / "done").touch()
-    return {p.stem: np.load(p, mmap_mode="r") for p in c.glob("*.npy")}
+    a = {p.stem: np.load(p, mmap_mode="r") for p in c.glob("*.npy")}
+    a["entities"] = PackedEntities(a.pop("entity_rows"), np.asarray(a.pop("entity_offsets")), a["entity_pad_mask"])
+    return a
 
 
 def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path | None = None) -> list[Game]:
@@ -119,7 +141,7 @@ def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path 
     out = []
     for g, d in zip(picked, arrays):
         out.append(Game(g["game"], split, g["opponent_class"], g.get("opponent_kit") is not None,
-                        d["entities"].astype(np.float16, copy=False), d["entity_pad_mask"], d["self_vec"],
+                        d["entities"] if cache else d["entities"].astype(np.float16), d["entity_pad_mask"], d["self_vec"],
                         d["global_vec"], d["button"].astype(np.int32, copy=False),
                         d["screen_x"].astype(np.int32, copy=False), d["screen_y"].astype(np.int32, copy=False),
                         np.asarray(d["label_valid"]), d["click_valid"] & d["label_valid"], d["click_on_unit"],

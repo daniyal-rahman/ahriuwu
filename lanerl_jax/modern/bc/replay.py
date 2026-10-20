@@ -191,6 +191,7 @@ class _Fields:
         tracks = native["index"]["tracks"]
         self.track_id = np.asarray([t[0] if t[0] is not None else -1 for t in tracks], np.int64)
         self.track_family = np.asarray([str(t[2]) for t in tracks])
+        self._index = {}       # per instance, so a finished game is freed
 
     def rows(self, name, family=None):
         """Available rows of a field in stream order: (rows, times, entity ids)."""
@@ -207,13 +208,14 @@ class _Fields:
     def value(self, name, row):
         return self.loader.structured_value(self.native, name, int(row))
 
-    @lru_cache(maxsize=None)
     def _by_entity(self, name):
-        f = self.native["fields"][name]
-        ent = self.track_id[f["entity_track"]]
-        order = np.lexsort((f["update_index"], ent))
-        ids, starts = np.unique(ent[order], return_index=True)
-        return dict(zip(ids.tolist(), np.split(order, starts[1:])))
+        if name not in self._index:
+            f = self.native["fields"][name]
+            ent = self.track_id[f["entity_track"]]
+            order = np.lexsort((f["update_index"], ent))
+            ids, starts = np.unique(ent[order], return_index=True)
+            self._index[name] = dict(zip(ids.tolist(), np.split(order, starts[1:])))
+        return self._index[name]
 
     def series(self, name, entity_id):
         """One entity's scalar series, in the form `scalar_asof` takes."""
@@ -234,6 +236,17 @@ def _first_after(times: np.ndarray, t: float) -> float:
     return float(times[i]) if i < len(times) else math.inf
 
 
+_LAST_FIELDS: list = [None, None]
+
+
+def _fields_of(path: Path, loader) -> _Fields:
+    """The game's field tables; the last game's are kept, so its other laner converts without a second read."""
+    if _LAST_FIELDS[0] != path:
+        _LAST_FIELDS[:] = [None, None]
+        _LAST_FIELDS[:] = [path, _Fields(loader.load_event_game(path), loader)]
+    return _LAST_FIELDS[1]
+
+
 def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayGame:
     """Read one exported game onto the decision times `t`. `game_dir` holds `export/`."""
     loader, position_model = _decoder()
@@ -242,7 +255,7 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayG
     if manifest["position_model"] != position_model.VERSION:
         raise ValueError(f"export used position model {manifest['position_model']}, "
                          f"the decoder checkout has {position_model.VERSION}")
-    fields = _Fields(loader.load_event_game(export / "event-training"), loader)
+    fields = _fields_of(export / "event-training", loader)
     dataset = game_dir.parent.parent
     fixed = countdowns_received(dataset)
     provenance = dict(dataset=str(dataset), game=game_dir.name, decoder_commit=decoder_commit(dataset),

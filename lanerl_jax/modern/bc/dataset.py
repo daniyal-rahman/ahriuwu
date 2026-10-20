@@ -138,9 +138,14 @@ def _seed(game: str) -> int:
 
 
 def convert(out: Path, task: int, tasks: int):
+    from ..jax_cache import enable_compile_cache
+    enable_compile_cache()
     p = json.loads((out / "plan.json").read_text())
     lag = tuple(p["lag"]) if isinstance(p["lag"], list) else p["lag"]
-    for g in p["games"][task::tasks]:
+    # Tasks take whole games, so both laners of one are converted from a single read (`replay._fields_of`).
+    bases = list(dict.fromkeys(g.get("base", g["game"]) for g in p["games"]))
+    mine = set(bases[task::tasks])
+    for g in (g for g in p["games"] if g.get("base", g["game"]) in mine):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
             continue
