@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import traceback
 import hashlib
 import json
 import sys
@@ -160,9 +161,16 @@ def convert(out: Path, task: int, tasks: int):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
             continue
-        bc = convert_game(Path(g["path"]), champion=g.get("champion", p.get("champion", CHAMPION)), hold=p.get("hold", True),
-                          profile=p.get("profile", OB.PROFILE), tier=p.get("tier", CT.ARCHIVE_TIER),
-                          role=g.get("role", "top"), extra_champions=p.get("extra_champions", False))
+        try:
+            bc = convert_game(Path(g["path"]), champion=g.get("champion", p.get("champion", CHAMPION)),
+                              hold=p.get("hold", True), profile=p.get("profile", OB.PROFILE),
+                              tier=p.get("tier", CT.ARCHIVE_TIER), role=g.get("role", "top"),
+                              extra_champions=p.get("extra_champions", False))
+        except Exception:      # one bad game must not stop the task; finalize lists it as missing
+            (out / "failed").mkdir(exist_ok=True)
+            (out / "failed" / f"{g['game']}.txt").write_text(traceback.format_exc())
+            print(g["game"], "FAILED", flush=True)
+            continue
         bc = bc.lagged(lag, seed=_seed(g["game"]))
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
         bc.save(out / "games", name=g["game"])

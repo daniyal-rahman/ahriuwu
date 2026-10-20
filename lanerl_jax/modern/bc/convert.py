@@ -237,7 +237,8 @@ def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
     exports with the countdown fix): after each message for slot ``s`` the timer is ``t_msg + remaining - t``
     until the slot's next message. Abilities the server sends no countdown for (Jax's Q) fall back to the kit
     table hasted at the cast, from the cast time: every cast of a slot without a message within
-    ``_RECEIPT_WINDOW_S`` is counted in ``fallback``. Returns ``(cooldown (T, 4), fallback)``."""
+    ``_RECEIPT_WINDOW_S`` is counted in ``fallback``; a slot with no table either (champion-table rows without
+    cooldown values) stays at 0 there. Returns ``(cooldown (T, 4), fallback)``."""
     t = np.asarray(t, float)
     cooldown = np.zeros((len(t), 4))
     tables = cooldown_tables(kit_name)
@@ -256,8 +257,11 @@ def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
             if j < len(times) and times[j] <= tc + _RECEIPT_WINDOW_S:
                 continue
             fallback += 1
+            table = tables[slot] if slot < len(tables) else []
+            if not table:
+                continue
             rank = max(rank_at(tc, slot), 1)
-            base = _hasted(tables[slot][min(rank, len(tables[slot])) - 1], haste_at(tc))
+            base = _hasted(table[min(rank, len(table)) - 1], haste_at(tc))
             until = min(tc + base, times[j] if j < len(times) else np.inf)
             sel = (t >= tc) & (t < until)
             cooldown[sel, slot] = np.maximum(cooldown[sel, slot], tc + base - t[sel])
