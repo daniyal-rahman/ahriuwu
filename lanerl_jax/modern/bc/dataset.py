@@ -89,7 +89,8 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
             manifest = json.loads(manifest_path.read_text())
             if champions:
                 tops = [r["name"] for r in manifest["initial_roster"] if r["assigned_role"] == "TOP"]
-                picks = [c for c in tops if c in champions] if len(set(tops)) == len(tops) == 2 else []
+                picks = [c for c in tops if champions == ["all"] or c in champions] \
+                    if len(set(tops)) == len(tops) == 2 else []
             elif manifest.get("actor_champion", champion) == champion and any(
                     r["name"] == champion for r in manifest["initial_roster"]):
                 picks = [champion]
@@ -110,7 +111,7 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
                                   base=game_dir.name, champion=c, path=str(game_dir), dataset=str(dataset),
                                   opponent=opp["name"],
                                   opponent_class="ranged" if combat[opp["name"]] == _RANGED else "melee"))
-    clones = list(champions or [champion])
+    clones = sorted({g["champion"] for g in games}) if champions == ["all"] else list(champions or [champion])
     vocabulary = clones + sorted({g["opponent"] for g in games} - set(clones))
     # Hold out VAL_SHARE of each class: the games whose hash ranks lowest; a game held out for one side's
     # class holds out its other side too.
@@ -225,7 +226,7 @@ def main():
     a.add_argument("--lag", type=parse_lag, default=1)
     a.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
     a.add_argument("--champion", default=CHAMPION, help="the cloned champion (a registered modern kit)")
-    a.add_argument("--champions", default="", help="comma list: several clones in one dataset (v2 profile)")
+    a.add_argument("--champions", default="", help="comma list, or 'all' top laners: several clones in one dataset (v2 profile)")
     a.add_argument("--datasets", nargs="+", type=Path, default=list(DATASETS), help="exported batch directories")
     a.add_argument("--profile", default=OB.PROFILE, choices=OB.PROFILES, help="observation profile")
     a.add_argument("--tier", type=int, default=CT.ARCHIVE_TIER, help="skill tier recorded in v2 (8 = Master)")
