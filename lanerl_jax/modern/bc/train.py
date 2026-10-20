@@ -3,7 +3,7 @@
     python -m lanerl_jax.modern.bc.train DATASET [--epochs 30] [--out /mnt/nfs/checkpoints/lanerl-jax/modern-bc]
 
 The dataset is `dataset.py`'s output: ``plan.json`` (the game list and split) and ``games/<game>.npz``. Every
-game is loaded into host memory (entities as float16; with ``--cache DIR`` unpacked once to .npy files there and
+game is loaded into host memory (entities as float16; with ``--cache DIR`` unpacked once to one file per game there and
 memory-mapped instead, for datasets larger than host memory) and cut into windows of ``--window`` decisions at a
 random offset per epoch; a batch is ``--batch`` windows, each run through the policy's GRU from a zero carry
 (the first ``--burn-in`` decisions of a window warm the state and carry no loss). The loss per decision is
@@ -111,24 +111,45 @@ _CACHED = ("entity_pad_mask", "self_vec", "global_vec", "button", "screen_x", "s
 
 
 def _arrays(f: Path, cache: Path | None) -> dict:
-    """A game's arrays: from the .npz, or memory-mapped from ``cache/<game>/`` (written on first use)."""
+    """A game's arrays: from the .npz, or memory-mapped from ``cache/<game>.bin`` (written on first use).
+    One file and one mapping per game, all fields views into it: a mapping per field ran a 58k-game dataset
+    past the process's open-file and memory-map limits."""
     if cache is None:
         d = np.load(f)
         return {k: d[k] for k in d.files}
-    c = cache / f.stem
-    if not (c / "done").exists():
+    data, layout = cache / f"{f.stem}.bin", cache / f"{f.stem}.json"
+    if not layout.exists():
         d = np.load(f)
-        c.mkdir(parents=True, exist_ok=True)
-        for k in _CACHED:
-            if k in d.files:
-                np.save(c / f"{k}.npy", d[k])
         units = ~d["entity_pad_mask"]
-        np.save(c / "entity_rows.npy", d["entities"].astype(np.float16)[units])
-        np.save(c / "entity_offsets.npy", np.concatenate([[0], np.cumsum(units.sum(1))]).astype(np.int64))
-        (c / "done").touch()
-    a = {p.stem: np.load(p, mmap_mode="r") for p in c.glob("*.npy")}
-    a["entities"] = PackedEntities(a.pop("entity_rows"), np.asarray(a.pop("entity_offsets")), a["entity_pad_mask"])
+        parts = {k: d[k] for k in _CACHED if k in d.files}
+        parts["entity_rows"] = d["entities"].astype(np.float16)[units]
+        parts["entity_offsets"] = np.concatenate([[0], np.cumsum(units.sum(1))]).astype(np.int64)
+        spec, end = {}, 0
+        tmp = data.with_suffix(".bin.tmp")
+        with open(tmp, "wb") as fh:
+            for k, a in parts.items():
+                a = np.ascontiguousarray(a)
+                end = -(-end // 64) * 64
+                spec[k] = (end, a.dtype.str, list(a.shape))
+                fh.seek(end)
+                fh.write(a.tobytes())
+                end += a.nbytes
+            fh.truncate(max(end, 1))
+        tmp.rename(data)
+        layout.write_text(json.dumps(spec))              # last: its presence marks the game complete
+    spec = json.loads(layout.read_text())
+    mm = np.memmap(data, np.uint8, "r")
+    a = {k: np.ndarray(tuple(shape), np.dtype(dt), buffer=mm, offset=off) for k, (off, dt, shape) in spec.items()}
+    a["entities"] = PackedEntities(a.pop("entity_rows"), np.array(a.pop("entity_offsets")), a["entity_pad_mask"])
     return a
+
+
+def _raise_open_files():
+    """Each mapped game holds a file descriptor (``mmap`` keeps one): lift the soft limit to the hard one."""
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 
 
 def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path | None = None) -> list[Game]:
@@ -136,6 +157,9 @@ def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path 
     plan = json.loads((dataset / "plan.json").read_text())
     picked = [g for g in plan["games"] if g["split"] == split and (dataset / "games" / f"{g['game']}.npz").exists()]
     picked = picked[:limit] if limit else picked
+    if cache is not None:
+        cache.mkdir(parents=True, exist_ok=True)
+        _raise_open_files()
     with ThreadPoolExecutor(8) as pool:      # zlib releases the GIL: unpacking a large dataset is I/O + inflate bound
         arrays = list(pool.map(lambda g: _arrays(dataset / "games" / f"{g['game']}.npz", cache), picked))
     out = []
@@ -337,7 +361,7 @@ def build_parser():
     p.add_argument("--no-core-residual", action="store_true")
     p.add_argument("--buttons-off", default=",".join(DEFAULT_BUTTONS_OFF))
     p.add_argument("--max-games", type=int, default=0, help="limit games per split (smoke tests)")
-    p.add_argument("--cache", type=Path, default=None, help="unpack games here (.npy) and memory-map them")
+    p.add_argument("--cache", type=Path, default=None, help="unpack games here (one file per game) and memory-map them")
     p.add_argument("--eval-batch", type=int, default=64)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", type=Path, default=None)
