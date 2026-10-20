@@ -21,6 +21,7 @@ the split, per-game counts and the totals.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import sys
@@ -134,6 +135,9 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
     return result
 
 
+_LIBC = ctypes.CDLL("libc.so.6")
+
+
 def _seed(game: str) -> int:
     return int(hashlib.sha256(game.encode()).hexdigest()[:8], 16)
 
@@ -156,6 +160,8 @@ def convert(out: Path, task: int, tasks: int):
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
         bc.save(out / "games", name=g["game"])
         print(g["game"], g["split"], json.dumps(bc.meta["counts"]["buttons"]), flush=True)
+        del bc
+        _LIBC.malloc_trim(0)     # return each game's freed heap: without it RSS grows ~0.35 GB a game
 
 
 def finalize(out: Path) -> dict:
