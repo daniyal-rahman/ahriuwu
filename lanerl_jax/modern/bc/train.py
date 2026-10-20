@@ -3,7 +3,8 @@
     python -m lanerl_jax.modern.bc.train DATASET [--epochs 30] [--out /mnt/nfs/checkpoints/lanerl-jax/modern-bc]
 
 The dataset is `dataset.py`'s output: ``plan.json`` (the game list and split) and ``games/<game>.npz``. Every
-game is loaded into host memory (entities as float16) and cut into windows of ``--window`` decisions at a
+game is loaded into host memory (entities as float16; with ``--cache DIR`` unpacked once to .npy files there and
+memory-mapped instead, for datasets larger than host memory) and cut into windows of ``--window`` decisions at a
 random offset per epoch; a batch is ``--batch`` windows, each run through the policy's GRU from a zero carry
 (the first ``--burn-in`` decisions of a window warm the state and carry no loss). The loss per decision is
 
@@ -88,23 +89,41 @@ class Game(NamedTuple):
     held: np.ndarray            # (T,) bool: label filled from the active order (datasets without it: False)
 
 
-def load_games(dataset: Path, split: str, limit: int | None = None) -> list[Game]:
-    plan = json.loads((dataset / "plan.json").read_text())
-    out = []
-    for g in plan["games"]:
-        if g["split"] != split:
-            continue
-        f = dataset / "games" / f"{g['game']}.npz"
-        if not f.exists():
-            continue
+_CACHED = ("entities", "entity_pad_mask", "self_vec", "global_vec", "button", "screen_x", "screen_y",
+           "label_valid", "click_valid", "click_on_unit", "held")
+
+
+def _arrays(f: Path, cache: Path | None) -> dict:
+    """A game's arrays: from the .npz, or memory-mapped from ``cache/<game>/`` (written on first use)."""
+    if cache is None:
         d = np.load(f)
+        return {k: d[k] for k in d.files}
+    c = cache / f.stem
+    if not (c / "done").exists():
+        d = np.load(f)
+        c.mkdir(parents=True, exist_ok=True)
+        for k in _CACHED:
+            if k in d.files:
+                np.save(c / f"{k}.npy", d[k].astype(np.float16) if k == "entities" else d[k])
+        (c / "done").touch()
+    return {p.stem: np.load(p, mmap_mode="r") for p in c.glob("*.npy")}
+
+
+def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path | None = None) -> list[Game]:
+    from concurrent.futures import ThreadPoolExecutor
+    plan = json.loads((dataset / "plan.json").read_text())
+    picked = [g for g in plan["games"] if g["split"] == split and (dataset / "games" / f"{g['game']}.npz").exists()]
+    picked = picked[:limit] if limit else picked
+    with ThreadPoolExecutor(8) as pool:      # zlib releases the GIL: unpacking a large dataset is I/O + inflate bound
+        arrays = list(pool.map(lambda g: _arrays(dataset / "games" / f"{g['game']}.npz", cache), picked))
+    out = []
+    for g, d in zip(picked, arrays):
         out.append(Game(g["game"], split, g["opponent_class"], g.get("opponent_kit") is not None,
-                        d["entities"].astype(np.float16), d["entity_pad_mask"], d["self_vec"], d["global_vec"],
-                        d["button"].astype(np.int32), d["screen_x"].astype(np.int32), d["screen_y"].astype(np.int32),
-                        d["label_valid"], d["click_valid"] & d["label_valid"], d["click_on_unit"],
-                        d["held"] if "held" in d.files else np.zeros(len(d["button"]), bool)))
-        if limit and len(out) >= limit:
-            break
+                        d["entities"].astype(np.float16, copy=False), d["entity_pad_mask"], d["self_vec"],
+                        d["global_vec"], d["button"].astype(np.int32, copy=False),
+                        d["screen_x"].astype(np.int32, copy=False), d["screen_y"].astype(np.int32, copy=False),
+                        np.asarray(d["label_valid"]), d["click_valid"] & d["label_valid"], d["click_on_unit"],
+                        np.asarray(d["held"]) if "held" in d else np.zeros(len(d["button"]), bool)))
     return out
 
 
@@ -296,6 +315,7 @@ def build_parser():
     p.add_argument("--no-core-residual", action="store_true")
     p.add_argument("--buttons-off", default=",".join(DEFAULT_BUTTONS_OFF))
     p.add_argument("--max-games", type=int, default=0, help="limit games per split (smoke tests)")
+    p.add_argument("--cache", type=Path, default=None, help="unpack games here (.npy) and memory-map them")
     p.add_argument("--eval-batch", type=int, default=64)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", type=Path, default=None)
@@ -315,8 +335,8 @@ def main(argv=None):
         signal.signal(sig, lambda signum, frame: stopping.append(signum))
     enable_compile_cache()
     t0 = time.perf_counter()
-    train = load_games(a.dataset, "train", a.max_games or None)
-    val = load_games(a.dataset, "val", a.max_games or None)
+    train = load_games(a.dataset, "train", a.max_games or None, a.cache)
+    val = load_games(a.dataset, "val", a.max_games or None, a.cache)
     n_train = sum(int(g.valid.sum()) for g in train)
     print(f"loaded {len(train)} train games ({n_train} decisions to learn from), {len(val)} val games "
           f"in {time.perf_counter() - t0:.0f}s", flush=True)

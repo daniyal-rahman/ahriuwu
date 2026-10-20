@@ -119,9 +119,9 @@ class BCGame(NamedTuple):
         return self._replace(**delayed, obs_index=np.maximum(src, 0).astype(np.int32),
                              label_valid=self.label_valid & (src >= 0), meta=meta)
 
-    def save(self, out: Path):
+    def save(self, out: Path, name: str | None = None):
         out.mkdir(parents=True, exist_ok=True)
-        game = self.meta["provenance"]["game"]
+        game = name or self.meta["provenance"]["game"]
         np.savez_compressed(out / f"{game}.npz", **{k: v for k, v in self._asdict().items() if k != "meta"})
         (out / f"{game}.json").write_text(json.dumps(self.meta, indent=1))
 

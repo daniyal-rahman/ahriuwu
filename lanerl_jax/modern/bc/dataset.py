@@ -66,8 +66,12 @@ def _combat_type(export: Path, champion_id: int) -> int:
 
 
 def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=DATASETS,
-         profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER) -> dict:
+         profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER, champions=None) -> dict:
+    """With ``champions`` (several clones in one dataset) every game enters once per listed top laner it
+    has, as ``<game>.<champion>``, whoever the export's actor was (the decoder resolves both laners' casts,
+    MULTICHAMP.md section 8); mirrors are skipped, and both sides of a game share its split."""
     games, skipped = [], []
+    combat = {}      # champion -> stat.mCombatType at spawn, read once per champion
     datasets = tuple(Path(d) for d in datasets)
     for dataset in datasets:
         for game_dir in sorted((dataset / "games").iterdir()):
@@ -83,30 +87,42 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
                 skipped.append(dict(game=game_dir.name, reason="export incomplete", status=receipt.get("status")))
                 continue
             manifest = json.loads(manifest_path.read_text())
-            if manifest.get("actor_champion", champion) != champion or not any(
+            if champions:
+                tops = [r["name"] for r in manifest["initial_roster"] if r["assigned_role"] == "TOP"]
+                picks = [c for c in tops if c in champions] if len(set(tops)) == len(tops) == 2 else []
+            elif manifest.get("actor_champion", champion) == champion and any(
                     r["name"] == champion for r in manifest["initial_roster"]):
-                skipped.append(dict(game=game_dir.name, reason=f"no {champion}"))
+                picks = [champion]
+            else:
+                picks = []
+            if not picks:
+                skipped.append(dict(game=game_dir.name, reason=f"no {'/'.join(champions or [champion])}"))
                 continue
             if manifest["end_seconds"] < MIN_GAME_S:
                 skipped.append(dict(game=game_dir.name, reason="shorter than 14 min",
                                     seconds=manifest["end_seconds"]))
                 continue
-            opp = _opponent(manifest, champion)
-            ranged = _combat_type(export, opp["object_id"]) == _RANGED
-            games.append(dict(game=game_dir.name, path=str(game_dir), dataset=str(dataset),
-                              opponent=opp["name"], opponent_class="ranged" if ranged else "melee"))
-    vocabulary = [champion] + sorted({g["opponent"] for g in games} - {champion})
-    # Hold out VAL_SHARE of each class: the games whose hash ranks lowest.
+            for c in picks:
+                opp = _opponent(manifest, c)
+                if opp["name"] not in combat:
+                    combat[opp["name"]] = _combat_type(export, opp["object_id"])
+                games.append(dict(game=f"{game_dir.name}.{c}" if champions else game_dir.name,
+                                  base=game_dir.name, champion=c, path=str(game_dir), dataset=str(dataset),
+                                  opponent=opp["name"],
+                                  opponent_class="ranged" if combat[opp["name"]] == _RANGED else "melee"))
+    clones = list(champions or [champion])
+    vocabulary = clones + sorted({g["opponent"] for g in games} - set(clones))
+    # Hold out VAL_SHARE of each class: the games whose hash ranks lowest (both sides of a game together).
     for cls in ("melee", "ranged"):
         members = sorted((g for g in games if g["opponent_class"] == cls),
-                         key=lambda g: hashlib.sha256(g["game"].encode()).hexdigest())
-        n_val = round(VAL_SHARE * len(members))
-        for i, g in enumerate(members):
-            g["split"] = "val" if i < n_val else "train"
+                         key=lambda g: hashlib.sha256(g["base"].encode()).hexdigest())
+        val = {g["base"] for g in members[:round(VAL_SHARE * len(members))]}
+        for g in members:
+            g["split"] = "val" if g["base"] in val else "train"
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
-    result = dict(lag=lag, hold=hold, champion=champion, profile=profile, tier=tier, window_s=list(LANE_WINDOW_S),
+    result = dict(lag=lag, hold=hold, champion=champion, champions=champions, profile=profile, tier=tier, window_s=list(LANE_WINDOW_S),
                   min_game_s=MIN_GAME_S, val_share=VAL_SHARE, vocabulary=vocabulary,
                   datasets={str(d): decoder_commit(d) for d in datasets},
                   games=games, skipped=skipped)
@@ -126,11 +142,11 @@ def convert(out: Path, task: int, tasks: int):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
             continue
-        bc = convert_game(Path(g["path"]), champion=p.get("champion", CHAMPION), hold=p.get("hold", True),
+        bc = convert_game(Path(g["path"]), champion=g.get("champion", p.get("champion", CHAMPION)), hold=p.get("hold", True),
                           profile=p.get("profile", OB.PROFILE), tier=p.get("tier", CT.ARCHIVE_TIER))
         bc = bc.lagged(lag, seed=_seed(g["game"]))
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
-        bc.save(out / "games")
+        bc.save(out / "games", name=g["game"])
         print(g["game"], g["split"], json.dumps(bc.meta["counts"]["buttons"]), flush=True)
 
 
@@ -202,6 +218,7 @@ def main():
     a.add_argument("--lag", type=parse_lag, default=1)
     a.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
     a.add_argument("--champion", default=CHAMPION, help="the cloned champion (a registered modern kit)")
+    a.add_argument("--champions", default="", help="comma list: several clones in one dataset (v2 profile)")
     a.add_argument("--datasets", nargs="+", type=Path, default=list(DATASETS), help="exported batch directories")
     a.add_argument("--profile", default=OB.PROFILE, choices=OB.PROFILES, help="observation profile")
     a.add_argument("--tier", type=int, default=CT.ARCHIVE_TIER, help="skill tier recorded in v2 (8 = Master)")
@@ -214,7 +231,8 @@ def main():
     args = parser.parse_args()
     if args.command == "plan":
         p = plan(args.out, args.lag, hold=not args.no_hold, champion=args.champion, datasets=args.datasets,
-                 profile=args.profile, tier=args.tier)
+                 profile=args.profile, tier=args.tier,
+                 champions=[c for c in args.champions.split(",") if c] or None)
         print(len(p["games"]), "games,", len(p["skipped"]), "skipped,",
               Counter(g["split"] for g in p["games"]))
     elif args.command == "convert":
