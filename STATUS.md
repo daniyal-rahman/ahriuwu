@@ -102,3 +102,13 @@ without a profile field are read as v1. The Jax export is complete (379 games) a
 (`/mnt/nfs/shared/bc_modern_jax_v2obs`, 367 games) is training the Jax clone (job 8444). The bulk top-lane
 export (`rofl_bc_2619_top_all_native_20261018`, 7,455 games, all eight chunks 8299/8307/8309/9451/9452/9454/9455/9456 queued, 2,074 done at 08:15 UTC Oct 19; chunk 8309 waiting on desktop memory (other threads' jobs hold 26 of 29 GB), rerun 10666 for rows 2035-2040; rows 7000-7043 done on danilogin (array 10673, cancelled after that: ~10 min/game); rows 6000-6999 and 7044-7454 on the Mac via puller job 12008, 6 at a time (00:00-09:00 PT window, lifted by Dani until 23:24 PDT Oct 19; see batch README). From ~16:10 PDT Oct 19 new tasks on both hosts use the opt-in v9 native runtime (tag 2619-decoder-throughput-v9, per-host builds; pilots identical NPZ/index, 14-17% less CPU). Registry lost-update race from danilogin-side writes found and fixed Oct 19: 1 game re-exported, 30 games keep consistent token ids but an overwritten history entry (batch README). Decoder switched 2026-10-19 after ~2,470 games, at Dani's request, to the decoder thread's verified commit 75e3e4e (compiled event_value_codec + direct update handoff, no release tag, pinned in the batch as decoder-snapshot-direct): pilot of 8 fresh games + 2 re-exports passed (gameplay values and converter arrays identical to v7, 35% faster, 28% less RAM); remaining desktop chunks 11147/11155/11156/11157 run on it with 2.5 GB per task)
 is running on the desktop.
+
+**2026-10-19 22:10 PDT (Dani: a BC model by the morning).** Bulk export at 4,994 of 7,455 games. Desktop rows
+<5000 moved to a two-rows-per-task array 12329 (Slurm gives each task a whole core; one decode uses one
+thread); rows 5000-5999 went to the Mac pool (puller 12333). First all-top-lane clone, `modern-bc-v5-top13`:
+dataset `/mnt/nfs/shared/bc_modern_top13_v2obs` = both top laners of every finished bulk game for the 13
+top-lane sim kits (4,219 champion-games available; `dataset plan --champions`, fe5f30e4), plan 12353,
+convert 12354 (96 tasks, 4 at a time at 6.4 GB each, no task starts after it could run past 02:45 PDT, so
+a partial dataset is a uniform sample), finalize 12356, smoke train 12355 (3 games, the new `--cache`
+memory-mapped loader), train 12357 (v3 recipe, 8 epochs, games memory-mapped from desktop /scratch; the
+full set does not fit in host memory). Gate against the afk opponent to follow.
