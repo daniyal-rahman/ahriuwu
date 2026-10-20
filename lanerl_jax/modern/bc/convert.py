@@ -242,6 +242,8 @@ def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
     t = np.asarray(t, float)
     cooldown = np.zeros((len(t), 4))
     tables = cooldown_tables(kit_name)
+    if not any(tables):
+        raise ValueError(f"{kit_name}: no ability data (no decoder catalog, so its casts are not resolved either)")
     fallback = 0
     for slot in range(4):
         msgs = sorted((te, rem) for te, sl, rem, _dur, _mode in events if sl == slot)
