@@ -73,6 +73,11 @@ def table_cast_rules(champion: str) -> CastRules:
     types = [CT.CAST_TYPES[i] for i in CT.cast_types()[idx]]
     return CastRules(self_cast=frozenset({s for s in range(4) if types[s] == "self"} | {13}),
                      unit_target=frozenset(s for s in range(4) if types[s] == "unit"))
+#: Label a cast on the champion itself (target = ``me``: Annie E, Karma E) or one the decoder reads as
+#: self-targeted (``Action.mode`` "self", or "unit" with no target: recasts such as Lux E, Zed W, Aurora Q) as
+#: its button with no cursor, whatever the champion table says. False reproduces the labels of datasets converted before 2026-10-20 (not representable).
+MODE_SELF_CASTS = True
+
 _PRIORITY = {"move": 0, "stop": 1, "attack": 2, "cast": 3}
 
 
@@ -134,7 +139,7 @@ def screen_cell(ds: float, dn: float):
 
 def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_xy: Dict[int, np.ndarray],
                   axis: np.ndarray, normal: np.ndarray, enemies: set, summoner_slot=None,
-                  hold: bool = True, rules: CastRules | None = None) -> Labels:
+                  hold: bool = True, rules: CastRules | None = None, me: int | None = None) -> Labels:
     """Label the decisions at times `t`. `me_xy` (T, 2) is the champion's position at each decision;
     `unit_xy[id]` (T, 2) for every unit an action can target (NaN where unknown); `axis`/`normal` the
     champion's lane frame; `enemies` the ids of enemy units; `summoner_slot` maps replay cast slots 4/5 to the
@@ -143,7 +148,7 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
     walking to, or a click on the unit it is auto-attacking (`held`); they stop when the champion arrives,
     stands still, loses the target, is given a new order, stops, recalls or ults. ``rules`` (``cast_rules``)
     says which ability slots cast on the champion itself and which need the cursor on the target unit
-    (default: Garen's)."""
+    (default: Garen's); ``me`` is the champion's unit id (a cast on it is a self cast, ``MODE_SELF_CASTS``)."""
     summoner_slot = summoner_slot or {4: 0, 5: 1}
     rules = rules or CastRules(frozenset(SELF_CAST_SLOTS), frozenset({3}))
     n = len(t)
@@ -217,6 +222,8 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
                 pass                                   # no cursor; the click loss is masked
             elif a.target is not None and a.target in enemies and unit_point(k, a.target) is not None:
                 click(k, *unit_point(k, a.target), unit=True)
+            elif MODE_SELF_CASTS and me is not None and a.target == me and a.slot < 4:
+                pass                                   # cast on itself: no cursor
             elif a.slot in rules.unit_target:
                 representable[k] = False               # a unit cast on an ally, a ward or an unseen unit
                 button[k] = b["noop"]
@@ -224,6 +231,8 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
                 click(k, *unit_point(k, a.target), unit=True)      # summoners may target any unit
             elif a.point is not None:
                 click(k, *a.point, unit=False)
+            elif MODE_SELF_CASTS and a.target is None and getattr(a, "mode", None) in ("self", "unit"):
+                pass                                   # a recast or self cast: no cursor
             else:
                 representable[k] = False
         else:

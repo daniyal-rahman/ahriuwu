@@ -2,6 +2,7 @@
 
     python -m lanerl_jax.modern.bc.dataset plan OUT [--lag 1]      select games, split, vocabulary
     python -m lanerl_jax.modern.bc.dataset convert OUT TASK TASKS  convert every TASKS-th game
+    python -m lanerl_jax.modern.bc.dataset relabel OUT TASK TASKS  redo the labels of converted games in place
     python -m lanerl_jax.modern.bc.dataset finalize OUT            manifest.json and statistics
 
 (`slurm/modern_bc_dataset.sbatch` runs the three on the desktop.)
@@ -33,7 +34,7 @@ import numpy as np
 
 from .replay import STAT_NAMES, STAT_SCALE, DECODER_SCRIPTS, decoder_commit
 from ..actions import MODERN_BUTTONS as BUTTONS_WITH_STOP
-from .convert import LANE_WINDOW_S, convert_game, parse_lag
+from .convert import LANE_WINDOW_S, _converter_commit, convert_game, parse_lag, relabel_game
 from .. import obs as OB
 from ..data import champion_table as CT
 
@@ -179,6 +180,72 @@ def convert(out: Path, task: int, tasks: int):
         _LIBC.malloc_trim(0)     # return each game's freed heap: without it RSS grows ~0.35 GB a game
 
 
+#: Labels as of 2026-10-20: unknown-mode ability casts aimed at their received endpoint, self-mode casts kept.
+RELABEL = "casts-2026-10-20"
+_LABEL_ARRAYS = ("button", "screen_x", "screen_y", "uses_screen", "click_valid", "click_on_unit", "held")
+
+
+def _lag_ok(T: int, lag, seed: int) -> np.ndarray:
+    """Decisions with an observation `lag` decisions old (as `convert.BCGame.lagged` draws it)."""
+    lo, hi = lag if isinstance(lag, tuple) else (lag, lag)
+    k = np.random.default_rng(seed).integers(lo, hi + 1, T) if hi > lo else np.full(T, lo)
+    return np.arange(T) - k >= 0
+
+
+def relabel_arrays(game: dict, d: dict, lag, hold: bool = True):
+    """(the game's label arrays as the converter gives them now, the label counts): observations untouched."""
+    labels = relabel_game(Path(game["path"]), game["champion"], game.get("role", "top"), hold)
+    in_scope = d["in_scope"]
+    valid = in_scope & labels.representable              # the counts are before the lag, as in convert_game
+    new = {k: getattr(labels, k) for k in _LABEL_ARRAYS}
+    new["label_valid"] = valid & _lag_ok(len(in_scope), lag, _seed(game["game"]))
+    counts = dict(label_valid=int(valid.sum()), not_representable=int((~labels.representable).sum()),
+                  clicks_clamped=int(labels.clamped.sum()), click_valid=int((labels.click_valid & valid).sum()),
+                  superseded=labels.n_superseded, repeat_attacks=labels.n_repeat_attacks,
+                  held=int((labels.held & valid).sum()),
+                  held_on_unit=int((labels.held & labels.click_on_unit & valid).sum()),
+                  buttons={b: int(np.sum((labels.button == i) & valid)) for i, b in enumerate(BUTTONS_WITH_STOP)})
+    return new, counts
+
+
+def relabel(out: Path, task: int, tasks: int):
+    """Redo the labels of every converted game of this task's share in place (``RELABEL``); a game already
+    relabelled is skipped. The label check (`convert._label_check`) is not redone: it stays the old labels'."""
+    p = json.loads((out / "plan.json").read_text())
+    lag = tuple(p["lag"]) if isinstance(p["lag"], list) else p["lag"]
+    bases = list(dict.fromkeys(g.get("base", g["game"]) for g in p["games"]))
+    mine = set(bases[task::tasks])
+    for g in (g for g in p["games"] if g.get("base", g["game"]) in mine):
+        js, npz = out / "games" / f"{g['game']}.json", out / "games" / f"{g['game']}.npz"
+        if not js.exists():
+            continue
+        meta = json.loads(js.read_text())
+        if meta.get("relabel", {}).get("tag") == RELABEL:
+            continue
+        try:
+            d = dict(np.load(npz))
+            new, counts = relabel_arrays(dict(g, champion=g.get("champion", p.get("champion", CHAMPION))), d, lag,
+                                         p.get("hold", True))
+        except Exception:
+            (out / "failed").mkdir(exist_ok=True)
+            (out / "failed" / f"{g['game']}.relabel.txt").write_text(traceback.format_exc())
+            print(g["game"], "RELABEL FAILED", flush=True)
+            continue
+        changed = int(np.sum(np.any([d[k] != new[k] for k in ("button", "screen_x", "screen_y", "label_valid")], 0)))
+        d.update(new)
+        tmp = npz.with_name(npz.stem + ".relabel-tmp.npz")
+        np.savez_compressed(tmp, **d)
+        tmp.replace(npz)
+        old = {k: meta["counts"][k] for k in counts}
+        meta["counts"].update(counts)
+        meta["relabel"] = dict(tag=RELABEL, converter_commit=_converter_commit(), decisions_changed=changed,
+                               counts_before=old, label_check="of the labels before the relabel")
+        js.write_text(json.dumps(meta, indent=1))
+        print(g["game"], "changed", changed, json.dumps(counts["buttons"]), flush=True)
+        del d, new
+        _LIBC.malloc_trim(0)
+
+
 def finalize(out: Path) -> dict:
     p = json.loads((out / "plan.json").read_text())
     rows, missing = [], []
@@ -257,6 +324,10 @@ def main():
     a.add_argument("out", type=Path)
     a.add_argument("task", type=int)
     a.add_argument("tasks", type=int)
+    a = sub.add_parser("relabel")
+    a.add_argument("out", type=Path)
+    a.add_argument("task", type=int)
+    a.add_argument("tasks", type=int)
     a = sub.add_parser("finalize")
     a.add_argument("out", type=Path)
     args = parser.parse_args()
@@ -269,6 +340,8 @@ def main():
               Counter(g["split"] for g in p["games"]))
     elif args.command == "convert":
         convert(args.out, args.task, args.tasks)
+    elif args.command == "relabel":
+        relabel(args.out, args.task, args.tasks)
     else:
         print(json.dumps(finalize(args.out)["totals"], indent=1))
 

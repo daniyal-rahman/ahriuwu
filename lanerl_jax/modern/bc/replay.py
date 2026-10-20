@@ -86,6 +86,7 @@ class Action(NamedTuple):
     point: Optional[Tuple[float, float]] = None   # path end, or a cast's target point
     slot: int = -1                            # cast slot (0-3 Q/W/E/R, 4-5 summoners, 12 trinket, 13 recall)
     n_waypoints: int = 0
+    mode: Optional[str] = None                # a cast's targeting mode as the decoder read it (None unknown)
 
 
 class ReplayGame(NamedTuple):
@@ -466,15 +467,26 @@ def _champion_combat(fields: _Fields, me: int, enemies: set, t) -> np.ndarray:
 FLASH = 4
 
 
+#: Aim unknown-mode ability casts at their received endpoint (``_cast_point``); False reproduces the labels
+#: of datasets converted before 2026-10-20.
+AIM_FALLBACK = True
+
+
 def _cast_point(d) -> Optional[Tuple[float, float]]:
     """A cast's target point: the decoder's resolved point; for summoners, items and the trinket (slots 4+),
     whose records carry no resolved target, the record's cursor vector (``0xd0``). An unresolved ability cast
     (slots 0-3, e.g. a champion whose catalog the batch lacked) has no point: ``0xd0`` is then the caster's
-    own position, not an aim point (decoder thread, 2026-10-18)."""
+    own position, not an aim point (decoder thread, 2026-10-18). An ability whose asset cast mode the decoder
+    does not know (``targeting_mode`` None: Syndra Q, Viktor E, Zeri W/E, Kayle Q, Varus E, ...) is masked
+    there, but its received endpoint ``0x2c`` is what the decoder resolves known point casts to: equal to the
+    resolved point on all 122,857 casts that have both (240-game audit, 2026-10-20). That is used instead."""
     p = d.get("target_point_world_xz")
     if p is not None:
         return (float(p[0]), float(p[1]))
     if d.get("slot") is not None and 0 <= int(d["slot"]) < 4:
+        w = (d.get("wire_vectors_xyz") or {}).get("0x2c")
+        if AIM_FALLBACK and d.get("targeting_mode") is None and w is not None and len(w) == 3:
+            return (float(w[0]), float(w[2]))
         return None
     w = d.get("wire_vectors_xyz") or {}
     v = w.get("0xd0")
@@ -525,7 +537,7 @@ def _actions(fields: _Fields, me: int, opponent: int):
         d = fields.value("event.ability_cast_received_proxy", row)
         if uid == me:
             actions.append(Action(float(tm), "cast", target=d.get("target_id"), point=_cast_point(d),
-                                  slot=d["slot"]))
+                                  slot=d["slot"], mode=d.get("targeting_mode")))
         else:
             opponent_casts.append((float(tm), d["slot"]))
     actions.sort(key=lambda a: a.t)

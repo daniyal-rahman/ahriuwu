@@ -57,7 +57,7 @@ from ..frame import make_lane_frame
 from ..train import LANE_HALF_WIDTH, default_loadouts
 from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
 from ..world.views import visibility
-from .labels import label_actions, cast_rules
+from .labels import Labels, label_actions, cast_rules
 from .replay import (BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, lane_line,
                      read_game)
 from ..data import champion_table as CT
@@ -569,16 +569,8 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     t = decision_times(*window)
     g = read_game(game_dir, t, champion, lane)
     T = len(t)
-    i_me = g.index(g.me)
-    me_team = g.units[i_me].team
-    registered = g.opponent_name in K.BY_NAME
-    opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
-    me_kit = stand_in_kit(champion)
-    pair = (me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)
-    cfg = world_config(*pair, lane)
-    frames = _frames(g, cfg, lane)
+    i_me, me_team, registered, me_kit, pair, cfg, frames, me_xy = _setup(g, champion, lane)
     frame = frames[me_team]
-    me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
 
     f, unit_of_slot, s_me = _unit_fields(g, cfg, me_xy, extra_champions)
     own, conflicts = _own_fields(g, s_me, T, champion)
@@ -610,10 +602,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     key = (pair, lane, s_me, profile, tier, role, extra_champions)
     f["seen_cast"][:, other] = _seen_casts(g, _vmapped(enemy_seen, f, key + ("enemy_seen",)), T)
 
-    enemies = {u.id for u in g.units if u.team != me_team}
-    unit_xy = {u.id: np.stack([g.x[:, i], g.y[:, i]], -1) for i, u in enumerate(g.units)}
-    labels = label_actions(t, g.actions, me_xy, unit_xy, np.asarray(frame.axis), np.asarray(frame.normal),
-                           enemies, g.summoner_slot, hold=hold, rules=cast_rules(champion))
+    labels = _labels(g, champion, me_team, frame, me_xy, hold)
     f["label"] = np.stack([labels.button, labels.screen_x, labels.screen_y], -1)
 
     def observe(x):
@@ -702,6 +691,37 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
                   screen_x=labels.screen_x, screen_y=labels.screen_y, uses_screen=labels.uses_screen,
                   click_valid=labels.click_valid, click_on_unit=labels.click_on_unit, label_valid=label_valid,
                   held=labels.held, in_scope=in_scope, obs_index=np.arange(T, dtype=np.int32), t=t, meta=meta)
+
+
+def _setup(g: ReplayGame, champion: str, lane: int):
+    """The world a laner's game is converted in: (index of the champion, its team, opponent kit registered,
+    its stand-in kit, the world's kit pair, config, lane frames, the champion's position per decision)."""
+    i_me = g.index(g.me)
+    me_team = g.units[i_me].team
+    registered = g.opponent_name in K.BY_NAME
+    opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
+    me_kit = stand_in_kit(champion)
+    pair = (me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)
+    cfg = world_config(*pair, lane)
+    me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
+    return i_me, me_team, registered, me_kit, pair, cfg, _frames(g, cfg, lane), me_xy
+
+
+def _labels(g: ReplayGame, champion: str, me_team: int, frame, me_xy, hold: bool):
+    enemies = {u.id for u in g.units if u.team != me_team}
+    unit_xy = {u.id: np.stack([g.x[:, i], g.y[:, i]], -1) for i, u in enumerate(g.units)}
+    return label_actions(g.t, g.actions, me_xy, unit_xy, np.asarray(frame.axis), np.asarray(frame.normal),
+                         enemies, g.summoner_slot, hold=hold, rules=cast_rules(champion), me=g.me)
+
+
+def relabel_game(game_dir: Path, champion: str, role: str = "top", hold: bool = True,
+                 window=LANE_WINDOW_S) -> Labels:
+    """The labels `convert_game` gives the game now, without building observations (labels depend only on
+    the replay's actions and positions and the lane frame)."""
+    lane = ROLE_LANE[role]
+    g = read_game(game_dir, decision_times(*window), champion, lane)
+    _, me_team, _, _, _, _, frames, me_xy = _setup(g, champion, lane)
+    return _labels(g, champion, me_team, frames[me_team], me_xy, hold)
 
 
 def main():
