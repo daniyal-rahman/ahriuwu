@@ -6,7 +6,7 @@
 #SBATCH --mem=27G
 #SBATCH --time=04:00:00
 #SBATCH --output=/mnt/nfs/shared/modern-bc/%x-%A_%a.out
-# Converts a planned dataset on the GPU: one Slurm task runs WORKERS conversion processes that share the card
+# Converts a planned dataset on the GPU (pools take 60% of the card: loaded executables live outside them): one Slurm task runs WORKERS conversion processes that share the card
 # (the observation and fog are batched JAX; reading and labelling stay on the CPU, one core each). Array task j
 # takes dataset tasks j*WORKERS .. j*WORKERS+WORKERS-1 of WORKERS*CHUNKS; run the array %1 (one GPU). Converted
 # games are skipped, so a pre-empted task is resubmitted as is. From the login node:
@@ -16,7 +16,7 @@ CODE=${CODE:-/mnt/nfs/projects/ahriuwu-modern-bc}
 cd "$CODE"
 W=${WORKERS:-8}; N=$((W * CHUNKS)); j=${SLURM_ARRAY_TASK_ID:-0}
 export JAX_PLATFORMS=cuda PYTHONUNBUFFERED=1 OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_PYTHON_CLIENT_MEM_FRACTION=$(python3 -c "print(round(0.9 / $W, 3))")
+export XLA_PYTHON_CLIENT_MEM_FRACTION=$(python3 -c "print(round(0.6 / $W, 3))")
 PY=/mnt/nfs/projects/ahriuwu-lanerl-jax/.venv-gpu/bin/python
 pids=()
 for w in $(seq 0 $((W - 1))); do

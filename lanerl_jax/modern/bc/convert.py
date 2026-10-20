@@ -462,7 +462,7 @@ def _scope(g: ReplayGame, me_xy, corridor, extra_champions: bool = False):
 
 
 _JITTED: "OrderedDict[tuple, Any]" = OrderedDict()
-_JITTED_MAX = 32
+_JITTED_MAX = 12      # each holds its world constants on the device; 8 GPU workers share one card
 
 
 def _vmapped(fn, fields, key=None):
