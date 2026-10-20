@@ -159,7 +159,7 @@ def _loadout(name: str):
         raise
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=8)        # ~0.3 GB of host arrays each
 def world_config(blue: str, red: str, lane: int = _TOP):
     """The one-lane modern world for a (blue, red) champion pair (host-side, cached)."""
     return MS.build_config((_loadout(blue), _loadout(red)), lanes=(lane,), jungle=False, objectives=False,
@@ -720,8 +720,14 @@ def relabel_game(game_dir: Path, champion: str, role: str = "top", hold: bool = 
     the replay's actions and positions and the lane frame)."""
     lane = ROLE_LANE[role]
     g = read_game(game_dir, decision_times(*window), champion, lane)
-    _, me_team, _, _, _, _, frames, me_xy = _setup(g, champion, lane)
+    i_me = g.index(g.me)
+    me_team = g.units[i_me].team
+    me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
+    frames = _frames(g, world_config(*_FRAME_PAIR, lane), lane)    # the lane frames do not depend on the kits
     return _labels(g, champion, me_team, frames[me_team], me_xy, hold)
+
+
+_FRAME_PAIR = ("Garen", "Jax")
 
 
 def main():

@@ -78,6 +78,11 @@ def table_cast_rules(champion: str) -> CastRules:
 #: its button with no cursor, whatever the champion table says. False reproduces the labels of datasets converted before 2026-10-20 (not representable).
 MODE_SELF_CASTS = True
 
+#: Label a cast on an allied unit (a shield, heal or dash target) as its button with the click on that unit,
+#: as an enemy target is; False reproduces the labels of datasets converted before 2026-10-20 (not
+#: representable). Whether the world can act on an ally click is the world's concern.
+ALLY_TARGET_CLICKS = True
+
 _PRIORITY = {"move": 0, "stop": 1, "attack": 2, "cast": 3}
 
 
@@ -224,6 +229,8 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
                 click(k, *unit_point(k, a.target), unit=True)
             elif MODE_SELF_CASTS and me is not None and a.target == me and a.slot < 4:
                 pass                                   # cast on itself: no cursor
+            elif ALLY_TARGET_CLICKS and a.target is not None and a.slot < 4 and unit_point(k, a.target) is not None:
+                click(k, *unit_point(k, a.target), unit=True)      # an allied target
             elif a.slot in rules.unit_target:
                 representable[k] = False               # a unit cast on an ally, a ward or an unseen unit
                 button[k] = b["noop"]

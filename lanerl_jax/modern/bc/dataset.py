@@ -180,8 +180,9 @@ def convert(out: Path, task: int, tasks: int):
         _LIBC.malloc_trim(0)     # return each game's freed heap: without it RSS grows ~0.35 GB a game
 
 
-#: Labels as of 2026-10-20: unknown-mode ability casts aimed at their received endpoint, self-mode casts kept.
-RELABEL = "casts-2026-10-20"
+#: Labels as of 2026-10-20: unknown-mode ability casts aimed at their received endpoint, self casts kept,
+#: casts on allies clicked on the ally.
+RELABEL = "casts-2026-10-20b"
 _LABEL_ARRAYS = ("button", "screen_x", "screen_y", "uses_screen", "click_valid", "click_on_unit", "held")
 
 
