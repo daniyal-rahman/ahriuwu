@@ -161,6 +161,17 @@ def countdowns_received(dataset: Path) -> bool:
     return r.returncode == 0
 
 
+@lru_cache(maxsize=None)
+def lane_line(lane: int = 2) -> tuple:
+    """A lane's centre polyline (0 bot, 1 mid, 2 top): top is ``TOP_LANE``, mid and bot the world's map geometry."""
+    if lane == 2:
+        return TOP_LANE
+    from ..map.lanes import LANE_NAMES
+    from ..world.config import PATCH_DIR
+    paths = json.loads((PATCH_DIR / "geometry.json").read_text())["lane_paths"]
+    return tuple(tuple(p) for p in paths[LANE_NAMES[lane]])
+
+
 def lane_distance(x, y, polyline=TOP_LANE) -> np.ndarray:
     """Distance from points to a polyline (the top lane's centre line by default)."""
     p = np.stack(np.broadcast_arrays(np.asarray(x, float), np.asarray(y, float)), -1)
@@ -247,8 +258,9 @@ def _fields_of(path: Path, loader) -> _Fields:
     return _LAST_FIELDS[1]
 
 
-def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayGame:
-    """Read one exported game onto the decision times `t`. `game_dir` holds `export/`."""
+def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int = 2) -> ReplayGame:
+    """Read one exported game onto the decision times `t`. `game_dir` holds `export/`; `lane` (0 bot, 1 mid,
+    2 top) is the one whose minions are kept."""
     loader, position_model = _decoder()
     export = game_dir / "export"
     manifest = json.loads((export / "manifest.json").read_text())
@@ -283,7 +295,7 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayG
         turret_xy[key] = tuple(p["position_xz"])
         turret_id[key] = tid
 
-    # Minions: creation, type, movement; kept if they walk the top lane.
+    # Minions: creation, type, movement; kept if they walk the lane.
     born = {}
     rows, times, ids = fields.rows("event.lane_creation", "minion")
     for tm, mid in zip(times, ids):
@@ -306,7 +318,7 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen") -> ReplayG
                 first_path.setdefault(uid, v["waypoints_xz"])
     top = sorted(m for m, w in first_path.items()
                  if m in born and m in mtype and mtype[m] in MINION_SUB
-                 and lane_distance(*w[-1]) < _TOP_LANE_RADIUS)
+                 and lane_distance(*w[-1], lane_line(lane)) < _TOP_LANE_RADIUS)
     minions = [Unit(m, "minion", BLUE if sum(first_path[m][0]) < _RIVER else RED, mtype[m]) for m in top]
 
     units = champions + minions + turrets

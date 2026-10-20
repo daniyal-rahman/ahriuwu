@@ -104,7 +104,7 @@ class LanePolicy(nn.Module):
         pooled_max = jnp.max(jnp.where(jnp.isfinite(masked), masked, -1e30), axis=-2)
         pooled_max = jnp.where(jnp.any(keep, axis=-2), pooled_max, 0.0)
         pooled_mean = jnp.sum(jnp.where(keep, tokens, 0.0), axis=-2) / jnp.maximum(jnp.sum(keep, axis=-2), 1.0)
-        if c.profile == "modern-world-v2":
+        if c.profile in ("modern-world-v2", "modern-world-v3"):
             ids = jnp.clip(self_vec[..., :V2_ID_COLUMNS].astype(jnp.int32), 0, None)
             champ = nn.Embed(c.n_champion_ids, c.champion_embed, name="champion_embed")
             parts = [self_vec[..., V2_ID_COLUMNS:], champ(jnp.minimum(ids[..., 0], c.n_champion_ids - 1)),

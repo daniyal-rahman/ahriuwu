@@ -46,6 +46,7 @@ MIN_GAME_S = 840.0
 VAL_SHARE = 0.10
 CHAMPION = "Garen"
 _RANGED = 2      # stat.mCombatType
+_REPLAY_ROLE = {"top": "TOP", "mid": "MIDDLE", "bot": "BOTTOM", "support": "UTILITY"}   # footer assigned_role
 
 
 def _opponent(manifest, champion=CHAMPION):
@@ -67,10 +68,12 @@ def _combat_type(export: Path, champion_id: int) -> int:
 
 
 def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=DATASETS,
-         profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER, champions=None) -> dict:
-    """With ``champions`` (several clones in one dataset) every game enters once per listed top laner it
-    has, as ``<game>.<champion>``, whoever the export's actor was (the decoder resolves both laners' casts,
-    MULTICHAMP.md section 8); mirrors are skipped, and both sides of a game share its split."""
+         profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER, champions=None, roles=("top",),
+         extra_champions: bool = False) -> dict:
+    """With ``champions`` (several clones in one dataset, or ``["all"]``) every game enters once per listed
+    player in one of ``roles`` (``obs.ROLES``), as ``<game>.<champion>``, whoever the export's actor was (the
+    decoder resolves every player's casts, MULTICHAMP.md section 8); a role pair of one champion is skipped,
+    and all sides of a game share its split. ``extra_champions`` is passed to the converter."""
     games, skipped = [], []
     combat = {}      # champion -> stat.mCombatType at spawn, read once per champion
     datasets = tuple(Path(d) for d in datasets)
@@ -89,12 +92,14 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
                 continue
             manifest = json.loads(manifest_path.read_text())
             if champions:
-                tops = [r["name"] for r in manifest["initial_roster"] if r["assigned_role"] == "TOP"]
-                picks = [c for c in tops if champions == ["all"] or c in champions] \
-                    if len(set(tops)) == len(tops) == 2 else []
+                picks = []
+                for role in roles:
+                    pair = [r["name"] for r in manifest["initial_roster"] if r["assigned_role"] == _REPLAY_ROLE[role]]
+                    if len(set(pair)) == len(pair) == 2:
+                        picks += [(c, role) for c in pair if champions == ["all"] or c in champions]
             elif manifest.get("actor_champion", champion) == champion and any(
                     r["name"] == champion for r in manifest["initial_roster"]):
-                picks = [champion]
+                picks = [(champion, "top")]
             else:
                 picks = []
             if not picks:
@@ -104,12 +109,12 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
                 skipped.append(dict(game=game_dir.name, reason="shorter than 14 min",
                                     seconds=manifest["end_seconds"]))
                 continue
-            for c in picks:
+            for c, role in picks:
                 opp = _opponent(manifest, c)
                 if opp["name"] not in combat:
                     combat[opp["name"]] = _combat_type(export, opp["object_id"])
                 games.append(dict(game=f"{game_dir.name}.{c}" if champions else game_dir.name,
-                                  base=game_dir.name, champion=c, path=str(game_dir), dataset=str(dataset),
+                                  base=game_dir.name, champion=c, role=role, path=str(game_dir), dataset=str(dataset),
                                   opponent=opp["name"],
                                   opponent_class="ranged" if combat[opp["name"]] == _RANGED else "melee"))
     clones = sorted({g["champion"] for g in games}) if champions == ["all"] else list(champions or [champion])
@@ -126,7 +131,8 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
-    result = dict(lag=lag, hold=hold, champion=champion, champions=champions, profile=profile, tier=tier, window_s=list(LANE_WINDOW_S),
+    result = dict(lag=lag, hold=hold, champion=champion, champions=champions, roles=list(roles),
+                  extra_champions=extra_champions, profile=profile, tier=tier, window_s=list(LANE_WINDOW_S),
                   min_game_s=MIN_GAME_S, val_share=VAL_SHARE, vocabulary=vocabulary,
                   datasets={str(d): decoder_commit(d) for d in datasets},
                   games=games, skipped=skipped)
@@ -155,7 +161,8 @@ def convert(out: Path, task: int, tasks: int):
         if target.exists():
             continue
         bc = convert_game(Path(g["path"]), champion=g.get("champion", p.get("champion", CHAMPION)), hold=p.get("hold", True),
-                          profile=p.get("profile", OB.PROFILE), tier=p.get("tier", CT.ARCHIVE_TIER))
+                          profile=p.get("profile", OB.PROFILE), tier=p.get("tier", CT.ARCHIVE_TIER),
+                          role=g.get("role", "top"), extra_champions=p.get("extra_champions", False))
         bc = bc.lagged(lag, seed=_seed(g["game"]))
         bc.meta.update(split=g["split"], opponent_class=g["opponent_class"])
         bc.save(out / "games", name=g["game"])
@@ -232,7 +239,9 @@ def main():
     a.add_argument("--lag", type=parse_lag, default=1)
     a.add_argument("--no-hold", action="store_true", help="label click events only, not held orders")
     a.add_argument("--champion", default=CHAMPION, help="the cloned champion (a registered modern kit)")
-    a.add_argument("--champions", default="", help="comma list, or 'all' top laners: several clones in one dataset (v2 profile)")
+    a.add_argument("--champions", default="", help="comma list, or 'all': several clones in one dataset (v2/v3 profile)")
+    a.add_argument("--roles", default="top", help=f"comma list of {','.join(OB.ROLES)} (with --champions)")
+    a.add_argument("--extra-champions", action="store_true", help="the other eight champions in the observation")
     a.add_argument("--datasets", nargs="+", type=Path, default=list(DATASETS), help="exported batch directories")
     a.add_argument("--profile", default=OB.PROFILE, choices=OB.PROFILES, help="observation profile")
     a.add_argument("--tier", type=int, default=CT.ARCHIVE_TIER, help="skill tier recorded in v2 (8 = Master)")
@@ -246,7 +255,8 @@ def main():
     if args.command == "plan":
         p = plan(args.out, args.lag, hold=not args.no_hold, champion=args.champion, datasets=args.datasets,
                  profile=args.profile, tier=args.tier,
-                 champions=[c for c in args.champions.split(",") if c] or None)
+                 champions=[c for c in args.champions.split(",") if c] or None,
+                 roles=tuple(args.roles.split(",")), extra_champions=args.extra_champions)
         print(len(p["games"]), "games,", len(p["skipped"]), "skipped,",
               Counter(g["split"] for g in p["games"]))
     elif args.command == "convert":

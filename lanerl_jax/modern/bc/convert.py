@@ -57,8 +57,10 @@ from ..train import LANE_HALF_WIDTH, default_loadouts
 from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
 from ..world.views import visibility
 from .labels import label_actions, cast_rules
-from .replay import BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, read_game
+from .replay import (BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, lane_line,
+                     read_game)
 from ..data import champion_table as CT
+from ..data import loadouts as DL
 
 __all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "spell_state", "parse_lag",
            "world_config", "cooldown_tables", "stand_in_kit"]
@@ -70,6 +72,8 @@ LANE_WINDOW_S = (30.0, 840.0)
 #: `THIRD_CHAMPION_RADIUS`.
 THIRD_CHAMPION_RADIUS = 2000.0
 _TOP = 2
+#: The lane each replay role is converted in (0 bot, 1 mid, 2 top), and its index in ``obs.ROLES``.
+ROLE_LANE = {"top": 2, "mid": 1, "bot": 0, "support": 0}
 _RECALL_S = RECALL_CAST + RECALL_CHANNEL
 _RECALL_SLOT = 13
 _CHUNK = 500
@@ -141,10 +145,23 @@ def _converter_commit() -> str:
     return head + ("-dirty" if dirty else "")
 
 
+def _loadout(name: str):
+    """`train.default_loadouts`, or for a kit with no top page (Ezreal) its first recommended page of any role."""
+    try:
+        return default_loadouts((name,))[0]
+    except KeyError:
+        for role in ("middle", "bottom", "support", "jungle"):
+            try:
+                return MS.Loadout(name, items=(1055, 2003), rune_page=DL.rune_pages(name, role)[0])
+            except KeyError:
+                continue
+        raise
+
+
 @lru_cache(maxsize=None)
-def world_config(blue: str, red: str):
-    """The top-lane modern world for a (blue, red) champion pair (host-side, cached)."""
-    return MS.build_config(default_loadouts((blue, red)), lanes=(_TOP,), jungle=False, objectives=False,
+def world_config(blue: str, red: str, lane: int = _TOP):
+    """The one-lane modern world for a (blue, red) champion pair (host-side, cached)."""
+    return MS.build_config((_loadout(blue), _loadout(red)), lanes=(lane,), jungle=False, objectives=False,
                            lane_structures=True)
 
 
@@ -258,21 +275,22 @@ def _fill(a):
     return a
 
 
-def _frames(g: ReplayGame, cfg):
+def _frames(g: ReplayGame, cfg, lane: int = _TOP):
     """The world's lane frames, checked against the replay's turret placements."""
-    blue = np.asarray(g.turret_xy[(BLUE, _TOP, "outer")])
-    red = np.asarray(g.turret_xy[(RED, _TOP, "outer")])
-    world = OB.modern_frames(cfg)
+    blue = np.asarray(g.turret_xy[(BLUE, lane, "outer")])
+    red = np.asarray(g.turret_xy[(RED, lane, "outer")])
+    world = OB.modern_frames(cfg, lane)
     for f, own in ((world[0], blue), (world[1], red)):
         if np.hypot(*(np.asarray(f.origin) - own)) > 10.0:
-            raise ValueError(f"replay top outer turret {own} is not where the modern world has it {f.origin}")
+            raise ValueError(f"replay lane {lane} outer turret {own} is not where the modern world has it {f.origin}")
     return world
 
 
-def _unit_fields(g: ReplayGame, cfg, me_xy):
+def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
     """Per-decision arrays of the unit columns the observation and the click decoder read, and the replay
     unit each world slot holds (-1 none). Slots: 0/1 the blue/red laners, the minion block (nearest 40),
-    the structures (template positions; turrets take the replay's life and health)."""
+    the structures (template positions; turrets take the replay's life and health); with ``extra_champions``
+    the other champions in the ward block (no wards are decoded), for the observation and fog only."""
     T = len(g.t)
     lay = cfg.layout
     N = lay.n_units
@@ -319,6 +337,17 @@ def _unit_fields(g: ReplayGame, cfg, me_xy):
                     f["sub"][k, slot] = MINION_SUB[u.subtype]
                     f["team"][k, slot] = u.team
                     f["x"][k, slot], f["y"][k, slot] = g.x[k, i], g.y[k, i]
+    if extra_champions:
+        others = [i for i, u in enumerate(g.units) if u.family == "champion" and i not in (i_me, i_opp)]
+        assert len(others) <= lay.struct0 - lay.ward0
+        for j, i in enumerate(others):
+            slot = lay.ward0 + j
+            unit_of_slot[:, slot] = i
+            f["alive"][:, slot] = known[:, i]
+            f["hp"][:, slot], f["max_hp"][:, slot] = g.hp[:, i], g.max_hp[:, i]
+            f["kind"][:, slot], f["team"][:, slot] = W.KIND_CHAMPION, g.units[i].team
+            f["x"][:, slot] = np.where(known[:, i], g.x[:, i], 0.0)
+            f["y"][:, slot] = np.where(known[:, i], g.y[:, i], 0.0)
     # Structures: the template's, with the replay's turret life and health where the replay has the turret.
     lane0 = np.asarray(cfg.unit_lane)
     for slot in range(lay.struct0, N):
@@ -413,20 +442,22 @@ def _seen_casts(g: ReplayGame, can_see, T: int):
     return seen
 
 
-def _corridor(cfg):
-    """The top lane's centre line from fountain to fountain (world coordinates)."""
-    path = [tuple(p) for p in np.asarray(cfg.lane_path).tolist()]
+def _corridor(cfg, lane: int = _TOP):
+    """The lane's centre line from fountain to fountain (world coordinates)."""
+    path = ([tuple(p) for p in np.asarray(cfg.lane_path).tolist()] if lane == _TOP
+            else [tuple(map(float, p)) for p in lane_line(lane)])
     return (FOUNTAINS[0], NEXUS_POSITIONS[0], *path, NEXUS_POSITIONS[1], FOUNTAINS[1])
 
 
-def _scope(g: ReplayGame, me_xy, corridor):
-    """(in scope, in the lane corridor, a third champion near) per decision."""
+def _scope(g: ReplayGame, me_xy, corridor, extra_champions: bool = False):
+    """(in scope, in the lane corridor, a third champion near) per decision; a third champion only takes a
+    decision out of scope when the observation cannot show it (no ``extra_champions``)."""
     i_me = g.index(g.me)
     others = [i for i, u in enumerate(g.units) if u.family == "champion" and u.id not in (g.me, g.opponent)]
     d = np.hypot(g.x[:, others] - me_xy[:, :1], g.y[:, others] - me_xy[:, 1:])
     crowded = np.any(g.alive[:, others] & (np.nan_to_num(d, nan=np.inf) < THIRD_CHAMPION_RADIUS), axis=1)
     in_lane = lane_distance(me_xy[:, 0], me_xy[:, 1], corridor) < LANE_HALF_WIDTH
-    return g.alive[:, i_me] & in_lane & ~crowded, in_lane, crowded
+    return g.alive[:, i_me] & in_lane & (extra_champions | ~crowded), in_lane, crowded
 
 
 def _vmapped(fn, fields):
@@ -443,9 +474,10 @@ def _self_names(profile: str = OB.PROFILE) -> list[str]:
             "dead", "recalling"]
     tail = ["mana", "shield", "summ_d", "summ_f", "next_level", "quest", "quest_done", "in_combat", "ms",
             "range", "skill_points", "trinket"]
-    if profile == "modern-world-v2":
+    if profile in OB.TABLE_PROFILES:
         names = ["own_id", "enemy_id", "tier", *head, *tail, "rank_q", "rank_w", "rank_e", "rank_r",
                  *CT.side_columns("own"), *CT.side_columns("enemy")]
+        names += [f"role_{r}" for r in OB.ROLES] if profile == "modern-world-v3" else []
     else:
         names = [*head, *(f"own_{x.NAME}" for x in K.KITS), *(f"enemy_{x.NAME}" for x in K.KITS), *tail]
     assert len(names) == OB.self_dim(profile)
@@ -503,29 +535,33 @@ def _label_check(g, labels, valid, order, unit_of_slot, slot_unit):
 
 
 def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", hold: bool = True,
-                 profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER) -> BCGame:
+                 profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER, role: str = "top",
+                 extra_champions: bool = False) -> BCGame:
     """One game's decisions over `window` (game seconds) for `champion`, no lag. ``profile`` is the observation
     layout (`obs.PROFILES`); under ``modern-world-v2`` any champion of the build can be the actor (a sim kit stands
-    in for the world template) and ``tier`` is the skill tier the self vector reports."""
+    in for the world template) and ``tier`` is the skill tier the self vector reports. ``role`` (``obs.ROLES``)
+    picks the lane the world is built in (``ROLE_LANE``) and the v3 role columns; ``extra_champions`` puts the
+    other eight champions in the observation and keeps the decisions they are near."""
     if profile not in OB.PROFILES:
         raise ValueError(f"unknown observation profile {profile!r}")
-    v2 = profile == "modern-world-v2"
+    v2 = profile in OB.TABLE_PROFILES
+    lane = ROLE_LANE[role]
     if champion not in K.BY_NAME and not v2:
         raise ValueError(f"{champion}: no sim kit; convert with profile modern-world-v2")
     t = decision_times(*window)
-    g = read_game(game_dir, t, champion)
+    g = read_game(game_dir, t, champion, lane)
     T = len(t)
     i_me = g.index(g.me)
     me_team = g.units[i_me].team
     registered = g.opponent_name in K.BY_NAME
     opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
     me_kit = stand_in_kit(champion)
-    cfg = world_config(*((me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)))
-    frames = _frames(g, cfg)
+    cfg = world_config(*((me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)), lane)
+    frames = _frames(g, cfg, lane)
     frame = frames[me_team]
     me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
 
-    f, unit_of_slot, s_me = _unit_fields(g, cfg, me_xy)
+    f, unit_of_slot, s_me = _unit_fields(g, cfg, me_xy, extra_champions)
     own, conflicts = _own_fields(g, s_me, T, champion)
     f.update(own)
     template = MS.init_state(cfg)
@@ -542,8 +578,9 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
         s = s._replace(t=x["t"], kind=x["kind"], sub=x["sub"], team=x["team"], x=x["x"], y=x["y"], hp=x["hp"],
                        max_hp=x["max_hp"], alive=x["alive"], targetable=x["targetable"], champ=champ, econ=econ,
                        summoners=s.summoners._replace(ready_at=x["summoner_ready_at"]), combat=combat)
+        # Extra champions sit in ward slots, which the ward inputs would give ward sight (none placed).
         vis, sight, _ = visibility(cfg, s.x, s.y, s.kind, s.sub, s.team, s.alive, s.reveal, s.t,
-                                   wards=s.wards, level=s.econ.level)
+                                   wards=None if extra_champions else s.wards, level=s.econ.level)
         return s._replace(visible=vis, sight=sight)
 
     def enemy_seen(x):
@@ -560,7 +597,8 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
 
     def observe(x):
         s = state_of(x)
-        obs = OB.build_modern_observation(s, s_me, frame, cfg, horizon_s=_HORIZON_S, profile=profile, tier=tier)
+        obs = OB.build_modern_observation(s, s_me, frame, cfg, horizon_s=_HORIZON_S, profile=profile, tier=tier,
+                                          role=OB.ROLES.index(role), extra_champions=extra_champions)
         action = tuple(jnp.zeros(2, jnp.int32).at[s_me].set(v) for v in x["label"])
         o = modern_orders_from(action, s, frames)
         order = dict(attack=o.attack[s_me], move_x=o.move_x[s_me], move_y=o.move_y[s_me],
@@ -611,12 +649,13 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     stats = (g.champion_stats / np.asarray(STAT_SCALE)).astype(np.float32)
     stats[:, 1] *= global_vec[:, 1:2]
 
-    in_scope, in_lane, crowded = _scope(g, me_xy, _corridor(cfg))
+    in_scope, in_lane, crowded = _scope(g, me_xy, _corridor(cfg, lane), extra_champions)
     label_valid = in_scope & labels.representable
     meta = dict(
         provenance=dict(g.provenance, converter_commit=_converter_commit(),
                         world_profile=cfg.profile, obs_profile=profile, action_profile="modern-world-v2"),
-        champion=champion, champion_kit=me_kit, champion_index=own_idx, opponent=g.opponent_name,
+        champion=champion, role=role, lane=lane, extra_champions=extra_champions,
+        champion_kit=me_kit, champion_index=own_idx, opponent=g.opponent_name,
         opponent_kit=g.opponent_name if registered else None, opponent_index=opp_idx, skill_tier=tier,
         team="blue" if me_team == BLUE else "red", summoners=list(g.summoners), window_s=list(window),
         decisions=T,

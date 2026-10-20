@@ -52,7 +52,7 @@ def enemy_id_columns(profile: str = OB.PROFILE):
     """Self columns that name the enemy champion: the kit one-hot (v1) or the enemy index (v2); zeroed by
     ``--enemy-id-dropout`` (an unknown opponent; under v2 the descriptor block stays)."""
     col = _self_columns(profile)
-    if profile == "modern-world-v2":
+    if profile in OB.TABLE_PROFILES:
         return np.asarray([col["enemy_id"]])
     return np.asarray([col[f"enemy_{x.NAME}"] for x in K.KITS])
 

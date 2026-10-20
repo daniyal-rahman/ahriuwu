@@ -17,6 +17,9 @@ Profile ``modern-world-v2`` (``build_modern_observation(..., profile=)``) replac
 [own index, enemy index, skill tier] in the first three columns, own ranks/5 and the champion table's descriptor
 blocks (docs/modern/MULTICHAMP.md §4); cooldown normalisation then reads the table, not the sim kit.
 
+Profile ``modern-world-v3`` is v2 plus a role one-hot (``ROLES``) at the end of the self vector, so one policy can
+learn from every lane's replays; the 1v1 world is always ``top``.
+
 Only visible, on-screen units are slotted (fogged units are absent, never stale), nearest first per block
 (enemy champion 1, ally minions 12, enemy minions 12, structures 2, anything else 5). Health is quantised to
 the health bar; the enemy's cast memory is normalised by rank-1 cooldowns so its ranks do not leak.
@@ -49,8 +52,12 @@ MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion on
 #: v1 columns without the one-hots, own ranks/5 (4), then the champion table's descriptor block for own and enemy.
 V2_ID_COLUMNS = 3
 V2_SELF_DIM = V2_ID_COLUMNS + 28 + 4 + 2 * CT.SIDE_DIM
-PROFILES = ("modern-world-v1", "modern-world-v2")
-SELF_DIM = {"modern-world-v1": MODERN_WORLD_SELF_DIM, "modern-world-v2": V2_SELF_DIM}
+ROLES = ("top", "mid", "bot", "support")
+PROFILES = ("modern-world-v1", "modern-world-v2", "modern-world-v3")
+SELF_DIM = {"modern-world-v1": MODERN_WORLD_SELF_DIM, "modern-world-v2": V2_SELF_DIM,
+            "modern-world-v3": V2_SELF_DIM + len(ROLES)}
+#: Profiles with the v2 identity columns and descriptor blocks.
+TABLE_PROFILES = ("modern-world-v2", "modern-world-v3")
 
 
 def self_dim(profile: str = PROFILE) -> int:
@@ -91,19 +98,26 @@ def _topk_slots(score, eligible, k: int):
     return jnp.where(jnp.isfinite(-neg), idx, -1).astype(jnp.int32)
 
 
-def modern_frames(cfg) -> tuple[LaneFrame, LaneFrame]:
-    """Per-team lane frames from the modern world's top outer turrets and Nexuses."""
-    kind, team, sub, lane = (np.asarray(a) for a in (cfg.unit_kind, cfg.unit_team, cfg.unit_sub, cfg.unit_lane))
+def modern_frames(cfg, lane: int | None = None) -> tuple[LaneFrame, LaneFrame]:
+    """Per-team lane frames from one lane's outer turrets (0 bot, 1 mid, 2 top; default top, else the world's
+    only lane) and the Nexuses."""
+    if lane is None:
+        lane = 2 if 2 in cfg.layout.lanes else cfg.layout.lanes[0]
+    kind, team, sub, ln = (np.asarray(a) for a in (cfg.unit_kind, cfg.unit_team, cfg.unit_sub, cfg.unit_lane))
     xy = np.stack([np.asarray(cfg.unit_x), np.asarray(cfg.unit_y)], -1)
-    outer = [xy[(kind == W.KIND_TURRET) & (team == t) & (sub == 0) & (lane == 2)][0] for t in (0, 1)]
+    outer = [xy[(kind == W.KIND_TURRET) & (team == t) & (sub == 0) & (ln == lane)][0] for t in (0, 1)]
     nexus = [xy[(kind == W.KIND_NEXUS) & (team == t)][0] for t in (0, 1)]
     return (make_lane_frame(outer[0], outer[1], nexus[0]), make_lane_frame(outer[1], outer[0], nexus[1]))
 
 
 def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0,
-                             profile: str = PROFILE, tier: int = CT.ARCHIVE_TIER) -> ModernObservation:
+                             profile: str = PROFILE, tier: int = CT.ARCHIVE_TIER, role: int = 0,
+                             extra_champions: bool = False) -> ModernObservation:
     """One champion's observation of the modern world. ``me`` is its unit index (0 or 1). ``profile`` selects
-    the self-vector layout (``PROFILES``); ``tier`` is the skill tier v2 reports (the archive convention)."""
+    the self-vector layout (``PROFILES``); ``tier`` is the skill tier v2/v3 report (the archive convention),
+    ``role`` the v3 role (index into ``ROLES``). ``extra_champions``: the state may hold champions beyond the two
+    laners (replay conversion puts the other eight in ward slots): the enemy-champion row is the lane opponent
+    ``1 - me`` and the spare rows take champions before anything else. Off, the 1v1 computation is unchanged."""
     if profile not in SELF_DIM:
         raise ValueError(f"unknown observation profile {profile!r}")
     n = state.kind.shape[0]
@@ -119,14 +133,22 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
     vis = state.visible[my_team] & state.alive & (kind != W.KIND_NONE)   # team fog (vision)
     base = vis & not_me & target_on_screen(screen_ds, screen_dn)
     structure = (kind == W.KIND_TURRET) | (kind == W.KIND_INHIBITOR) | (kind == W.KIND_NEXUS)
-    enemy_champ = _topk_slots(d2, base & (kind == W.KIND_CHAMPION) & enemy, 1)
+    champion = kind == W.KIND_CHAMPION
+    if extra_champions:
+        enemy_champ = _topk_slots(d2, base & (jnp.arange(n) == other), 1)
+    else:
+        enemy_champ = _topk_slots(d2, base & champion & enemy, 1)
     ally_minion = _topk_slots(d2, base & (kind == W.KIND_MINION) & ally, 12)
     enemy_minion = _topk_slots(d2, base & (kind == W.KIND_MINION) & enemy, 12)
     turret = _topk_slots(d2, base & structure, 2)
     taken = jnp.zeros((n,), bool)
     for sel in (enemy_champ, ally_minion, enemy_minion, turret):
         taken = taken | jnp.any(jnp.arange(n)[:, None] == jnp.where(sel >= 0, sel, -1)[None, :], axis=1)
-    spare = _topk_slots(d2, base & ~taken, 5)
+    if extra_champions:
+        cand = jnp.concatenate([_topk_slots(d2, base & ~taken & champion, 5), _topk_slots(d2, base & ~taken & ~champion, 5)])
+        spare = cand[jnp.argsort(cand < 0, stable=True)][:5]     # nearest champions first, then nearest others
+    else:
+        spare = _topk_slots(d2, base & ~taken, 5)
     slot_unit = jnp.concatenate([enemy_champ, ally_minion, enemy_minion, turret, spare])
     assert slot_unit.shape[0] == N_SLOTS
     valid = slot_unit >= 0
@@ -167,7 +189,7 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         for k in reversed(cfg.kits[:-1]):
             out = jnp.where(cid[who] == k.ID, cooldown_row(k.NAME, ranks[None]), out)
         return out[0]
-    v2 = profile == "modern-world-v2"
+    v2 = profile in TABLE_PROFILES
     idx = jnp.asarray(CT.riot_lookup())[jnp.clip(cid, 0, CT.riot_lookup().shape[0] - 1)]   # (C,) table index
     if v2:
         cd_table = jnp.asarray(CT.cooldowns())                                  # (N + 1, 4, MAX_RANKS)
@@ -201,7 +223,9 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         desc = jnp.asarray(CT.descriptors())                                    # (N + 1, SIDE_DIM)
         ids = [idx[me].astype(jnp.float32), idx[other].astype(jnp.float32), jnp.asarray(tier, jnp.float32)]
         self_vec = jnp.concatenate([jnp.stack(ids + head + tail), c.ranks[me].astype(jnp.float32) / 5.0,
-                                    desc[idx[me]], desc[idx[other]]])
+                                    desc[idx[me]], desc[idx[other]]]
+                                   + ([(jnp.arange(len(ROLES)) == role).astype(jnp.float32)]
+                                      if profile == "modern-world-v3" else []))
     else:
         self_vec = jnp.stack(head + one_hots + tail)
     assert self_vec.shape[0] == SELF_DIM[profile]
