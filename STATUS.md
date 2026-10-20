@@ -112,3 +112,13 @@ convert 12354 (96 tasks, 4 at a time at 6.4 GB each, no task starts after it cou
 a partial dataset is a uniform sample), finalize 12356, smoke train 12355 (3 games, the new `--cache`
 memory-mapped loader), train 12357 (v3 recipe, 8 epochs, games memory-mapped from desktop /scratch; the
 full set does not fit in host memory). Gate against the afk opponent to follow.
+
+**2026-10-19 23:30 PDT: the 13-kit run is withdrawn** (jobs 12354-12357 cancelled; the convert tasks had
+also died of a converter memory leak, fixed in 046f80ee/eb9decee). Dani's target: one BC model on every
+champion and every lane role but jungle, trained after the bulk decode finishes; the sim keeps running 1v1
+top. b1cbd900 adds it: `convert_game(role=, extra_champions=)`, observation profile `modern-world-v3` (v2 +
+role one-hot; RL passes role top), the other eight champions in the ward block of the converted state
+(fogged by the world's own vision), decisions near them kept. The traced 1v1 observation is identical
+(job 12498) and default conversions are byte-identical (12499). No decoder change: every export already
+holds all ten players' actions. Scale: ~59,600 champion-games; conversion throughput being profiled
+(12513 CPU / 12514 GPU) before the dataset run.
