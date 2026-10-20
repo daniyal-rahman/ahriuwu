@@ -34,9 +34,10 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -460,10 +461,21 @@ def _scope(g: ReplayGame, me_xy, corridor, extra_champions: bool = False):
     return g.alive[:, i_me] & in_lane & (extra_champions | ~crowded), in_lane, crowded
 
 
-def _vmapped(fn, fields):
-    """`fn` over the leading (decision) axis of `fields`, in chunks."""
+_JITTED: "OrderedDict[tuple, Any]" = OrderedDict()
+_JITTED_MAX = 32
+
+
+def _vmapped(fn, fields, key=None):
+    """`fn` over the leading (decision) axis of `fields`, in chunks. ``key`` names everything `fn` closes over
+    (world, side, profile, role, ...): later games with the same key reuse the first one's compiled function."""
     T = len(next(iter(jax.tree.leaves(fields))))
-    run = jax.jit(jax.vmap(fn))
+    run = _JITTED.pop(key, None) if key is not None else None
+    if run is None:
+        run = jax.jit(jax.vmap(fn))
+    if key is not None:
+        _JITTED[key] = run
+        while len(_JITTED) > _JITTED_MAX:
+            _JITTED.popitem(last=False)
     parts = [jax.device_get(run(jax.tree.map(lambda a: a[i:i + _CHUNK], fields))) for i in range(0, T, _CHUNK)]
     return jax.tree.map(lambda *a: np.concatenate(a), *parts)
 
@@ -556,7 +568,8 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     registered = g.opponent_name in K.BY_NAME
     opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
     me_kit = stand_in_kit(champion)
-    cfg = world_config(*((me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)), lane)
+    pair = (me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)
+    cfg = world_config(*pair, lane)
     frames = _frames(g, cfg, lane)
     frame = frames[me_team]
     me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
@@ -587,7 +600,9 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
         s = state_of(x)
         return s.visible[s_me, other] & s.alive[other]
     f["seen_cast"] = np.zeros((T, 2, 4), np.float32) - 1e9
-    f["seen_cast"][:, other] = _seen_casts(g, _vmapped(enemy_seen, f), T)
+    # The closures read only the world (pair, lane), the side and the observation settings.
+    key = (pair, lane, s_me, profile, tier, role, extra_champions)
+    f["seen_cast"][:, other] = _seen_casts(g, _vmapped(enemy_seen, f, key + ("enemy_seen",)), T)
 
     enemies = {u.id for u in g.units if u.team != me_team}
     unit_xy = {u.id: np.stack([g.x[:, i], g.y[:, i]], -1) for i, u in enumerate(g.units)}
@@ -604,7 +619,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
         order = dict(attack=o.attack[s_me], move_x=o.move_x[s_me], move_y=o.move_y[s_me],
                      cast_slot=o.cast_slot[s_me], cast_target=o.cast_target[s_me], stop=o.stop[s_me])
         return (obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, obs.slot_unit), order
-    (entities, pad, self_vec, global_vec, slot_unit), order = _vmapped(observe, f)
+    (entities, pad, self_vec, global_vec, slot_unit), order = _vmapped(observe, f, key + ("observe",))
 
     # Patches from the replay: the self block's combat stats and the enemy identity.
     col = _self_columns(profile)

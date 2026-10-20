@@ -258,32 +258,23 @@ def _fields_of(path: Path, loader) -> _Fields:
     return _LAST_FIELDS[1]
 
 
-def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int = 2) -> ReplayGame:
-    """Read one exported game onto the decision times `t`. `game_dir` holds `export/`; `lane` (0 bot, 1 mid,
-    2 top) is the one whose minions are kept."""
-    loader, position_model = _decoder()
-    export = game_dir / "export"
-    manifest = json.loads((export / "manifest.json").read_text())
-    if manifest["position_model"] != position_model.VERSION:
-        raise ValueError(f"export used position model {manifest['position_model']}, "
-                         f"the decoder checkout has {position_model.VERSION}")
-    fields = _fields_of(export / "event-training", loader)
-    dataset = game_dir.parent.parent
-    fixed = countdowns_received(dataset)
-    provenance = dict(dataset=str(dataset), game=game_dir.name, decoder_commit=decoder_commit(dataset),
-                      position_model=manifest["position_model"], replay_sha256=manifest["replay_sha256"],
-                      cooldown_fields_read=fixed)
+_LANE_CACHE: dict = {}
 
-    roster = manifest["initial_roster"]
-    me_row = next(r for r in roster if r["name"] == champion)
-    opp_row = next(r for r in roster if r["team"] != me_row["team"]
-                   and r["assigned_role"] == me_row["assigned_role"])
-    me, opponent = me_row["object_id"], opp_row["object_id"]
-    summoners, summoner_slot = canonical_summoners(me_row.get("selected_summoner_ids", (4, 12)))
-    champions = [Unit(r["object_id"], "champion", _TEAM[r["team"]], r["name"]) for r in roster]
+
+def _lane_units(path, fields, position_model, champions, t, lane):
+    """One lane's units (every champion and turret, the lane's minions) with their positions, health and life on
+    `t`: the same for every laner converted in that lane, so kept for the last game read (copies are returned)."""
+    key = (str(path), lane, len(t), float(t[0]), float(t[-1]))
+    if key not in _LANE_CACHE:
+        if any(k[0] != key[0] for k in _LANE_CACHE):
+            _LANE_CACHE.clear()
+        _LANE_CACHE[key] = _read_lane_units(fields, position_model, champions, t, lane)
+    units, placement, turret_xy, turret_id, death_times, *arrays = _LANE_CACHE[key]
+    return (units, placement, turret_xy, turret_id, death_times, *(a.copy() for a in arrays))
+
+
+def _read_lane_units(fields, position_model, champions, t, lane):
     champion_ids = [u.id for u in champions]
-    enemy_champions = {u.id for u in champions if u.team != _TEAM[me_row["team"]]}
-
     # Turrets: received placements (a turret can be received more than once).
     placement, turret_xy, turret_id = {}, {}, {}
     rows, _, ids = fields.rows("identity.turret_receipt")
@@ -370,6 +361,38 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
             e = model.estimate(u.id, float(t[k]))
             if e["position_available"]:
                 x[k, i], y[k, i] = e["position_xz"]
+
+    return units, placement, turret_xy, turret_id, death_times, x, y, hp, max_hp, alive
+
+
+def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int = 2) -> ReplayGame:
+    """Read one exported game onto the decision times `t`. `game_dir` holds `export/`; `lane` (0 bot, 1 mid,
+    2 top) is the one whose minions are kept."""
+    loader, position_model = _decoder()
+    export = game_dir / "export"
+    manifest = json.loads((export / "manifest.json").read_text())
+    if manifest["position_model"] != position_model.VERSION:
+        raise ValueError(f"export used position model {manifest['position_model']}, "
+                         f"the decoder checkout has {position_model.VERSION}")
+    fields = _fields_of(export / "event-training", loader)
+    dataset = game_dir.parent.parent
+    fixed = countdowns_received(dataset)
+    provenance = dict(dataset=str(dataset), game=game_dir.name, decoder_commit=decoder_commit(dataset),
+                      position_model=manifest["position_model"], replay_sha256=manifest["replay_sha256"],
+                      cooldown_fields_read=fixed)
+
+    roster = manifest["initial_roster"]
+    me_row = next(r for r in roster if r["name"] == champion)
+    opp_row = next(r for r in roster if r["team"] != me_row["team"]
+                   and r["assigned_role"] == me_row["assigned_role"])
+    me, opponent = me_row["object_id"], opp_row["object_id"]
+    summoners, summoner_slot = canonical_summoners(me_row.get("selected_summoner_ids", (4, 12)))
+    champions = [Unit(r["object_id"], "champion", _TEAM[r["team"]], r["name"]) for r in roster]
+    champion_ids = [u.id for u in champions]
+    enemy_champions = {u.id for u in champions if u.team != _TEAM[me_row["team"]]}
+
+    units, placement, turret_xy, turret_id, death_times, x, y, hp, max_hp, alive = _lane_units(
+        export / "event-training", fields, position_model, champions, t, lane)
 
     level = fields.asof("stat.mLevelRef", me, t, default=1).astype(np.int32)
     spell_rank = np.stack([np.stack([fields.asof(f"ability.{s}.rank", c, t, default=0) for s in range(4)], -1)
