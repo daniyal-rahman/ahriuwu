@@ -2,7 +2,7 @@
 
     python -m lanerl_jax.modern.bc.dataset plan OUT [--lag 1]      select games, split, vocabulary
     python -m lanerl_jax.modern.bc.dataset convert OUT TASK TASKS  convert every TASKS-th game
-    python -m lanerl_jax.modern.bc.dataset relabel OUT TASK TASKS  redo the labels of converted games in place
+    python -m lanerl_jax.modern.bc.dataset relabel OUT TASK TASKS  redo the labels of converted games
     python -m lanerl_jax.modern.bc.dataset finalize OUT            manifest.json and statistics
 
 (`slurm/modern_bc_dataset.sbatch` runs the three on the desktop.)
@@ -209,8 +209,10 @@ def relabel_arrays(game: dict, d: dict, lag, hold: bool = True):
 
 
 def relabel(out: Path, task: int, tasks: int):
-    """Redo the labels of every converted game of this task's share in place (``RELABEL``); a game already
-    relabelled is skipped. The label check (`convert._label_check`) is not redone: it stays the old labels'."""
+    """Redo the labels of every converted game of this task's share (``RELABEL``): the new label arrays go to
+    ``games/<game>.labels.npz``, which overrides the .npz's (`train.game_arrays`); rewriting the .npz would
+    recompress its observations. A game already relabelled is skipped. The label check
+    (`convert._label_check`) is not redone: it stays the old labels'."""
     p = json.loads((out / "plan.json").read_text())
     lag = tuple(p["lag"]) if isinstance(p["lag"], list) else p["lag"]
     bases = list(dict.fromkeys(g.get("base", g["game"]) for g in p["games"]))
@@ -223,7 +225,7 @@ def relabel(out: Path, task: int, tasks: int):
         if meta.get("relabel", {}).get("tag") == RELABEL:
             continue
         try:
-            d = dict(np.load(npz))
+            d = np.load(npz)
             new, counts = relabel_arrays(dict(g, champion=g.get("champion", p.get("champion", CHAMPION))), d, lag,
                                          p.get("hold", True))
         except Exception:
@@ -232,13 +234,14 @@ def relabel(out: Path, task: int, tasks: int):
             print(g["game"], "RELABEL FAILED", flush=True)
             continue
         changed = int(np.sum(np.any([d[k] != new[k] for k in ("button", "screen_x", "screen_y", "label_valid")], 0)))
-        d.update(new)
-        tmp = npz.with_name(npz.stem + ".relabel-tmp.npz")
-        np.savez_compressed(tmp, **d)
-        tmp.replace(npz)
+        side = npz.with_name(npz.stem + ".labels.npz")
+        tmp = npz.with_name(npz.stem + ".labels-tmp.npz")
+        np.savez_compressed(tmp, **new)
+        tmp.replace(side)
         old = {k: meta["counts"][k] for k in counts}
         meta["counts"].update(counts)
         meta["relabel"] = dict(tag=RELABEL, converter_commit=_converter_commit(), decisions_changed=changed,
+                               labels=side.name,
                                counts_before=old, label_check="of the labels before the relabel")
         js.write_text(json.dumps(meta, indent=1))
         print(g["game"], "changed", changed, json.dumps(counts["buttons"]), flush=True)

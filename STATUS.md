@@ -129,3 +129,16 @@ from 5,334 decoded games, every role but jungle, 172 champions, v3 + extra champ
 only, <1e-6, fog/labels identical, job 12545). The remaining ~2,000 bulk rows (3000-5999) moved to the Mac
 pool; sentinel 11739 held until the Mac finishes. Desktop /scratch/ahriuwu (old world-model latents)
 deleted with Dani's OK for the training cache (638 GB free).
+
+**2026-10-20 15:10 PDT.** Bulk decode final (7,429 ok, 7 partial, 10 failed: FiddleSticks; batch README).
+All-roles dataset converted: 58,424 laner-games (52,547 train / 5,877 val), 46 FiddleSticks refused (no
+ability data). The per-champion check found Q/W/E/R casts dropped as not representable: the decoder masks
+the aim point of abilities whose asset cast mode it does not know (Syndra Q, Viktor E, Zeri W/E, Kayle Q,
+Varus E, ...: 100% of those spells, ~5% of all ability casts; 240-game audit 12623), and self-targeted or
+self-mode casts (Annie E, Karma E, Lux E recast) were dropped too. cf052d85 aims unknown-mode casts at the
+received endpoint (wire 0x2c: equal to the resolved point on all 122,857 casts with both) and labels self
+casts without a cursor; `dataset relabel` writes `games/<game>.labels.npz` (overrides the label arrays; with
+the fixes off it reproduces the old labels exactly). Training on the old labels (12567: open-file limit,
+fixed in bb7850ad by one cache file per game; resubmit 12624, loaded 52,547 games in 23 min) was cancelled
+to give the relabel the desktop. Ally-targeted casts stay not representable (no ally targeting). Next:
+relabel array, finalize, train `modern-bc-v5-allroles`, gate vs afk (Garen, Jax).

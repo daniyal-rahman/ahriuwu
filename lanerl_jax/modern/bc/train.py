@@ -110,18 +110,30 @@ _CACHED = ("entity_pad_mask", "self_vec", "global_vec", "button", "screen_x", "s
            "label_valid", "click_valid", "click_on_unit", "held")
 
 
+def game_arrays(f: Path) -> dict:
+    """A converted game's arrays, with the label arrays of ``<game>.labels.npz`` (`dataset.relabel`) where
+    it exists."""
+    d = np.load(f)
+    a = {k: d[k] for k in d.files}
+    side = f.with_name(f.stem + ".labels.npz")
+    if side.exists():
+        s = np.load(side)
+        a.update({k: s[k] for k in s.files})
+    return a
+
+
 def _arrays(f: Path, cache: Path | None) -> dict:
     """A game's arrays: from the .npz, or memory-mapped from ``cache/<game>.bin`` (written on first use).
     One file and one mapping per game, all fields views into it: a mapping per field ran a 58k-game dataset
     past the process's open-file and memory-map limits."""
     if cache is None:
-        d = np.load(f)
-        return {k: d[k] for k in d.files}
+        return game_arrays(f)
     data, layout = cache / f"{f.stem}.bin", cache / f"{f.stem}.json"
-    if not layout.exists():
-        d = np.load(f)
+    side = f.with_name(f.stem + ".labels.npz")
+    if not layout.exists() or (side.exists() and side.stat().st_mtime > layout.stat().st_mtime):
+        d = game_arrays(f)
         units = ~d["entity_pad_mask"]
-        parts = {k: d[k] for k in _CACHED if k in d.files}
+        parts = {k: d[k] for k in _CACHED if k in d}
         parts["entity_rows"] = d["entities"].astype(np.float16)[units]
         parts["entity_offsets"] = np.concatenate([[0], np.cumsum(units.sum(1))]).astype(np.int64)
         spec, end = {}, 0
