@@ -112,13 +112,15 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
                                   opponent_class="ranged" if combat[opp["name"]] == _RANGED else "melee"))
     clones = list(champions or [champion])
     vocabulary = clones + sorted({g["opponent"] for g in games} - set(clones))
-    # Hold out VAL_SHARE of each class: the games whose hash ranks lowest (both sides of a game together).
+    # Hold out VAL_SHARE of each class: the games whose hash ranks lowest; a game held out for one side's
+    # class holds out its other side too.
+    val = set()
     for cls in ("melee", "ranged"):
         members = sorted((g for g in games if g["opponent_class"] == cls),
                          key=lambda g: hashlib.sha256(g["base"].encode()).hexdigest())
-        val = {g["base"] for g in members[:round(VAL_SHARE * len(members))]}
-        for g in members:
-            g["split"] = "val" if g["base"] in val else "train"
+        val |= {g["base"] for g in members[:round(VAL_SHARE * len(members))]}
+    for g in games:
+        g["split"] = "val" if g["base"] in val else "train"
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
