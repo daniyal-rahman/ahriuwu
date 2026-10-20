@@ -122,3 +122,10 @@ role one-hot; RL passes role top), the other eight champions in the ward block o
 (job 12498) and default conversions are byte-identical (12499). No decoder change: every export already
 holds all ten players' actions. Scale: ~59,600 champion-games; conversion throughput being profiled
 (12513 CPU / 12514 GPU) before the dataset run.
+
+**2026-10-19 23:55 PDT.** Dataset `/mnt/nfs/shared/bc_modern_allroles_v3obs` (plan 12546): 42,670 laner-games
+from 5,334 decoded games, every role but jungle, 172 champions, v3 + extra champions. GPU conversion
+12553_0 then 12555 (array 1-5 %1; 8 workers share the card; GPU-vs-CPU arrays differ by float32 rounding
+only, <1e-6, fog/labels identical, job 12545). The remaining ~2,000 bulk rows (3000-5999) moved to the Mac
+pool; sentinel 11739 held until the Mac finishes. Desktop /scratch/ahriuwu (old world-model latents)
+deleted with Dani's OK for the training cache (638 GB free).
