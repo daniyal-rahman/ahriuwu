@@ -11,7 +11,10 @@ random offset per epoch; a batch is ``--batch`` windows, each run through the po
     label_valid * (w[button] * CE(button) + click_valid * (CE(screen_x) + CE(screen_y)))
 
 with the click target plain on a unit and a Gaussian over neighbouring cells on the ground
-(`targets.click_cross_entropy`, ``--sigma``). Buttons the RL trainer masks (`train.DEFAULT_BUTTONS_OFF`)
+(`targets.click_cross_entropy`, ``--sigma``). With ``--cast-time-sigma`` (seconds) a cast's button target is
+spread in time (`timing_targets`): a Gaussian over the decisions within ``--cast-time-window`` of the press,
+only onto decisions labelled noop or move whose observation shows that spell ready, normalised so the
+press keeps one unit of mass in total (the cast rate stays calibrated; a near miss is no longer a full miss). Buttons the RL trainer masks (`train.DEFAULT_BUTTONS_OFF`)
 are masked here too; the data never labels them. Two augmentations against the domain gap: with
 ``--enemy-id-dropout`` a window's enemy-champion one-hot is zeroed (an unknown opponent), with
 ``--stat-dropout`` its patched combat stats are held at the window's first decision's values (no item
@@ -87,6 +90,46 @@ class Game(NamedTuple):
     click: np.ndarray           # (T,) bool
     on_unit: np.ndarray         # (T,) bool
     held: np.ndarray            # (T,) bool: label filled from the active order (datasets without it: False)
+    own_m: np.ndarray | None = None   # (T,) float16: target mass on the label's button (`timing_targets`)
+    alt_b: np.ndarray | None = None   # (T,) int8: a nearby press's button, with mass alt_m
+    alt_m: np.ndarray | None = None
+
+
+#: Buttons whose press is spread in time by ``--cast-time-sigma``, and the self column that says it is ready.
+TIMED = {"q": "cd_q", "w": "cd_w", "e": "cd_e", "r": "cd_r", "summoner_d": "summ_d", "summoner_f": "summ_f",
+         "recall": None, "ward": None}
+_SPREAD_ONTO = ("noop", "move")
+
+
+def timing_targets(g: Game, sigma_s: float, window_s: float, profile: str, dt: float = 0.1) -> Game:
+    """``g`` with soft button targets: each event press (not held) of a `TIMED` button keeps mass
+    exp(-d^2 / 2 sigma^2) at its own decision (d = 0) and gives the same to every decision within
+    ``window_s`` labelled noop or move, valid, not already carrying another press's mass, and (for a spell)
+    whose observation shows that spell ready; the masses are normalised to 1. Right after a press the spell
+    shows on cooldown, so the spread falls mostly before it (the observation is lagged one decision)."""
+    col = _self_columns(profile)
+    T = len(g.button)
+    own = np.ones(T, np.float32)
+    alt_b = np.zeros(T, np.int32)
+    alt_m = np.zeros(T, np.float32)
+    k = int(round(window_s / dt))
+    kernel = np.exp(-0.5 * (np.arange(-k, k + 1) * dt / sigma_s) ** 2)
+    onto = np.isin(g.button, [MODERN_BUTTON_INDEX[b] for b in _SPREAD_ONTO]) & g.valid
+    for name, cd_col in TIMED.items():
+        b = MODERN_BUTTON_INDEX[name]
+        ready = g.self_vec[:, col[cd_col]] <= 0 if cd_col else np.ones(T, bool)
+        for t in np.flatnonzero((g.button == b) & g.valid & ~g.held):
+            lo, hi = max(t - k, 0), min(t + k + 1, T)
+            idx = np.arange(lo, hi)
+            ok = (idx == t) | (onto[lo:hi] & ready[lo:hi] & (alt_m[lo:hi] == 0))
+            w = kernel[idx - t + k] * ok
+            w = w / w.sum()
+            nb = idx[ok & (idx != t)]
+            alt_b[nb] = b
+            alt_m[nb] = w[nb - lo]
+            own[nb] = 1.0 - alt_m[nb]
+            own[t] = w[t - lo]
+    return g._replace(own_m=own.astype(np.float16), alt_b=alt_b.astype(np.int8), alt_m=alt_m.astype(np.float16))
 
 
 class PackedEntities:
@@ -218,6 +261,9 @@ def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random
     click = np.zeros((n, window), np.float32)
     on_unit = np.zeros((n, window), bool)
     held = np.zeros((n, window), bool)
+    own_m = np.ones((n, window), np.float32)
+    alt_b = np.zeros((n, window), np.int32)
+    alt_m = np.zeros((n, window), np.float32)
     for j, (gi, s) in enumerate(items):
         g = games[gi]
         e = min(s + window, len(g.button))
@@ -235,12 +281,16 @@ def batch_of(games: list[Game], items, window: int, burn_in: int, rng: np.random
         weight[j, :L] = w
         click[j, :L] = g.click[s:e]
         on_unit[j, :L] = g.on_unit[s:e]
+        if g.own_m is not None:
+            own_m[j, :L] = g.own_m[s:e]
+            alt_b[j, :L] = g.alt_b[s:e]
+            alt_m[j, :L] = g.alt_m[s:e]
         if rng is not None and enemy_id_dropout > 0 and rng.random() < enemy_id_dropout:
             sv[j, :, enemy_cols] = 0.0
         if rng is not None and stat_dropout > 0 and rng.random() < stat_dropout:
             sv[j, :, stat_cols] = sv[j, :1, stat_cols]
     return dict(entities=ent, mask=pad, self=sv, global_=gv, button=button, sx=sx, sy=sy, weight=weight,
-                click=click, on_unit=on_unit, held=held)
+                click=click, on_unit=on_unit, held=held, own_m=own_m, alt_b=alt_b, alt_m=alt_m)
 
 
 def make_forward(policy: LanePolicy):
@@ -265,6 +315,9 @@ def _per_decision(logits, batch, sigma: float, button_weight):
     """Per-decision terms (N, T): button CE, click CE, button correct, click exact, click cell distance."""
     lb = jax.nn.log_softmax(logits.button, -1)
     ce_b = -jnp.take_along_axis(lb, batch["button"][..., None], -1)[..., 0]
+    if "own_m" in batch:      # timing-spread targets (`timing_targets`); own_m = 1, alt_m = 0 elsewhere
+        ce_alt = -jnp.take_along_axis(lb, batch["alt_b"][..., None], -1)[..., 0]
+        ce_b = batch["own_m"] * ce_b + batch["alt_m"] * ce_alt
     sig = jnp.where(batch["on_unit"], 0.0, sigma)
 
     def ce(lg, idx):
@@ -275,7 +328,7 @@ def _per_decision(logits, batch, sigma: float, button_weight):
     pred_b = jnp.argmax(logits.button, -1)
     px, py = jnp.argmax(logits.screen_x, -1), jnp.argmax(logits.screen_y, -1)
     dist = jnp.abs(px - batch["sx"]) + jnp.abs(py - batch["sy"])
-    return dict(ce_b=ce_b * button_weight[batch["button"]], ce_c=ce_c, correct=(pred_b == batch["button"]),
+    return dict(ce_b=ce_b * button_weight[batch["button"]], ce_raw=ce_b, ce_c=ce_c, correct=(pred_b == batch["button"]),
                 exact=(dist == 0), dist=dist.astype(jnp.float32), pred_b=pred_b)
 
 
@@ -298,15 +351,29 @@ def make_loss(policy: LanePolicy, sigma: float, button_weight):
     return loss
 
 
+def _dilate(x: np.ndarray, k: int) -> np.ndarray:
+    """(N, T) bool: true within k decisions of a true entry, per row."""
+    c = np.cumsum(np.pad(x, ((0, 0), (k + 1, k))).astype(np.int32), 1)
+    return (c[:, 2 * k + 1:] - c[:, :-2 * k - 1]) > 0
+
+
+TOLERANCE = 5      # decisions (0.5 s): a top button within this of an event press counts in recall_tol / precision_tol
+
+
 def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int, batch: int):
-    """Validation metrics over whole games (windows from offset 0), overall and by group."""
+    """Validation metrics over whole games (windows from offset 0), overall and by group. Button NLL by class
+    is unweighted (``--button-weights`` scales only the training loss). ``recall_tol``: share of event presses
+    with the model's top button equal to it within `TOLERANCE` decisions (in the same window);
+    ``precision_tol``: share of the model's top-button picks with an event press of it within `TOLERANCE`."""
     nb = len(MODERN_BUTTONS)
     acc = {}
 
     def bucket(name):
         return acc.setdefault(name, dict(n=0.0, ce_b=0.0, correct=0.0, n_c=0.0, ce_c=0.0, exact=0.0, dist=0.0,
                                          conf=np.zeros((nb, nb)), ce_by=np.zeros(nb), n_by=np.zeros(nb),
-                                         n_ev=0.0, ce_ev=0.0, n_hc=0.0, ce_hc=0.0, dist_hc=0.0))
+                                         n_ev=0.0, ce_ev=0.0, n_hc=0.0, ce_hc=0.0, dist_hc=0.0,
+                                         tol_ev=np.zeros(nb), tol_hit=np.zeros(nb), tol_pred=np.zeros(nb),
+                                         tol_near=np.zeros(nb)))
     items = windows(games, window, None)
     for i in range(0, len(items), batch):
         chunk = items[i:i + batch]
@@ -315,6 +382,14 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
         t = jax.device_get(per_decision(params, b))
         w, c = np.asarray(b["weight"]), np.asarray(b["weight"] * b["click"])
         held = np.asarray(b["held"])
+        bt_all, pred_all, scored = np.asarray(b["button"]), np.asarray(t["pred_b"]), w > 0
+        event_all = scored & ~held
+        tol = {}
+        for k in np.unique(bt_all[event_all]):
+            ev_k = event_all & (bt_all == k)
+            pr_k = scored & (pred_all == k)
+            tol[k] = ((ev_k & _dilate(pr_k, TOLERANCE)).sum(1), ev_k.sum(1),
+                      (pr_k & _dilate(ev_k, TOLERANCE)).sum(1), pr_k.sum(1))
         for j, (gi, _) in enumerate(chunk):
             g = games[gi]
             for name in ("all", g.group, "kit_known" if g.kit_known else "kit_unknown"):
@@ -326,7 +401,10 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                 m = w[j] > 0
                 bt = np.asarray(b["button"][j])
                 np.add.at(a["conf"], (bt[m], t["pred_b"][j][m]), 1.0)
-                np.add.at(a["ce_by"], bt[m], t["ce_b"][j][m]); np.add.at(a["n_by"], bt[m], 1.0)
+                np.add.at(a["ce_by"], bt[m], t["ce_raw"][j][m]); np.add.at(a["n_by"], bt[m], 1.0)
+                for k, (hit, n_ev, near, n_pred) in tol.items():
+                    a["tol_hit"][k] += hit[j]; a["tol_ev"][k] += n_ev[j]
+                    a["tol_near"][k] += near[j]; a["tol_pred"][k] += n_pred[j]
                 ev = m & ~held[j]
                 a["n_ev"] += ev.sum(); a["ce_ev"] += t["ce_b"][j][ev].sum()
                 hc = (c[j] > 0) & held[j]
@@ -345,6 +423,10 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                          recall=recall, precision=precision, share=share,
                          button_nll_by={MODERN_BUTTONS[k]: float(a["ce_by"][k] / a["n_by"][k]) for k in range(nb)
                                         if a["n_by"][k] > 0},
+                         recall_tol={MODERN_BUTTONS[k]: float(a["tol_hit"][k] / a["tol_ev"][k]) for k in range(nb)
+                                     if a["tol_ev"][k] > 0},
+                         precision_tol={MODERN_BUTTONS[k]: float(a["tol_near"][k] / a["tol_pred"][k]) for k in range(nb)
+                                        if a["tol_pred"][k] > 0},
                          event_decisions=int(a["n_ev"]), event_button_nll=a["ce_ev"] / max(a["n_ev"], 1),
                          held_clicks=int(a["n_hc"]), held_click_nll=a["ce_hc"] / max(a["n_hc"], 1),
                          held_click_dist=a["dist_hc"] / max(a["n_hc"], 1))
@@ -364,6 +446,9 @@ def build_parser():
     p.add_argument("--warmup", type=int, default=200, help="optimiser steps of linear LR warm-up")
     p.add_argument("--grad-clip", type=float, default=0.5)
     p.add_argument("--sigma", type=float, default=1.0, help="Gaussian cells for ground clicks; 0 = plain")
+    p.add_argument("--cast-time-sigma", type=float, default=0.0,
+                   help="seconds: spread cast presses in time onto ready noop/move decisions (timing_targets); 0 = off")
+    p.add_argument("--cast-time-window", type=float, default=0.5, help="seconds either side of a press")
     p.add_argument("--button-weights", default="", help="name=weight,... (default 1 for every button)")
     p.add_argument("--enemy-id-dropout", type=float, default=0.3)
     p.add_argument("--stat-dropout", type=float, default=0.0)
@@ -396,6 +481,9 @@ def main(argv=None):
     train = load_games(a.dataset, "train", a.max_games or None, a.cache)
     val = load_games(a.dataset, "val", a.max_games or None, a.cache)
     n_train = sum(int(g.valid.sum()) for g in train)
+    if a.cast_time_sigma > 0:      # training targets only: validation scores the presses where they happened
+        profile0 = dataset_profile(a.dataset)
+        train = [timing_targets(g, a.cast_time_sigma, a.cast_time_window, profile0) for g in train]
     print(f"loaded {len(train)} train games ({n_train} decisions to learn from), {len(val)} val games "
           f"in {time.perf_counter() - t0:.0f}s", flush=True)
     bw = np.ones(len(MODERN_BUTTONS), np.float32)

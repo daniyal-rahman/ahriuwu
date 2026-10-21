@@ -68,3 +68,41 @@ def test_hold_weight_scales_held_decisions():
     held = b1["held"][0]
     assert held.any() and np.allclose(b3["weight"][0][held], 0.3 * b1["weight"][0][held])
     assert np.array_equal(b3["weight"][0][~held], b1["weight"][0][~held])
+
+
+def test_timing_targets_spread_a_press_onto_ready_neighbours_only():
+    n = 30
+    g = _game("a", n)
+    col = T._self_columns("modern-world-v1")
+    button = np.full(n, B["move"], np.int32)
+    button[15] = B["q"]
+    button[12] = B["stop"]                          # not noop/move: keeps its own target
+    sv = g.self_vec.copy()
+    sv[:, col["cd_q"]] = 0.0
+    sv[16:, col["cd_q"]] = 0.9                      # on cooldown after the press
+    sv[10, col["cd_q"]] = 0.5                       # not ready at one earlier decision
+    g = g._replace(button=button, self_vec=sv, valid=np.ones(n, bool), held=np.zeros(n, bool))
+    s = T.timing_targets(g, 0.2, 0.5, "modern-world-v1")
+    spread = np.flatnonzero(s.alt_m > 0)
+    assert set(spread) == {11, 13, 14}
+    assert np.all(s.alt_b[spread] == B["q"])
+    assert np.isclose(float(s.own_m[15]) + float(s.alt_m.astype(np.float32).sum()), 1.0, atol=1e-2)
+    assert s.alt_m[14] > s.alt_m[13] > s.alt_m[11] and float(s.own_m[15]) > float(s.alt_m[14])
+    assert np.allclose(s.own_m[spread].astype(np.float32) + s.alt_m[spread].astype(np.float32), 1.0, atol=1e-3)
+    off = tuple(sorted(B[b] for b in DEFAULT_BUTTONS_OFF))
+    policy = LanePolicy(make_policy_config("modern-world-v1", core="gru", core_norm=True, core_residual=True, **SMALL_POLICY), off)
+    b = T.batch_of([s], T.windows([s], n, None), n, 0, None)
+    jb = {k: jnp.asarray(v) for k, v in b.items()}
+    params = policy.init(jax.random.key(0), jb["entities"][0, 0], jb["mask"][0, 0], jb["self"][0, 0],
+                         jb["global_"][0, 0], policy.initial_carry(()))
+    loss = T.make_loss(policy, 1.0, np.ones(20, np.float32))
+    d = loss.per_decision(params, jb)
+    lb = jax.nn.log_softmax(loss.forward(params, jb).button, -1)[0]
+    want = -(b["own_m"][0, 14] * lb[14, B["move"]] + b["alt_m"][0, 14] * lb[14, B["q"]])
+    assert np.isclose(float(d["ce_raw"][0, 14]), float(want), rtol=1e-4)
+
+
+def test_dilate_marks_within_k():
+    x = np.zeros((1, 12), bool)
+    x[0, 5] = True
+    assert np.flatnonzero(T._dilate(x, 2)[0]).tolist() == [3, 4, 5, 6, 7]
