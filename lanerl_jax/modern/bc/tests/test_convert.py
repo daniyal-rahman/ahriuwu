@@ -31,8 +31,8 @@ def test_lagged_pairs_actions_with_older_observations():
 
 def test_conversion_rejects_mixed_sources_before_reading_a_game(tmp_path):
     from lanerl_jax.modern.bc.sources import ReplayOnlyUnavailable
-    with pytest.raises(ReplayOnlyUnavailable, match="sim-kit tables"):
-        C.convert_game(tmp_path / "not-a-game")
+    with pytest.raises(ReplayOnlyUnavailable, match="not replay-only"):
+        C.convert_game(tmp_path / "not-a-game", profile="modern-world-v3")
     assert not list(tmp_path.iterdir())
 
 
@@ -70,3 +70,32 @@ def test_dataset_and_training_entrypoints_fail_before_io(tmp_path):
         with pytest.raises(ReplayOnlyUnavailable, match="not replay-only"):
             fn()
     assert not list(tmp_path.iterdir())
+
+
+def test_finalization_rejects_missing_planned_games(tmp_path):
+    import json
+    from lanerl_jax.modern.bc.dataset import finalize
+    from lanerl_jax.modern.bc.sources import SOURCE_CONTRACT
+    (tmp_path / "plan.json").write_text(json.dumps(dict(source_contract=SOURCE_CONTRACT,
+        profile=OB.REPLAY_PROFILE, games=[dict(game="missing")])))
+    with pytest.raises(ValueError, match="planned games are missing"):
+        finalize(tmp_path)
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_cache_rebuilds_when_observation_file_changes(tmp_path):
+    import json
+    from lanerl_jax.modern.bc.train import _arrays
+    from lanerl_jax.modern.bc.sources import SOURCE_CONTRACT
+    f = tmp_path / "game.npz"
+    f.with_suffix(".json").write_text(json.dumps(dict(source_contract=SOURCE_CONTRACT,
+        provenance=dict(obs_profile=OB.REPLAY_PROFILE))))
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    d = dict(entities=np.zeros((1, 32, 20)), entity_pad_mask=np.ones((1, 32), bool),
+             self_vec=np.ones((1, OB.self_dim(OB.REPLAY_PROFILE))))
+    np.savez(f, **d)
+    assert _arrays(f, cache)["self_vec"][0, 0] == 1.
+    d["self_vec"] *= 2.
+    np.savez(f, **d)
+    assert _arrays(f, cache)["self_vec"][0, 0] == 2.

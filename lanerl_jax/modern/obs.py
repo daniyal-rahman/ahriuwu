@@ -53,11 +53,12 @@ MODERN_WORLD_SELF_DIM = 28 + 2 * len(K.KITS)    # 28 + own and enemy champion on
 V2_ID_COLUMNS = 3
 V2_SELF_DIM = V2_ID_COLUMNS + 28 + 4 + 2 * CT.SIDE_DIM
 ROLES = ("top", "mid", "bot", "support")
-PROFILES = ("modern-world-v1", "modern-world-v2", "modern-world-v3")
+REPLAY_PROFILE = "modern-world-v4"
+PROFILES = ("modern-world-v1", "modern-world-v2", "modern-world-v3", REPLAY_PROFILE)
 SELF_DIM = {"modern-world-v1": MODERN_WORLD_SELF_DIM, "modern-world-v2": V2_SELF_DIM,
-            "modern-world-v3": V2_SELF_DIM + len(ROLES)}
+            "modern-world-v3": V2_SELF_DIM + len(ROLES), REPLAY_PROFILE: V2_SELF_DIM + len(ROLES)}
 #: Profiles with the v2 identity columns and descriptor blocks.
-TABLE_PROFILES = ("modern-world-v2", "modern-world-v3")
+TABLE_PROFILES = ("modern-world-v2", "modern-world-v3", REPLAY_PROFILE)
 
 
 def self_dim(profile: str = PROFILE) -> int:
@@ -191,13 +192,16 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         return out[0]
     v2 = profile in TABLE_PROFILES
     idx = jnp.asarray(CT.riot_lookup())[jnp.clip(cid, 0, CT.riot_lookup().shape[0] - 1)]   # (C,) table index
-    if v2:
+    if profile == REPLAY_PROFILE:
+        base_cd = jnp.full((4,), 60.0)
+    elif v2:
         cd_table = jnp.asarray(CT.cooldowns())                                  # (N + 1, 4, MAX_RANKS)
         ranks_me = jnp.clip(jnp.maximum(c.ranks[me], 1) - 1, 0, CT.MAX_RANKS - 1)
         base_cd = cd_table[idx[me]][jnp.arange(4), ranks_me]
     else:
         base_cd = rank_cd(me, jnp.maximum(c.ranks[me], 1))
-    cooldowns = jnp.where(c.ranks[me] > 0, jnp.clip(c.cooldowns[me] / jnp.maximum(base_cd, 1e-3), 0.0, 1.0), 1.0)
+    cooldowns = (jnp.maximum(c.cooldowns[me], 0.0) / 60.0 if profile == REPLAY_PROFILE else
+                 jnp.where(c.ranks[me] > 0, jnp.clip(c.cooldowns[me] / jnp.maximum(base_cd, 1e-3), 0.0, 1.0), 1.0))
     shield = D.total_shield(state.shields, state.t)[me]
     summ_cd = jnp.clip((state.summoners.ready_at[me, :2] - state.t) / 300.0, 0.0, 1.0)
     cap = jnp.where(state.econ.quest.complete[me], E.QUEST_LEVEL_CAP, E.LEVEL_CAP)
@@ -220,22 +224,28 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
              - jnp.sum(c.ranks[me] - K.rank_tables(cid, cfg.kits)[1][me])).astype(jnp.float32) / 4.0,
             state.wards.trinket.charges[me].astype(jnp.float32) / 2.0]
     if v2:
-        desc = jnp.asarray(CT.descriptors())                                    # (N + 1, SIDE_DIM)
+        desc = (jnp.full((CT.n_champions() + 1, CT.SIDE_DIM), jnp.nan) if profile == REPLAY_PROFILE
+                else jnp.asarray(CT.descriptors()))                                    # (N + 1, SIDE_DIM)
         ids = [idx[me].astype(jnp.float32), idx[other].astype(jnp.float32), jnp.asarray(tier, jnp.float32)]
         self_vec = jnp.concatenate([jnp.stack(ids + head + tail), c.ranks[me].astype(jnp.float32) / 5.0,
                                     desc[idx[me]], desc[idx[other]]]
                                    + ([(jnp.arange(len(ROLES)) == role).astype(jnp.float32)]
-                                      if profile == "modern-world-v3" else []))
+                                      if profile in ("modern-world-v3", REPLAY_PROFILE) else []))
     else:
         self_vec = jnp.stack(head + one_hots + tail)
     assert self_vec.shape[0] == SELF_DIM[profile]
 
     # ---- global -------------------------------------------------------------------
     enemy_visible = (enemy_champ[0] >= 0).astype(jnp.float32)
-    rank1 = cd_table[idx[other]][:, 0] if v2 else rank_cd(other, jnp.ones((4,), jnp.int32))
+    rank1 = (jnp.full((4,), 60.0) if profile == REPLAY_PROFILE else
+             cd_table[idx[other]][:, 0] if v2 else rank_cd(other, jnp.ones((4,), jnp.int32)))
     # Witnessed casts only: the enemy was visible to this team when it cast (``seen_cast``).
     since = state.t - c.seen_cast[other]
     since_observed = jnp.where(c.seen_cast[other] > -1e8, jnp.clip(since / jnp.maximum(rank1, 1e-3), 0.0, 1.0), 1.0)
+    if profile == REPLAY_PROFILE:
+        since_observed = jnp.where(c.seen_cast[other] > -1e8, jnp.clip(since / 60.0, 0.0, 1.0), jnp.nan)
+        # Match the replay contract: these unsupported auxiliary fields stay unavailable in RL too.
+        self_vec = self_vec.at[jnp.asarray([18, 23, 24, 25, 29, 30])].set(jnp.nan)
     global_vec = jnp.concatenate([jnp.stack([state.t / horizon_s, enemy_visible]), since_observed])
     assert global_vec.shape[0] == GLOBAL_DIM
     cat = catalog()

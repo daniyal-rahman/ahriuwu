@@ -85,6 +85,20 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 v4 implementation and conversion pilot passed.** New direct replay
+formatter replaces world-state construction. Unsupported fields stay NaN;
+v4 policy consumes missing masks and records columns never observed during BC
+so they also remain masked in RL. Fixed timer scaling, unknown tier, causal
+positions, visible-target label filtering, versioned per-game source checks and
+cache identity are implemented. Historical datasets remain rejected. Job12851
+COMPLETED/0:41 BC checks and16 early/late windows across six champion/role cases,
+6285 valid train /2330 val decisions, finalized and cache-loaded. Small additional
+source/finalization/cache changes have30 focused checks passing; the next GPU
+job will rerun the full BC suite before the memorization diagnostic. No full v6
+training or rollout acceptance yet. Current implementation/evidence supersedes
+the interim source holds below; see `docs/modern/BC.md` section14.
+
+
 **2026-10-22 source check passed; more defaults removed.** Job12796 COMPLETED/0:
 one actual export, all ten actors,3399 unqualified broadcast records and2377
 separate cast schedules with unqualified clock alignment. Removed copied

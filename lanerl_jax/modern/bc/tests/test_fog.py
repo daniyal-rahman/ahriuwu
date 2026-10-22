@@ -38,7 +38,8 @@ def test_fog_provenance_is_explicit_about_the_exception():
     assert "wards" in meta["omitted"] and "brush" in meta["omitted"]
 
 
-def test_fog_exception_does_not_clear_other_source_holds():
-    from lanerl_jax.modern.bc.sources import REPLAY_ONLY_BLOCKERS
-    assert not any("visibility" in reason for reason in REPLAY_ONLY_BLOCKERS)
-    assert any("sim-kit" in reason for reason in REPLAY_ONLY_BLOCKERS)
+def test_fog_exception_does_not_certify_legacy_arrays():
+    import pytest
+    from lanerl_jax.modern.bc.sources import ReplayOnlyUnavailable, require_replay_only
+    with pytest.raises(ReplayOnlyUnavailable):
+        require_replay_only("legacy data", {"fog": fog.provenance()})

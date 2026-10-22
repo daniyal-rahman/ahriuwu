@@ -4,13 +4,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from lanerl_jax.modern import obs as OB
-from lanerl_jax.modern.bc.convert import MS, world_config
+from lanerl_jax.modern import world as MS
+from lanerl_jax.modern.train import default_loadouts
 from lanerl_jax.modern.data import champion_table as CT
 from lanerl_jax.modern.rl.policy import LanePolicy, PolicyConfig, make_policy_config
 
 
 def _world(blue="Garen", red="Jax"):
-    cfg = world_config(blue, red)
+    cfg = MS.build_config(default_loadouts((blue, red)), lanes=(2,), jungle=False,
+                          objectives=False, lane_structures=True)
     state = MS.init_state(cfg)
     return cfg, state, OB.modern_frames(cfg)
 

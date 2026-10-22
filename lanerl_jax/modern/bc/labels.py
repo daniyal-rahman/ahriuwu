@@ -199,8 +199,12 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
             attacking = None
         elif kind == "attack":
             p = unit_point(k, a.target)
-            if a.target == attacking or p is None:
-                n_repeat += a.target == attacking
+            if p is None:
+                representable[k] = False
+                source[k] = chosen[k]
+                continue
+            if a.target == attacking:
+                n_repeat += 1
                 continue
             click(k, *p, unit=True)
             button[k] = b["move"]

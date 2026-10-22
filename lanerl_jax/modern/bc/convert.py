@@ -3,13 +3,9 @@ actions, 10 decisions a second over the lane window.
 
     python -m lanerl_jax.modern.bc.convert OUT_DIR GAME_DIR [GAME_DIR ...] [--lag 1 | --lag 1-2]
 
-Conversion and relabeling are on hold: the retained formatter uses simulator
-initial-state values that are not replay evidence. Fog uses the explicitly
-approved replay-circle heuristic (section 11). Training and dataset
-finalization reject this mixed-source path too. See docs/modern/BC.md section 10.
-Received spell countdowns never fall back to kit tables; missing timers remain
-NaN. Targeting uses received cast metadata, not champion kit rules. The retained
-formatter below is not a certified replay-only observation producer.
+v4 builds inputs directly from replay fields and pinned client geometry, with
+approved heuristic fog. Missing values are NaN and the policy consumes explicit
+finite masks. Legacy datasets remain rejected. See docs/modern/BC.md section 14.
 
 Output per game: ``<game>.npz`` (arrays below, leading axis = decision) and ``<game>.json`` (provenance:
 dataset, decoder commit, converter commit; counts; label checks).
@@ -19,34 +15,24 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from collections import OrderedDict
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 from .. import champions as K
 from .. import obs as OB
-from .. import world as MS
-from ..actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from
-from ..champions import garen as G
-from ..core import types as W
-from ..frame import make_lane_frame
-from ..train import LANE_HALF_WIDTH, default_loadouts
-from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
+from ..actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS
+from ..train import LANE_HALF_WIDTH
 from . import fog
 from .labels import Labels, label_actions, cast_rules
-from .sources import REPLAY_ONLY_BLOCKERS, require_replay_only
-from .replay import (BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, lane_line,
+from .sources import SOURCE_CONTRACT, require_replay_only
+from . import observation as RO
+from .replay import (BLUE, STAT_SCALE, ReplayGame, decision_times, lane_distance,
                      read_game)
 from ..data import champion_table as CT
-from ..data import loadouts as DL
 
-__all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "received_spell_state", "parse_lag",
-           "world_config", "stand_in_kit"]
+__all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "received_spell_state", "parse_lag"]
 
 #: Game clock 0:30 (the first wave leaves the base) to 14:00.
 LANE_WINDOW_S = (30.0, 840.0)
@@ -57,10 +43,6 @@ THIRD_CHAMPION_RADIUS = 2000.0
 _TOP = 2
 #: The lane each replay role is converted in (0 bot, 1 mid, 2 top), and its index in ``obs.ROLES``.
 ROLE_LANE = {"top": 2, "mid": 1, "bot": 0, "support": 0}
-_CHUNK = 500
-#: Rank-1 cooldowns used to normalise "time since the enemy cast" for an opponent without a kit module.
-_UNKNOWN_KIT_RANK1_CD = (10.0, 10.0, 10.0, 100.0)
-_HORIZON_S = 600.0            # the trainer's default episode (``episode_s``): the clock feature's normaliser
 #: The arrays that are the policy's view of the game, which `BCGame.lagged` delays.
 OBSERVATION_FIELDS = ("entities", "entity_pad_mask", "self_vec", "global_vec", "champion_stats")
 
@@ -101,6 +83,10 @@ class BCGame(NamedTuple):
         delayed = {f: getattr(self, f)[np.maximum(src, 0)] for f in OBSERVATION_FIELDS}
         meta = dict(self.meta, observation_lag=dict(decisions=[int(lo), int(hi)], seed=seed,
                                                     seconds_per_decision=0.1))
+        if "availability" in meta:
+            meta["availability"] = dict(meta["availability"],
+                self_fraction=np.isfinite(delayed["self_vec"]).mean(0).tolist(),
+                global_fraction=np.isfinite(delayed["global_vec"]).mean(0).tolist())
         return self._replace(**delayed, obs_index=np.maximum(src, 0).astype(np.int32),
                              label_valid=self.label_valid & (src >= 0), meta=meta)
 
@@ -126,26 +112,6 @@ def _converter_commit() -> str:
     return head + ("-dirty" if dirty else "")
 
 
-def _loadout(name: str):
-    """`train.default_loadouts`, or for a kit with no top page (Ezreal) its first recommended page of any role."""
-    try:
-        return default_loadouts((name,))[0]
-    except KeyError:
-        for role in ("middle", "bottom", "support", "jungle"):
-            try:
-                return MS.Loadout(name, items=(1055, 2003), rune_page=DL.rune_pages(name, role)[0])
-            except KeyError:
-                continue
-        raise
-
-
-@lru_cache(maxsize=8)        # ~0.3 GB of host arrays each
-def world_config(blue: str, red: str, lane: int = _TOP):
-    """The one-lane modern world for a (blue, red) champion pair (host-side, cached)."""
-    return MS.build_config((_loadout(blue), _loadout(red)), lanes=(lane,), jungle=False, objectives=False,
-                           lane_structures=True)
-
-
 def received_spell_state(t, events, casts, n_slots=4):
     """Received timers only; NaN means unknown, never ready or a kit-table estimate.
 
@@ -169,168 +135,14 @@ def received_spell_state(t, events, casts, n_slots=4):
 
 
 def _fill(a):
-    """Forward-fill NaN rows of an (T, 2) array, then back-fill the start."""
-    a = a.copy()
-    ok = np.all(np.isfinite(a), axis=1)
-    idx = np.where(ok, np.arange(len(a)), 0)
-    np.maximum.accumulate(idx, out=idx)
-    a = a[idx]
-    first = np.argmax(ok)
-    a[:first] = a[first]
+    """Causal forward fill; leading unknown positions remain unknown."""
+    a = np.asarray(a).copy()
+    last = np.full(a.shape[1:], np.nan)
+    for k, row in enumerate(a):
+        if np.all(np.isfinite(row)):
+            last = row
+        a[k] = last
     return a
-
-
-def _frames(g: ReplayGame, cfg, lane: int = _TOP):
-    """The world's lane frames, checked against the replay's turret placements."""
-    blue = np.asarray(g.turret_xy[(BLUE, lane, "outer")])
-    red = np.asarray(g.turret_xy[(RED, lane, "outer")])
-    world = OB.modern_frames(cfg, lane)
-    for f, own in ((world[0], blue), (world[1], red)):
-        if np.hypot(*(np.asarray(f.origin) - own)) > 10.0:
-            raise ValueError(f"replay lane {lane} outer turret {own} is not where the modern world has it {f.origin}")
-    return world
-
-
-def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
-    """Per-decision arrays of the unit columns the observation and the click decoder read, and the replay
-    unit each world slot holds (-1 none). Slots: 0/1 the blue/red laners, the minion block (nearest 40),
-    the received turrets (positions, life and health); with ``extra_champions``
-    the other champions in the ward block (no wards are decoded), for the observation and fog only."""
-    T = len(g.t)
-    lay = cfg.layout
-    N = lay.n_units
-    i_me, i_opp = g.index(g.me), g.index(g.opponent)
-    s_me = g.units[i_me].team                 # BLUE = slot 0, RED = slot 1
-    kind0, sub0, team0 = (np.asarray(a) for a in (cfg.unit_kind, cfg.unit_sub, cfg.unit_team))
-    f = {name: np.zeros((T, N), dtype) for name, dtype in (
-        ("kind", np.int32), ("sub", np.int32), ("team", np.int32),
-        ("x", np.float32), ("y", np.float32), ("hp", np.float32),
-        ("max_hp", np.float32), ("alive", bool))}
-    f["kind"][:, :2] = W.KIND_CHAMPION
-    f["team"][:, :2] = (BLUE, RED)
-    unit_of_slot = np.full((T, N), -1, np.int64)
-    known = g.alive & np.isfinite(g.x) & np.isfinite(g.y) & np.isfinite(g.hp) & np.isfinite(g.max_hp)
-
-    def put(k, slot, i, alive):
-        unit_of_slot[k, slot] = i
-        f["alive"][k, slot] = alive
-        f["hp"][k, slot] = g.hp[k, i]
-        f["max_hp"][k, slot] = g.max_hp[k, i]
-
-    # Champions.
-    for k in range(T):
-        put(k, s_me, i_me, g.alive[k, i_me])
-        put(k, 1 - s_me, i_opp, known[k, i_opp])
-    f["x"][:, s_me], f["y"][:, s_me] = me_xy[:, 0], me_xy[:, 1]
-    opp_xy = np.stack([g.x[:, i_opp], g.y[:, i_opp]], -1)
-    f["x"][:, 1 - s_me] = np.where(known[:, i_opp], opp_xy[:, 0], 0.0)
-    f["y"][:, 1 - s_me] = np.where(known[:, i_opp], opp_xy[:, 1], 0.0)
-    # Minions: the nearest 40 known, in the top lane's block.
-    minions = np.asarray([i for i, u in enumerate(g.units) if u.family == "minion"])
-    n_slots = lay.monster0 - lay.minion0
-    if len(minions):
-        d2 = (g.x[:, minions] - me_xy[:, :1]) ** 2 + (g.y[:, minions] - me_xy[:, 1:]) ** 2
-        d2 = np.where(known[:, minions], d2, np.inf)
-        nearest = np.argsort(d2, axis=1)[:, :n_slots]
-        for k in range(T):
-            for j, m in enumerate(nearest[k]):
-                if np.isfinite(d2[k, m]):
-                    i = minions[m]
-                    slot = lay.minion0 + j
-                    put(k, slot, i, True)
-                    u = g.units[i]
-                    f["kind"][k, slot] = W.KIND_MINION
-                    f["sub"][k, slot] = MINION_SUB[u.subtype]
-                    f["team"][k, slot] = u.team
-                    f["x"][k, slot], f["y"][k, slot] = g.x[k, i], g.y[k, i]
-    if extra_champions:
-        others = [i for i, u in enumerate(g.units) if u.family == "champion" and i not in (i_me, i_opp)]
-        assert len(others) <= lay.struct0 - lay.ward0
-        for j, i in enumerate(others):
-            slot = lay.ward0 + j
-            unit_of_slot[:, slot] = i
-            f["alive"][:, slot] = known[:, i]
-            f["hp"][:, slot], f["max_hp"][:, slot] = g.hp[:, i], g.max_hp[:, i]
-            f["kind"][:, slot], f["team"][:, slot] = W.KIND_CHAMPION, g.units[i].team
-            f["x"][:, slot] = np.where(known[:, i], g.x[:, i], 0.0)
-            f["y"][:, slot] = np.where(known[:, i], g.y[:, i], 0.0)
-    # The template supplies slot addresses only, never a structure's state.
-    lane0 = np.asarray(cfg.unit_lane)
-    for slot in range(lay.struct0, N):
-        if kind0[slot] != W.KIND_TURRET:
-            continue
-        tier = next(name for name, v in TIERS.items() if v == sub0[slot])
-        key = (int(team0[slot]), int(lane0[slot]), tier)
-        if key not in g.turret_id:
-            continue
-        i = g.index(g.turret_id[key])
-        unit_of_slot[:, slot] = i
-        f["kind"][:, slot], f["sub"][:, slot], f["team"][:, slot] = W.KIND_TURRET, sub0[slot], g.units[i].team
-        f["x"][:, slot], f["y"][:, slot] = g.x[:, i], g.y[:, i]
-        f["alive"][:, slot] = g.alive[:, i] & np.isfinite(g.x[:, i]) & np.isfinite(g.y[:, i])
-        f["hp"][:, slot], f["max_hp"][:, slot] = g.hp[:, i], g.max_hp[:, i]
-    f["targetable"] = f["alive"] & (f["kind"] != W.KIND_NONE)
-    return f, unit_of_slot, s_me
-
-
-def _own_fields(g: ReplayGame, s_me: int, T: int, champion: str = G.NAME):
-    """The champion layer, economy, summoner and combat fields the observation reads, per decision; the
-    other slot keeps the template's values (replaced where the opponent's are known: ranks, life).
-    Cooldowns use received countdowns only; ``conflicts`` counts unknown decision/slot values."""
-    t = g.t
-    casts = [(a.t, a.slot) for a in g.actions if a.kind == "cast" and 0 <= a.slot < 6]
-    timers, conflicts = received_spell_state(t, g.cooldown_events, casts, n_slots=6)
-    cooldown = timers[:, :4]
-    # A recall press does not establish channel duration or completion.
-    recalling = np.full(T, np.nan, np.float32)
-    # Replay summoner slots are canonicalized only after reconstructing their timers.
-    ready_at = np.full((T, 3), np.nan)
-    for wire_slot, policy_slot in g.summoner_slot.items():
-        ready_at[:, policy_slot] = t + timers[:, wire_slot]
-
-    def both(me_v, other_v, dtype):
-        out = np.zeros((T, 2) + np.shape(me_v)[1:], dtype)
-        out[:, s_me] = me_v
-        out[:, 1 - s_me] = other_v
-        return out
-    i_opp = g.index(g.opponent)
-    fields = dict(
-        ranks=both(g.spell_rank[:, 0], g.spell_rank[:, 1], np.int32),
-        cooldowns=both(cooldown, np.zeros((T, 4)), np.float32),
-        mana=both(g.mana, 0.0, np.float32), cs=both(g.cs, 0, np.int32),
-        level=both(g.level, np.maximum(g.champion_stats[:, 1, 10], 1), np.int32),
-        xp=both(g.xp, 0.0, np.float32), gold=both(g.gold, 0.0, np.float32),
-        dead=both(~g.alive[:, g.index(g.me)], ~g.alive[:, i_opp], bool),
-        recall_channeling=both(recalling, np.nan, np.float32),
-        summoner_ready_at=both(ready_at, np.zeros((T, 3)), np.float32),
-        last_champion_combat=both(g.last_champion_combat, -1e9, np.float32),
-        t=t.astype(np.float32))
-    return fields, conflicts
-
-
-def _seen_casts(g: ReplayGame, can_see, T: int):
-    """(T, 4) time the champion's team last saw the opponent cast each of Q/W/E/R (-1e9 never), as the
-    world's ``champ.seen_cast``: a cast counts when the opponent was visible to the team at that decision."""
-    t = g.t
-    seen = np.full((T, 4), -1e9, np.float32)
-    last = np.full(4, -1e9)
-    casts = sorted((tc, s) for tc, s in g.opponent_casts if 0 <= s < 4)
-    j = 0
-    for k in range(T):
-        while j < len(casts) and casts[j][0] < t[k]:
-            tc, s = casts[j]
-            if can_see[int(np.clip(np.searchsorted(t, tc), 0, T - 1))]:
-                last[s] = tc
-            j += 1
-        seen[k] = last
-    return seen
-
-
-def _corridor(cfg, lane: int = _TOP):
-    """The lane's centre line from fountain to fountain (world coordinates)."""
-    path = ([tuple(p) for p in np.asarray(cfg.lane_path).tolist()] if lane == _TOP
-            else [tuple(map(float, p)) for p in lane_line(lane)])
-    return (FOUNTAINS[0], NEXUS_POSITIONS[0], *path, NEXUS_POSITIONS[1], FOUNTAINS[1])
 
 
 def _scope(g: ReplayGame, me_xy, corridor, extra_champions: bool = False):
@@ -344,25 +156,6 @@ def _scope(g: ReplayGame, me_xy, corridor, extra_champions: bool = False):
     return g.alive[:, i_me] & in_lane & (extra_champions | ~crowded), in_lane, crowded
 
 
-_JITTED: "OrderedDict[tuple, Any]" = OrderedDict()
-_JITTED_MAX = 12      # each holds its world constants on the device; 8 GPU workers share one card
-
-
-def _vmapped(fn, fields, key=None):
-    """`fn` over the leading (decision) axis of `fields`, in chunks. ``key`` names everything `fn` closes over
-    (world, side, profile, role, ...): later games with the same key reuse the first one's compiled function."""
-    T = len(next(iter(jax.tree.leaves(fields))))
-    run = _JITTED.pop(key, None) if key is not None else None
-    if run is None:
-        run = jax.jit(jax.vmap(fn))
-    if key is not None:
-        _JITTED[key] = run
-        while len(_JITTED) > _JITTED_MAX:
-            _JITTED.popitem(last=False)
-    parts = [jax.device_get(run(jax.tree.map(lambda a: a[i:i + _CHUNK], fields))) for i in range(0, T, _CHUNK)]
-    return jax.tree.map(lambda *a: np.concatenate(a), *parts)
-
-
 def _self_names(profile: str = OB.PROFILE) -> list[str]:
     """Names of the self-vector columns of a profile (`obs.build_modern_observation`)."""
     head = ["s", "n", "hp", "level", "gold", "cs", "cd_q", "cd_w", "cd_e", "cd_r", "ad", "ap", "armor", "mr",
@@ -372,7 +165,7 @@ def _self_names(profile: str = OB.PROFILE) -> list[str]:
     if profile in OB.TABLE_PROFILES:
         names = ["own_id", "enemy_id", "tier", *head, *tail, "rank_q", "rank_w", "rank_e", "rank_r",
                  *CT.side_columns("own"), *CT.side_columns("enemy")]
-        names += [f"role_{r}" for r in OB.ROLES] if profile == "modern-world-v3" else []
+        names += [f"role_{r}" for r in OB.ROLES] if profile in ("modern-world-v3", OB.REPLAY_PROFILE) else []
     else:
         names = [*head, *(f"own_{x.NAME}" for x in K.KITS), *(f"enemy_{x.NAME}" for x in K.KITS), *tail]
     assert len(names) == OB.self_dim(profile)
@@ -384,205 +177,75 @@ def _self_columns(profile: str = OB.PROFILE):
     return {n: i for i, n in enumerate(_self_names(profile))}
 
 
-def stand_in_kit(champion: str) -> str:
-    """The sim kit a champion without one borrows for the world template (its identity, descriptors, cooldown
-    normalisation and stats are overwritten from the replay and the champion table): Ezreal when ranged by the
-    table's attack range, else Garen."""
-    if champion in K.BY_NAME:
-        return champion
-    idx = CT.index_of(champion)
-    if idx == 0:
-        raise ValueError(f"{champion!r} is not in the champion table")
-    return "Ezreal" if CT.champions()[idx - 1]["stats"]["attack_range"] > 300 else "Garen"
-
-
-def _label_check(g, labels, valid, order, unit_of_slot, slot_unit):
-    """How the world reads the labels (`modern_orders_from` on the rebuilt state), over the decisions to
-    learn from: attacks and targeted casts on the intended unit, that unit in the observation, moves to the
-    received path's end, stops as stops."""
-    T = len(g.t)
-    acts = [g.actions[i] if i >= 0 else None for i in labels.source]
-    b = MODERN_BUTTON_INDEX
-    ids = np.asarray([u.id for u in g.units])
-
-    def unit_of(slot):
-        u = unit_of_slot[np.arange(T), np.maximum(slot, 0)]
-        return np.where((slot >= 0) & (u >= 0), ids[np.maximum(u, 0)], -1)
-    target = np.asarray([-2 if a is None or a.target is None else a.target for a in acts])
-    is_kind = lambda kind: np.asarray([a is not None and a.kind == kind for a in acts]) & valid  # noqa: E731
-    attack = is_kind("attack") & (labels.button == b["move"])
-    attack_unit = unit_of(order["attack"])
-    r = is_kind("cast") & (labels.button == b["r"])
-    cast_unit = unit_of(order["cast_target"])
-    seen = np.any(slot_unit == order["attack"][:, None], axis=1) & (order["attack"] >= 0)
-    move = is_kind("path") & (labels.button == b["move"]) & ~labels.clamped
-    end = np.asarray([a.point if a is not None and a.kind == "path" else (np.nan, np.nan) for a in acts])
-    miss = np.hypot(order["move_x"][move] - end[move, 0], order["move_y"][move] - end[move, 1])
-    stop = valid & (labels.button == b["stop"])
-    return dict(
-        attacks=int(attack.sum()), attacks_resolved=int((attack & (attack_unit == target)).sum()),
-        attacks_target_in_obs=int((attack & seen & (attack_unit == target)).sum()),
-        r_casts=int(r.sum()), r_resolved=int((r & (order["cast_slot"] == 3) & (cast_unit == target)).sum()),
-        moves=int(move.sum()), moves_read_as_attack=int((move & (order["attack"] >= 0)).sum()),
-        stops=int(stop.sum()), stops_resolved=int((stop & order["stop"]).sum()),
-        move_point_error_median=float(np.median(miss)) if len(miss) else None,
-        move_point_error_p90=float(np.percentile(miss, 90)) if len(miss) else None)
-
-
 def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", hold: bool = True,
-                 profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER, role: str = "top",
+                 profile: str = OB.REPLAY_PROFILE, tier: int = 0, role: str = "top",
                  extra_champions: bool = False) -> BCGame:
-    """One game's decisions over `window` (game seconds) for `champion`, no lag. ``profile`` is the observation
-    layout (`obs.PROFILES`); under ``modern-world-v2`` any champion of the build can be the actor (a sim kit stands
-    in for the world template) and ``tier`` is the skill tier the self vector reports. ``role`` (``obs.ROLES``)
-    picks the lane the world is built in (``ROLE_LANE``) and the v3 role columns; ``extra_champions`` puts the
-    other eight champions in the observation and keeps the decisions they are near."""
-    require_replay_only("BC conversion")
-    if profile not in OB.PROFILES:
-        raise ValueError(f"unknown observation profile {profile!r}")
-    v2 = profile in OB.TABLE_PROFILES
+    """Replay fields with explicit NaN availability and approved heuristic fog."""
+    if profile != OB.REPLAY_PROFILE:
+        require_replay_only("BC conversion")
     lane = ROLE_LANE[role]
-    if champion not in K.BY_NAME and not v2:
-        raise ValueError(f"{champion}: no sim kit; convert with profile modern-world-v2")
-    t = decision_times(*window)
-    g = read_game(game_dir, t, champion, lane)
-    T = len(t)
-    i_me, me_team, registered, me_kit, pair, cfg, frames, me_xy = _setup(g, champion, lane)
-    frame = frames[me_team]
-
-    f, unit_of_slot, s_me = _unit_fields(g, cfg, me_xy, extra_champions)
-    f["visible"] = fog.team_visibility(g.units, g.x, g.y, g.alive, unit_of_slot)
-    own, conflicts = _own_fields(g, s_me, T, champion)
-    f.update(own)
-    template = MS.init_state(cfg)
-    other = 1 - s_me
-
-    def state_of(x):
-        x = {k: v for k, v in x.items() if k != "label"}
-        s = template
-        champ = s.champ._replace(ranks=x["ranks"], cooldowns=x["cooldowns"], mana=x["mana"], cs=x["cs"],
-                                 seen_cast=x.get("seen_cast", s.champ.seen_cast))
-        econ = s.econ._replace(gold=x["gold"], xp=x["xp"], level=x["level"], dead=x["dead"],
-                               recall=s.econ.recall._replace(channeling=x["recall_channeling"]))
-        combat = s.combat._replace(clocks=s.combat.clocks._replace(last_champion_combat=x["last_champion_combat"]))
-        s = s._replace(t=x["t"], kind=x["kind"], sub=x["sub"], team=x["team"], x=x["x"], y=x["y"], hp=x["hp"],
-                       max_hp=x["max_hp"], alive=x["alive"], targetable=x["targetable"], champ=champ, econ=econ,
-                       summoners=s.summoners._replace(ready_at=x["summoner_ready_at"]), combat=combat)
-        return s._replace(visible=x["visible"])
-
-    def enemy_seen(x):
-        s = state_of(x)
-        return s.visible[s_me, other] & s.alive[other]
-    f["seen_cast"] = np.zeros((T, 2, 4), np.float32) - 1e9
-    # The closures read only the world (pair, lane), the side and the observation settings.
-    key = (pair, lane, s_me, profile, tier, role, extra_champions)
-    f["seen_cast"][:, other] = _seen_casts(g, _vmapped(enemy_seen, f, key + ("enemy_seen",)), T)
-
-    labels = _labels(g, champion, me_team, frame, me_xy, hold)
-    f["label"] = np.stack([labels.button, labels.screen_x, labels.screen_y], -1)
-
-    def observe(x):
-        s = state_of(x)
-        obs = OB.build_modern_observation(s, s_me, frame, cfg, horizon_s=_HORIZON_S, profile=profile, tier=tier,
-                                          role=OB.ROLES.index(role), extra_champions=extra_champions)
-        action = tuple(jnp.zeros(2, jnp.int32).at[s_me].set(v) for v in x["label"])
-        o = modern_orders_from(action, s, frames)
-        order = dict(attack=o.attack[s_me], move_x=o.move_x[s_me], move_y=o.move_y[s_me],
-                     cast_slot=o.cast_slot[s_me], cast_target=o.cast_target[s_me], stop=o.stop[s_me])
-        return (obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, obs.slot_unit), order
-    (entities, pad, self_vec, global_vec, slot_unit), order = _vmapped(observe, f, key + ("observe",))
-
-    # Patches from the replay: the self block's combat stats and the enemy identity.
-    col = _self_columns(profile)
-    me_stats, opp_stats = g.champion_stats[:, 0], g.champion_stats[:, 1]
-    self_vec = np.array(self_vec)
-    self_vec[:, col["ad"]] = me_stats[:, 0] / OB.NORM_AD
-    self_vec[:, col["ap"]] = me_stats[:, 1] / OB.NORM_AD
-    self_vec[:, col["armor"]] = me_stats[:, 2] / OB.NORM_AD
-    self_vec[:, col["mr"]] = me_stats[:, 3] / OB.NORM_AD
-    self_vec[:, col["mana"]] = np.where(g.max_mana > 0, g.mana / np.maximum(g.max_mana, 1.0), 0.0)
-    self_vec[:, col["shield"]] = g.shield / np.maximum(me_stats[:, 7], 1.0)
-    self_vec[:, col["ms"]] = me_stats[:, 5] / 500.0
-    self_vec[:, col["range"]] = me_stats[:, 9] / 600.0
-    patched = ["ad", "ap", "armor", "mr", "mana", "shield", "ms", "range"]
-    global_vec = np.array(global_vec)
-    own_idx, opp_idx = CT.index_of(champion), CT.index_of(g.opponent_name)
-    if v2:
-        # Identity, descriptors and cooldown normalisation from the champion table, whatever kits the world
-        # template borrowed; the skill tier the dataset declares.
-        self_vec[:, col["own_id"]], self_vec[:, col["enemy_id"]], self_vec[:, col["tier"]] = own_idx, opp_idx, tier
-        desc = CT.descriptors()
-        self_vec[:, col["own_attack_range"]:col["own_attack_range"] + CT.SIDE_DIM] = desc[own_idx]
-        self_vec[:, col["enemy_attack_range"]:col["enemy_attack_range"] + CT.SIDE_DIM] = desc[opp_idx]
-        ranks = np.maximum(f["ranks"][:, s_me], 1)
-        base = CT.cooldowns()[own_idx][np.arange(4)[None, :], np.clip(ranks - 1, 0, CT.MAX_RANKS - 1)]
-        frac = np.where(f["ranks"][:, s_me] > 0, np.clip(f["cooldowns"][:, s_me] / np.maximum(base, 1e-3), 0, 1), 1.0)
-        for i, nm in enumerate(("cd_q", "cd_w", "cd_e", "cd_r")):
-            self_vec[:, col[nm]] = frac[:, i]
-        patched += ["identity and descriptors (champion table)", "cooldown fractions (champion table)"]
-        if not registered:
-            since = t[:, None] - f["seen_cast"][:, other]
-            rank1 = CT.cooldowns()[opp_idx][:, 0] if opp_idx else np.asarray(_UNKNOWN_KIT_RANK1_CD)
-            global_vec[:, 2:] = np.where(f["seen_cast"][:, other] > -1e8, np.clip(since / rank1, 0.0, 1.0), 1.0)
-            patched += ["enemy cast memory (no kit: champion-table rank-1 cooldowns)"]
-    elif not registered:
-        for k in K.KITS:
-            self_vec[:, col[f"enemy_{k.NAME}"]] = 0.0
-        since = t[:, None] - f["seen_cast"][:, other]
-        global_vec[:, 2:] = np.where(f["seen_cast"][:, other] > -1e8,
-                                     np.clip(since / np.asarray(_UNKNOWN_KIT_RANK1_CD), 0.0, 1.0), 1.0)
-        patched += ["enemy identity (no kit: zeros)", "enemy cast memory (no kit: default rank-1 cooldowns)"]
-    stats = (g.champion_stats / np.asarray(STAT_SCALE)).astype(np.float32)
-    stats[:, 1] *= global_vec[:, 1:2]
-
-    in_scope, in_lane, crowded = _scope(g, me_xy, _corridor(cfg, lane), extra_champions)
-    label_valid = in_scope & labels.representable
-    meta = dict(
-        provenance=dict(g.provenance, converter_commit=_converter_commit(),
-                        world_profile=cfg.profile, obs_profile=profile, action_profile="modern-world-v2",
-                        fog=fog.provenance()),
+    g = read_game(game_dir, decision_times(*window), champion, lane)
+    T = len(g.t)
+    me = g.index(g.me)
+    team = g.units[me].team
+    frame = RO.frames(g, lane)[team]
+    me_xy = np.stack([g.x[:, me], g.y[:, me]], -1)
+    casts = [(a.t, a.slot) for a in g.actions if a.kind == "cast" and 0 <= a.slot < 6]
+    timers, unknown = received_spell_state(g.t, g.cooldown_events, casts, n_slots=6)
+    entities, pad, sv, gv, slots, visible = RO.build(
+        g, frame, _self_columns(profile), role, tier, extra_champions, timers)
+    label_view = np.zeros_like(visible)
+    for k in range(T):
+        label_view[k, slots[k, slots[k] >= 0]] = True
+    label_view[:, me] = np.isfinite(me_xy).all(1)
+    labels = _labels(g, champion, team, frame, np.nan_to_num(_fill(me_xy)), hold, label_view)
+    scope, in_lane, crowded = _scope(g, me_xy, RO.corridor(lane), extra_champions)
+    scope &= np.isfinite(me_xy).all(1) & np.isfinite(g.hp[:, me])
+    valid = scope & labels.representable
+    actions = [g.actions[i] if i >= 0 else None for i in labels.source]
+    attack = np.asarray([a is not None and a.kind == "attack" for a in actions]) & valid
+    rcast = valid & (labels.button == MODERN_BUTTON_INDEX["r"])
+    target_seen = np.asarray([a is not None and a.target is not None and
+                            any(g.units[int(u)].id == a.target for u in slots[k] if u >= 0)
+                            for k, a in enumerate(actions)])
+    meta = dict(source_contract=SOURCE_CONTRACT,
+        provenance=dict(g.provenance, converter_commit=_converter_commit(), obs_profile=profile,
+                        action_profile="modern-world-v2", fog=fog.provenance(),
+                        geometry=dict(source=RO.geometry()["source"], sha256=RO.geometry()["source_sha256"])),
         champion=champion, role=role, lane=lane, extra_champions=extra_champions,
-        champion_kit=me_kit, champion_index=own_idx, opponent=g.opponent_name,
-        opponent_kit=g.opponent_name if registered else None, opponent_index=opp_idx, skill_tier=tier,
-        team="blue" if me_team == BLUE else "red", summoners=list(g.summoners), window_s=list(window),
-        decisions=T,
-        counts=dict(in_scope=int(in_scope.sum()), label_valid=int(label_valid.sum()),
-                    dead=int((~g.alive[:, i_me]).sum()), out_of_lane=int((~in_lane).sum()),
-                    third_champion=int(crowded.sum()), not_representable=int((~labels.representable).sum()),
-                    clicks_clamped=int(labels.clamped.sum()), click_valid=int((labels.click_valid & label_valid).sum()),
-                    superseded=labels.n_superseded, repeat_attacks=labels.n_repeat_attacks,
-                    held=int((labels.held & label_valid).sum()),
-                    held_on_unit=int((labels.held & labels.click_on_unit & label_valid).sum()),
-                    cooldown_conflicts=conflicts,
-                    buttons={b: int(np.sum((labels.button == i) & label_valid)) for i, b in enumerate(MODERN_BUTTONS)}),
-        label_check=_label_check(g, labels, label_valid, order, unit_of_slot, slot_unit),
-        patched_from_replay=patched,
-        not_from_replay=list(REPLAY_ONLY_BLOCKERS),
+        opponent=g.opponent_name, opponent_kit=g.opponent_name if g.opponent_name in K.BY_NAME else None,
+        team="blue" if team == BLUE else "red", summoners=list(g.summoners), skill_tier=tier,
+        window_s=list(window), decisions=T,
+        counts=dict(in_scope=int(scope.sum()), label_valid=int(valid.sum()), dead=int((~g.alive[:, me]).sum()),
+                    out_of_lane=int((~in_lane).sum()), third_champion=int(crowded.sum()),
+                    not_representable=int((~labels.representable).sum()), clicks_clamped=int(labels.clamped.sum()),
+                    click_valid=int((labels.click_valid & valid).sum()), superseded=labels.n_superseded,
+                    repeat_attacks=labels.n_repeat_attacks, held=int((labels.held & valid).sum()),
+                    held_on_unit=int((labels.held & labels.click_on_unit & valid).sum()),
+                    cooldown_conflicts=0, unknown_timer_values=unknown,
+                    buttons={b: int(np.sum((labels.button == i) & valid)) for i,b in enumerate(MODERN_BUTTONS)}),
+        label_check=dict(orders_checked=False, attacks=int(attack.sum()),
+                         attacks_target_in_obs=int((attack & target_seen).sum()),
+                         r_casts=int(rcast.sum()), r_unit_casts=int((rcast & labels.click_on_unit).sum()),
+                         r_target_in_obs=int((rcast & labels.click_on_unit & target_seen).sum())),
+        availability=dict(encoding="NaN means unavailable; finite means observed or declared representation",
+                          self_fraction=np.isfinite(sv).mean(0).tolist(),
+                          global_fraction=np.isfinite(gv).mean(0).tolist(),
+                          self_columns=_self_names(profile)),
+        not_from_replay=["approved heuristic fog", "canonical camera/layout/scaling", "pinned client geometry"],
         observation_lag=dict(decisions=[0, 0]))
-    return BCGame(entities=entities, entity_pad_mask=pad, self_vec=self_vec.astype(np.float32),
-                  global_vec=global_vec.astype(np.float32), champion_stats=stats, button=labels.button,
-                  screen_x=labels.screen_x, screen_y=labels.screen_y, uses_screen=labels.uses_screen,
-                  click_valid=labels.click_valid, click_on_unit=labels.click_on_unit, label_valid=label_valid,
-                  held=labels.held, in_scope=in_scope, obs_index=np.arange(T, dtype=np.int32), t=t, meta=meta)
+    stats = (g.champion_stats / np.asarray(STAT_SCALE)).astype(np.float32)
+    stats[:, 1] = np.where(gv[:, 1:2] > 0, stats[:, 1], np.nan)
+    return BCGame(entities, pad, sv, gv, stats, labels.button, labels.screen_x, labels.screen_y,
+                  labels.uses_screen, labels.click_valid, labels.click_on_unit, valid, labels.held,
+                  scope, np.arange(T, dtype=np.int32), g.t, meta)
 
 
-def _setup(g: ReplayGame, champion: str, lane: int):
-    """The world a laner's game is converted in: (index of the champion, its team, opponent kit registered,
-    its stand-in kit, the world's kit pair, config, lane frames, the champion's position per decision)."""
-    i_me = g.index(g.me)
-    me_team = g.units[i_me].team
-    registered = g.opponent_name in K.BY_NAME
-    opp_kit = g.opponent_name if registered else ("Jax" if champion != "Jax" else "Garen")   # stand-in kit
-    me_kit = stand_in_kit(champion)
-    pair = (me_kit, opp_kit) if me_team == BLUE else (opp_kit, me_kit)
-    cfg = world_config(*pair, lane)
-    me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
-    return i_me, me_team, registered, me_kit, pair, cfg, _frames(g, cfg, lane), me_xy
-
-
-def _labels(g: ReplayGame, champion: str, me_team: int, frame, me_xy, hold: bool):
+def _labels(g: ReplayGame, champion: str, me_team: int, frame, me_xy, hold: bool, visible=None):
     enemies = {u.id for u in g.units if u.team != me_team}
     unit_xy = {u.id: np.stack([g.x[:, i], g.y[:, i]], -1) for i, u in enumerate(g.units)}
+    if visible is not None:
+        unit_xy = {u.id: np.where(visible[:, i, None], unit_xy[u.id], np.nan) for i, u in enumerate(g.units)}
     return label_actions(g.t, g.actions, me_xy, unit_xy, np.asarray(frame.axis), np.asarray(frame.normal),
                          enemies, g.summoner_slot, hold=hold, rules=cast_rules(champion), me=g.me)
 
@@ -591,17 +254,7 @@ def relabel_game(game_dir: Path, champion: str, role: str = "top", hold: bool = 
                  window=LANE_WINDOW_S) -> Labels:
     """The labels `convert_game` gives the game now, without building observations (labels depend only on
     the replay's actions and positions and the lane frame)."""
-    require_replay_only("BC relabeling")
-    lane = ROLE_LANE[role]
-    g = read_game(game_dir, decision_times(*window), champion, lane)
-    i_me = g.index(g.me)
-    me_team = g.units[i_me].team
-    me_xy = _fill(np.stack([g.x[:, i_me], g.y[:, i_me]], -1))
-    frames = _frames(g, world_config(*_FRAME_PAIR, lane), lane)    # the lane frames do not depend on the kits
-    return _labels(g, champion, me_team, frames[me_team], me_xy, hold)
-
-
-_FRAME_PAIR = ("Garen", "Jax")
+    require_replay_only("Standalone relabeling is unsupported for v4; reconvert with fog and availability")
 
 
 def main():

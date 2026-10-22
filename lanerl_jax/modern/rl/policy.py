@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from ..actions import MODERN_BUTTONS
-from ..obs import MODERN_ENTITY_DIM, N_SLOTS, PROFILE, V2_ID_COLUMNS, profile_of, self_dim
+from ..obs import MODERN_ENTITY_DIM, N_SLOTS, PROFILE, V2_ID_COLUMNS, profile_of, self_dim, TABLE_PROFILES, REPLAY_PROFILE
 from ..screen import N_SCREEN_X, N_SCREEN_Y
 
 
@@ -43,10 +43,14 @@ class PolicyConfig(NamedTuple):
     champion_embed: int = 16       # own and enemy share one table
     n_tiers: int = 16
     tier_embed: int = 4
+    unsupported_self: tuple = ()  # columns never observed in this BC run, also masked in RL
+    unsupported_global: tuple = ()
+    input_missingness: bool = False  # explicit finite masks alongside zero-filled numerical inputs
 
 
 def make_policy_config(profile: str = PROFILE, **over) -> "PolicyConfig":
     """A PolicyConfig whose self width matches ``profile``."""
+    over.setdefault("input_missingness", profile == REPLAY_PROFILE)
     return PolicyConfig(profile=profile, self_dim=self_dim(profile), **over)
 
 
@@ -56,6 +60,9 @@ def restore_policy_config(saved: dict) -> "PolicyConfig":
     saved = dict(saved)
     if "profile" not in saved and "self_dim" in saved:
         saved["profile"] = profile_of(int(saved["self_dim"]))
+    for key in ("unsupported_self", "unsupported_global"):
+        if key in saved:
+            saved[key] = tuple(saved[key])
     return PolicyConfig(**saved)
 
 
@@ -95,7 +102,19 @@ class LanePolicy(nn.Module):
         got = (tuple(entities.shape[-2:]), tuple(self_vec.shape[-1:]), tuple(global_vec.shape[-1:]))
         if got != ((c.n_slots, c.entity_dim), (c.self_dim,), (c.global_dim,)):
             raise ValueError(f"observation widths {got} do not match PolicyConfig")
+        if c.profile == REPLAY_PROFILE and not c.input_missingness:
+            raise ValueError("modern-world-v4 requires input_missingness")
+        if c.input_missingness:
+            if c.unsupported_self:
+                self_vec = self_vec.at[..., jnp.asarray(c.unsupported_self)].set(jnp.nan)
+            if c.unsupported_global:
+                global_vec = global_vec.at[..., jnp.asarray(c.unsupported_global)].set(jnp.nan)
+            em, sm, gm = (~jnp.isfinite(a) for a in (entities, self_vec, global_vec))
+            entities, self_vec, global_vec = (jnp.where(jnp.isfinite(a), a, 0.0)
+                                              for a in (entities, self_vec, global_vec))
         tokens = nn.Dense(c.d_model, **TRUNK)(entities)
+        if c.input_missingness:
+            tokens += nn.Dense(c.d_model, use_bias=False, name="entity_missing", **TRUNK)(em.astype(jnp.float32))
         attn_mask = nn.make_attention_mask(~pad_mask, ~pad_mask)
         for _ in range(c.n_layers):
             tokens = _Block(c)(tokens, attn_mask)
@@ -104,7 +123,7 @@ class LanePolicy(nn.Module):
         pooled_max = jnp.max(jnp.where(jnp.isfinite(masked), masked, -1e30), axis=-2)
         pooled_max = jnp.where(jnp.any(keep, axis=-2), pooled_max, 0.0)
         pooled_mean = jnp.sum(jnp.where(keep, tokens, 0.0), axis=-2) / jnp.maximum(jnp.sum(keep, axis=-2), 1.0)
-        if c.profile in ("modern-world-v2", "modern-world-v3"):
+        if c.profile in TABLE_PROFILES:
             ids = jnp.clip(self_vec[..., :V2_ID_COLUMNS].astype(jnp.int32), 0, None)
             champ = nn.Embed(c.n_champion_ids, c.champion_embed, name="champion_embed")
             parts = [self_vec[..., V2_ID_COLUMNS:], champ(jnp.minimum(ids[..., 0], c.n_champion_ids - 1)),
@@ -113,7 +132,11 @@ class LanePolicy(nn.Module):
                      global_vec]
         else:
             parts = [self_vec, global_vec]
-        ctx = nn.relu(nn.Dense(c.ctx_dim, **TRUNK)(jnp.concatenate(parts, axis=-1)))
+        ctx = nn.Dense(c.ctx_dim, **TRUNK)(jnp.concatenate(parts, axis=-1))
+        if c.input_missingness:
+            ctx += nn.Dense(c.ctx_dim, use_bias=False, name="context_missing", **TRUNK)(
+                jnp.concatenate([sm, gm], axis=-1).astype(jnp.float32))
+        ctx = nn.relu(ctx)
         h = jnp.concatenate([pooled_max, pooled_mean, ctx], axis=-1)
         for _ in range(c.mlp_layers):
             h = nn.relu(nn.Dense(c.mlp_hidden, **TRUNK)(h))

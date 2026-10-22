@@ -1,8 +1,8 @@
 # Behaviour cloning from decoded replays (modern world)
 
-**2026-10-22: conversion, relabeling, finalization and training are on hold for the replay-only requirement.**
-The descriptions and runs below are historical mixed-source behavior; see sections 10–11 before running anything.
-Heuristic fog is now explicitly allowed; the other source holds remain in force.
+**2026-10-22: v4 replay-only pilot passed conversion validation; learning validation is next.**
+Historical v1-v3 observation datasets remain rejected. Sections10–13 describe the
+audit and interim holds; section14 describes the replacement and current evidence.
 
 Written 2026-10-17. Code: `lanerl_jax/modern/bc/` (`replay.py` reads a game, `labels.py` labels actions,
 `convert.py` builds the arrays, `dataset.py` builds the dataset, `targets.py` the click loss, `train.py` the
@@ -385,3 +385,76 @@ holds cover cooldown/descriptor normalization, progression/quest/trinket fields,
 unmarked reader defaults, causal positions and policy availability handling.
 The accepted heuristic fog is unchanged. Source audit section10 describes the
 starting implementation; sections11–13 record the approved exception and repairs.
+
+
+## 14. Direct replay inputs, v4 profile and availability (2026-10-22)
+
+Dani approved proceeding through cleanup, representative conversion, learning
+check and rollouts before full v6. `modern-world-v4` keeps the v3 tensor widths,
+role/identity columns and action ordering, but versions the changed semantics:
+Q/W/E/R timers are seconds/60, summoner timers seconds/300, enemy witnessed cast
+age clipped to60s/60, and unknown cast history is unavailable. It must be selected
+explicitly; the simulator default stays v2 and old width-only checkpoints retain
+their historical interpretation. Per-player tier defaults to0 (unknown), not an
+assumed Master classification.
+
+`bc.observation` constructs policy inputs directly from replay units and stats.
+No world configuration, initial state, starting items/runes or kit composition is
+used. Frames use replay outer-turret placements and pinned client geometry spawn
+anchors for orientation; camera projection, slot selection, corridor filtering
+and numeric scaling are shared representation choices. The approved circular
+fog remains approximate. Every alive/positioned replay candidate can supply sight
+according to its team; only visible on-screen replay units fill policy rows.
+There are no template inhibitors/Nexuses or full-health placeholder structures.
+Entity HP is unavailable if its received HP/maxHP is unavailable.
+
+Replicated scalar/rank gaps now remain NaN, including level, gold, mana, shield
+and combat stats. Causal position filling never backfills the leading unknown
+period from a future position. Recall channel state, XP level fraction, unspent
+skill points, quest state, trinket charges and both static descriptor blocks are
+unavailable rather than derived from simulator rules or catalogs. Own spell and
+summoner timers use only packet-qualified evidence; current pilot timers remain
+unknown. Zero resource capacity is distinguished from missing resource evidence.
+CS, stop/held orders and executions remain the documented replay-derived proxies.
+These are not original human key/click recordings.
+
+`LanePolicy` v4 requires explicit missingness: finite values are zero-filled for
+arithmetic and their missing masks get separate learned projections. NaN is not
+silently treated as a real zero. Each checkpoint also records columns never
+observed during training and masks them in simulation, preventing never-trained
+input weights from receiving newly available sim values. The sim v4 formatter
+uses the same timer scaling and masks unsupported auxiliary/descriptor fields;
+older profiles and their parameter layouts are preserved. BC and evaluation keep
+an explicit100ms observation lag. Future full v6 evaluation must preserve that
+setting and inspect the independent buying/gold mismatch.
+
+New arrays/plans/manifests carry
+`source_contract=replay-fields-circles-missing-v1`; the loader checks it together
+with the v4 profile for every game/cache. Legacy arrays cannot be made compatible
+by a relabel; standalone relabeling remains disabled. Cache identity includes the
+source file path, nanosecond modification time, size and metadata/sidecar stamp.
+Finalization refuses missing planned games, and training requires a finalized
+manifest. Targeted labels without a target in the reconstructed observation are
+excluded rather than turned into noop or impossible edge clicks. R target
+coverage is reported for unit-targeted R separately from self casts. Evaluation
+adds champion/role groups and joint button-plus-click accuracy per button.
+
+Validation job12851 COMPLETED/0:41 BC checks passed on desktop CPU, followed by
+16 converted early/late windows for eight champion-games (Garen/Jax top, Viktor
+mid, Lulu/Lux support, Ezreal bot, plus held-out Jax/Viktor games). The original
+base-game split was preserved. Valid decisions:6285 train /2330 val. Conversion,
+finalization and the local-NVMe cached loader passed. Artifacts:
+`/mnt/nfs/shared/modern-bc/v6-pilot-20261022/dataset`; log
+`/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-pilot-12851.out`.
+The job's inherited /srv cwd did not exist on desktop; its script explicitly
+changed to /mnt and all checks passed. Subsequent submissions set --chdir.
+Pilot metadata records the then-uncommitted converter as1eac9d31-dirty; the
+implementation is retained in this commit. Follow-up finalization/cache checks
+bring the focused lightweight subset to30 passing checks.
+
+Next is a full-architecture GPU memorization diagnostic on a fixed set of
+spell-containing windows, with no dropout or timing smoothing. It reports cast
+accuracy and click loss as well as total loss, saves a diagnostic checkpoint,
+and stages data/cache under desktop /scratch. This is not a generalization
+result or the full v6 run. Broad training and rollout acceptance remain pending;
+no claim of improved sim behavior follows from CPU conversion checks alone.

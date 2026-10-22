@@ -367,7 +367,7 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
     opp_row = next(r for r in roster if r["team"] != me_row["team"]
                    and r["assigned_role"] == me_row["assigned_role"])
     me, opponent = me_row["object_id"], opp_row["object_id"]
-    summoners, summoner_slot = canonical_summoners(me_row.get("selected_summoner_ids", (4, 12)))
+    summoners, summoner_slot = canonical_summoners(me_row.get("selected_summoner_ids", ()))
     champions = [Unit(r["object_id"], "champion", _TEAM[r["team"]], r["name"]) for r in roster]
     champion_ids = [u.id for u in champions]
     enemy_champions = {u.id for u in champions if u.team != _TEAM[me_row["team"]]}
@@ -375,9 +375,9 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
     units, placement, turret_xy, turret_id, death_times, x, y, hp, max_hp, alive = _lane_units(
         export / "event-training", fields, position_model, champions, t, lane)
 
-    level = fields.asof("stat.mLevelRef", me, t, default=1).astype(np.int32)
-    spell_rank = np.stack([np.stack([fields.asof(f"ability.{s}.rank", c, t, default=0) for s in range(4)], -1)
-                           for c in (me, opponent)], 1).astype(np.int32)
+    level = fields.asof("stat.mLevelRef", me, t)
+    spell_rank = np.stack([np.stack([fields.asof(f"ability.{s}.rank", c, t) for s in range(4)], -1)
+                           for c in (me, opponent)], 1)
     last_hit_times = _last_hits(fields, me, death_times)
     cs = np.searchsorted(np.asarray(last_hit_times), t, side="right").astype(np.int32)
     champion_stats = np.stack([_combat_stats(fields, c, t) for c in (me, opponent)], 1)
@@ -387,11 +387,11 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
     return ReplayGame(
         game=game_dir.name, provenance=provenance, me=me, opponent=opponent, opponent_name=opp_row["name"],
         summoners=summoners, summoner_slot=summoner_slot, units=units, t=t, x=x, y=y, hp=hp, max_hp=max_hp, alive=alive, level=level,
-        xp=fields.asof("stat.mExp", me, t, default=0.0), gold=fields.asof("stat.mGold", me, t, default=0.0),
-        cs=cs, mana=fields.asof("stat.mPAR", me, t, default=0.0),
-        max_mana=fields.asof("stat.mMaxPAR", me, t, default=0.0),
-        shield=fields.asof("stat.mAllShield", me, t, default=0.0),
-        haste=fields.asof("stat.mAbilityHasteMod", me, t, default=0.0),
+        xp=fields.asof("stat.mExp", me, t), gold=fields.asof("stat.mGold", me, t),
+        cs=cs, mana=fields.asof("stat.mPAR", me, t),
+        max_mana=fields.asof("stat.mMaxPAR", me, t),
+        shield=fields.asof("stat.mAllShield", me, t),
+        haste=fields.asof("stat.mAbilityHasteMod", me, t),
         spell_rank=spell_rank, champion_stats=champion_stats,
         last_champion_combat=_champion_combat(fields, me, enemy_champions, t),
         actions=actions, opponent_casts=opponent_casts, cooldown_events=cooldown_events, turret_xy=turret_xy,
@@ -399,8 +399,8 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
 
 
 def _combat_stats(fields: _Fields, champion: int, t) -> np.ndarray:
-    """(T, N_STATS) raw stats in `STAT_NAMES` order from the replicated totals; 0 before first received."""
-    s = lambda name: fields.asof("stat." + name, champion, t, default=0.0)  # noqa: E731
+    """(T, N_STATS) raw replicated stats in `STAT_NAMES` order; NaN before first receipt."""
+    s = lambda name: fields.asof("stat." + name, champion, t)  # noqa: E731
     return np.stack([
         s("mBaseAttackDamage") + s("mFlatPhysicalDamageMod"),
         s("mFlatMagicDamageMod") * (1.0 + s("mPercentMagicDamageMod")),

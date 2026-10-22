@@ -47,7 +47,7 @@ from ..rl.policy import LanePolicy, make_policy_config
 from ..train import DEFAULT_BUTTONS_OFF
 from .convert import _self_columns
 from .targets import gaussian_target
-from .sources import require_replay_only
+from .sources import SOURCE_CONTRACT, require_replay_only
 
 __all__ = ["Game", "load_games", "windows", "make_loss", "evaluate", "main"]
 
@@ -94,6 +94,10 @@ class Game(NamedTuple):
     own_m: np.ndarray | None = None   # (T,) float16: target mass on the label's button (`timing_targets`)
     alt_b: np.ndarray | None = None   # (T,) int8: a nearby press's button, with mass alt_m
     alt_m: np.ndarray | None = None
+    observed_self: np.ndarray | None = None
+    observed_global: np.ndarray | None = None
+    champion: str = "unknown"
+    role: str = "unknown"
 
 
 #: Buttons whose press is spread in time by ``--cast-time-sigma``, and the self column that says it is ready.
@@ -157,12 +161,15 @@ _CACHED = ("entity_pad_mask", "self_vec", "global_vec", "button", "screen_x", "s
 def game_arrays(f: Path) -> dict:
     """A converted game's arrays, with the label arrays of ``<game>.labels.npz`` (`dataset.relabel`) where
     it exists."""
-    d = np.load(f)
-    a = {k: d[k] for k in d.files}
+    meta = json.loads(f.with_suffix(".json").read_text())
+    require_replay_only("BC game arrays", meta)
+    with np.load(f, allow_pickle=False) as d:
+        a = {k: d[k] for k in d.files}
     side = f.with_name(f.stem + ".labels.npz")
     if side.exists():
-        s = np.load(side)
-        a.update({k: s[k] for k in s.files})
+        require_replay_only("BC label sidecar", meta.get("relabel"))
+        with np.load(side, allow_pickle=False) as s:
+            a.update({k: s[k] for k in s.files})
     return a
 
 
@@ -174,7 +181,12 @@ def _arrays(f: Path, cache: Path | None) -> dict:
         return game_arrays(f)
     data, layout = cache / f"{f.stem}.bin", cache / f"{f.stem}.json"
     side = f.with_name(f.stem + ".labels.npz")
-    if not layout.exists() or (side.exists() and side.stat().st_mtime > layout.stat().st_mtime):
+    require_replay_only("BC cache game", json.loads(f.with_suffix(".json").read_text()))
+    def signature(path):
+        return [str(path.resolve()), path.stat().st_mtime_ns, path.stat().st_size] if path.exists() else None
+    stamp = [SOURCE_CONTRACT, signature(f), signature(f.with_suffix(".json")), signature(side)]
+    cached = json.loads(layout.read_text()) if layout.exists() else {}
+    if cached.get("source") != stamp or not data.exists():
         d = game_arrays(f)
         units = ~d["entity_pad_mask"]
         parts = {k: d[k] for k in _CACHED if k in d}
@@ -192,8 +204,8 @@ def _arrays(f: Path, cache: Path | None) -> dict:
                 end += a.nbytes
             fh.truncate(max(end, 1))
         tmp.rename(data)
-        layout.write_text(json.dumps(spec))              # last: its presence marks the game complete
-    spec = json.loads(layout.read_text())
+        layout.write_text(json.dumps(dict(source=stamp, fields=spec)))              # last: its presence marks the game complete
+    spec = json.loads(layout.read_text())["fields"]
     mm = np.memmap(data, np.uint8, "r")
     a = {k: np.ndarray(tuple(shape), np.dtype(dt), buffer=mm, offset=off) for k, (off, dt, shape) in spec.items()}
     a["entities"] = PackedEntities(a.pop("entity_rows"), np.array(a.pop("entity_offsets")), a["entity_pad_mask"])
@@ -209,7 +221,14 @@ def _raise_open_files():
 
 
 def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path | None = None) -> list[Game]:
-    require_replay_only("BC training data load")
+    require_replay_only("BC training data load", dataset)
+    manifest_path = dataset / "manifest.json"
+    if not manifest_path.exists():
+        raise ValueError("BC training requires a finalized dataset manifest")
+    manifest = json.loads(manifest_path.read_text())
+    require_replay_only("BC finalized manifest", manifest)
+    if manifest.get("missing"):
+        raise ValueError("BC training refused: planned games are missing")
     from concurrent.futures import ThreadPoolExecutor
     plan = json.loads((dataset / "plan.json").read_text())
     picked = [g for g in plan["games"] if g["split"] == split and (dataset / "games" / f"{g['game']}.npz").exists()]
@@ -221,12 +240,17 @@ def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path 
         arrays = list(pool.map(lambda g: _arrays(dataset / "games" / f"{g['game']}.npz", cache), picked))
     out = []
     for g, d in zip(picked, arrays):
+        meta = json.loads((dataset / "games" / f"{g['game']}.json").read_text())
+        available = meta["availability"]
         out.append(Game(g["game"], split, g["opponent_class"], g.get("opponent_kit") is not None,
                         d["entities"] if cache else d["entities"].astype(np.float16), d["entity_pad_mask"], d["self_vec"],
                         d["global_vec"], d["button"].astype(np.int32, copy=False),
                         d["screen_x"].astype(np.int32, copy=False), d["screen_y"].astype(np.int32, copy=False),
                         np.asarray(d["label_valid"]), d["click_valid"] & d["label_valid"], d["click_on_unit"],
-                        np.asarray(d["held"]) if "held" in d else np.zeros(len(d["button"]), bool)))
+                        np.asarray(d["held"]) if "held" in d else np.zeros(len(d["button"]), bool),
+                        observed_self=np.asarray(available["self_fraction"]) > 0,
+                        observed_global=np.asarray(available["global_fraction"]) > 0,
+                        champion=meta["champion"], role=meta["role"]))
     return out
 
 
@@ -373,6 +397,7 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
     def bucket(name):
         return acc.setdefault(name, dict(n=0.0, ce_b=0.0, correct=0.0, n_c=0.0, ce_c=0.0, exact=0.0, dist=0.0,
                                          conf=np.zeros((nb, nb)), ce_by=np.zeros(nb), n_by=np.zeros(nb),
+                                         click_by=np.zeros(nb), joint_by=np.zeros(nb),
                                          n_ev=0.0, ce_ev=0.0, n_hc=0.0, ce_hc=0.0, dist_hc=0.0,
                                          tol_ev=np.zeros(nb), tol_hit=np.zeros(nb), tol_pred=np.zeros(nb),
                                          tol_near=np.zeros(nb)))
@@ -394,7 +419,8 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                       (pr_k & _dilate(ev_k, TOLERANCE)).sum(1), pr_k.sum(1))
         for j, (gi, _) in enumerate(chunk):
             g = games[gi]
-            for name in ("all", g.group, "kit_known" if g.kit_known else "kit_unknown"):
+            for name in ("all", g.group, "kit_known" if g.kit_known else "kit_unknown",
+                         "champion:" + g.champion, "role:" + g.role):
                 a = bucket(name)
                 a["n"] += w[j].sum(); a["ce_b"] += (w[j] * t["ce_b"][j]).sum()
                 a["correct"] += (w[j] * t["correct"][j]).sum()
@@ -402,6 +428,10 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                 a["exact"] += (c[j] * t["exact"][j]).sum(); a["dist"] += (c[j] * t["dist"][j]).sum()
                 m = w[j] > 0
                 bt = np.asarray(b["button"][j])
+                cm = np.asarray(b["click"][j]) > 0
+                np.add.at(a["click_by"], bt[m & cm], 1.)
+                np.add.at(a["joint_by"], bt[m & cm],
+                          (t["correct"][j] & t["exact"][j])[m & cm].astype(float))
                 np.add.at(a["conf"], (bt[m], t["pred_b"][j][m]), 1.0)
                 np.add.at(a["ce_by"], bt[m], t["ce_raw"][j][m]); np.add.at(a["n_by"], bt[m], 1.0)
                 for k, (hit, n_ev, near, n_pred) in tol.items():
@@ -423,6 +453,8 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                          clicks=int(a["n_c"]), click_nll=a["ce_c"] / max(a["n_c"], 1),
                          click_exact=a["exact"] / max(a["n_c"], 1), click_dist=a["dist"] / max(a["n_c"], 1),
                          recall=recall, precision=precision, share=share,
+                         joint_button_click_exact_by={MODERN_BUTTONS[k]: float(a["joint_by"][k] / a["click_by"][k])
+                                                      for k in range(nb) if a["click_by"][k] > 0},
                          button_nll_by={MODERN_BUTTONS[k]: float(a["ce_by"][k] / a["n_by"][k]) for k in range(nb)
                                         if a["n_by"][k] > 0},
                          recall_tol={MODERN_BUTTONS[k]: float(a["tol_hit"][k] / a["tol_ev"][k]) for k in range(nb)
@@ -483,6 +515,8 @@ def main(argv=None):
     train = load_games(a.dataset, "train", a.max_games or None, a.cache)
     val = load_games(a.dataset, "val", a.max_games or None, a.cache)
     n_train = sum(int(g.valid.sum()) for g in train)
+    if not train or not val or n_train == 0:
+        raise ValueError("BC training needs nonempty train/validation splits and valid training labels")
     if a.cast_time_sigma > 0:      # training targets only: validation scores the presses where they happened
         profile0 = dataset_profile(a.dataset)
         train = [timing_targets(g, a.cast_time_sigma, a.cast_time_window, profile0) for g in train]
@@ -497,8 +531,12 @@ def main(argv=None):
     profile = dataset_profile(a.dataset)
     if train and train[0].self_vec.shape[1] != OB.self_dim(profile):
         raise ValueError(f"dataset self width {train[0].self_vec.shape[1]} is not profile {profile}'s")
+    unavailable = {}
+    if profile == OB.REPLAY_PROFILE:
+        unavailable = dict(unsupported_self=tuple(np.flatnonzero(~np.logical_or.reduce([g.observed_self for g in train])).tolist()),
+                           unsupported_global=tuple(np.flatnonzero(~np.logical_or.reduce([g.observed_global for g in train])).tolist()))
     pcfg = make_policy_config(profile, core=a.core, core_norm=not a.no_core_norm,
-                              core_residual=not a.no_core_residual)
+                              core_residual=not a.no_core_residual, **unavailable)
     policy = LanePolicy(pcfg, off)
     loss = make_loss(policy, a.sigma, bw)
     rng = np.random.default_rng(a.seed)

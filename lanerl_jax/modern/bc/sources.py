@@ -1,26 +1,23 @@
-"""BC source gate; heuristic fog is approved (docs/modern/BC.md sections 10–11)."""
+"""Versioned replay fields plus the approved fog heuristic; BC.md section 14."""
+import json
+from pathlib import Path
 
-# These are dependencies of the current formatter, not missing values to fill with zero.
-REPLAY_ONLY_BLOCKERS = (
-    "cooldown normalizers and champion descriptors include sim-kit tables",
-    "XP progress and skill points use simulator rules",
-    "quest state and trinket charges inherit initial-state defaults",
-    "missing scalar fields use unmarked defaults; the policy has no availability masks",
-)
+SOURCE_CONTRACT = "replay-fields-circles-missing-v1"
 
 
 class ReplayOnlyUnavailable(ValueError):
-    """The existing observation contract cannot represent replay-only inputs."""
+    """Old mixed-source arrays cannot be used as replay-only inputs."""
 
 
-def require_replay_only(operation: str):
-    """Stop before reading/writing bulk data or training on old mixed-source arrays.
-
-    Remove this hold only with a verified replay-only formatter and a loader that
-    checks its per-feature provenance and consumes its availability masks.
-    """
-    raise ReplayOnlyUnavailable(
-        f"{operation} is on hold: the current BC pipeline is not replay-only. "
-        + "; ".join(REPLAY_ONLY_BLOCKERS)
-        + ". See docs/modern/BC.md section 10. Existing v1-v5 arrays are not certified."
-    )
+def require_replay_only(operation: str, metadata=None):
+    if isinstance(metadata, Path):
+        path = metadata / "plan.json"
+        metadata = json.loads(path.read_text()) if path.exists() else None
+    profile = None
+    if isinstance(metadata, dict):
+        profile = metadata.get("profile", metadata.get("provenance", {}).get("obs_profile",
+                                      metadata.get("profiles", {}).get("obs")))
+    if (not isinstance(metadata, dict) or metadata.get("source_contract") != SOURCE_CONTRACT
+            or profile != "modern-world-v4"):
+        raise ReplayOnlyUnavailable(f"{operation}: missing replay source contract; legacy mixed-source arrays "
+                                    "are not replay-only. See docs/modern/BC.md section 14.")

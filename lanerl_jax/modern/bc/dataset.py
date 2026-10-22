@@ -37,7 +37,7 @@ from ..actions import MODERN_BUTTONS as BUTTONS_WITH_STOP
 from .convert import LANE_WINDOW_S, _converter_commit, convert_game, parse_lag, relabel_game
 from .. import obs as OB
 from ..data import champion_table as CT
-from .sources import require_replay_only
+from .sources import SOURCE_CONTRACT, require_replay_only
 
 __all__ = ["DATASETS", "MIN_GAME_S", "VAL_SHARE", "plan", "convert", "finalize"]
 
@@ -71,7 +71,7 @@ def _combat_type(export: Path, champion_id: int) -> int:
 
 
 def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=DATASETS,
-         profile: str = OB.PROFILE, tier: int = CT.ARCHIVE_TIER, champions=None, roles=("top",),
+         profile: str = OB.REPLAY_PROFILE, tier: int = 0, champions=None, roles=("top",),
          extra_champions: bool = False) -> dict:
     """With ``champions`` (several clones in one dataset, or ``["all"]``) every game enters once per listed
     player in one of ``roles`` (``obs.ROLES``), as ``<game>.<champion>``, whoever the export's actor was (the
@@ -134,7 +134,7 @@ def plan(out: Path, lag, hold: bool = True, champion: str = CHAMPION, datasets=D
     from .. import champions as K
     for g in games:
         g["opponent_kit"] = g["opponent"] if g["opponent"] in K.BY_NAME else None
-    result = dict(lag=lag, hold=hold, champion=champion, champions=champions, roles=list(roles),
+    result = dict(source_contract=SOURCE_CONTRACT if profile == OB.REPLAY_PROFILE else None, lag=lag, hold=hold, champion=champion, champions=champions, roles=list(roles),
                   extra_champions=extra_champions, profile=profile, tier=tier, window_s=list(LANE_WINDOW_S),
                   min_game_s=MIN_GAME_S, val_share=VAL_SHARE, vocabulary=vocabulary,
                   datasets={str(d): decoder_commit(d) for d in datasets},
@@ -152,7 +152,7 @@ def _seed(game: str) -> int:
 
 
 def convert(out: Path, task: int, tasks: int):
-    require_replay_only("BC dataset conversion")
+    require_replay_only("BC dataset conversion", out)
     from ..jax_cache import enable_compile_cache
     enable_compile_cache()
     p = json.loads((out / "plan.json").read_text())
@@ -163,11 +163,12 @@ def convert(out: Path, task: int, tasks: int):
     for g in (g for g in p["games"] if g.get("base", g["game"]) in mine):
         target = out / "games" / f"{g['game']}.json"
         if target.exists():
+            require_replay_only("skip existing BC game", json.loads(target.read_text()))
             continue
         try:
             bc = convert_game(Path(g["path"]), champion=g.get("champion", p.get("champion", CHAMPION)),
-                              hold=p.get("hold", True), profile=p.get("profile", OB.PROFILE),
-                              tier=p.get("tier", CT.ARCHIVE_TIER), role=g.get("role", "top"),
+                              hold=p.get("hold", True), profile=p.get("profile", OB.REPLAY_PROFILE),
+                              tier=p.get("tier", 0), role=g.get("role", "top"),
                               extra_champions=p.get("extra_champions", False))
         except Exception:      # one bad game must not stop the task; finalize lists it as missing
             (out / "failed").mkdir(exist_ok=True)
@@ -216,7 +217,7 @@ def relabel(out: Path, task: int, tasks: int):
     ``games/<game>.labels.npz``, which overrides the .npz's (`train.game_arrays`); rewriting the .npz would
     recompress its observations. A game already relabelled is skipped. The label check
     (`convert._label_check`) is not redone: it stays the old labels'."""
-    require_replay_only("BC dataset relabeling")
+    require_replay_only("v4 datasets must be reconverted rather than relabeled")
     p = json.loads((out / "plan.json").read_text())
     lag = tuple(p["lag"]) if isinstance(p["lag"], list) else p["lag"]
     bases = list(dict.fromkeys(g.get("base", g["game"]) for g in p["games"]))
@@ -254,7 +255,7 @@ def relabel(out: Path, task: int, tasks: int):
 
 
 def finalize(out: Path) -> dict:
-    require_replay_only("BC dataset finalization")
+    require_replay_only("BC dataset finalization", out)
     p = json.loads((out / "plan.json").read_text())
     rows, missing = [], []
     for g in p["games"]:
@@ -263,12 +264,16 @@ def finalize(out: Path) -> dict:
             missing.append(g["game"])
             continue
         meta = json.loads(path.read_text())
+        require_replay_only("BC finalization game", meta)
         rows.append(dict(game=g["game"], split=g["split"], opponent=g["opponent"],
                          opponent_class=g["opponent_class"], opponent_kit=g.get("opponent_kit"),
                          decoder_commit=meta["provenance"]["decoder_commit"],
                          cooldown_fields_read=meta["provenance"].get("cooldown_fields_read", False),
                          converter_commit=meta["provenance"]["converter_commit"],
                          counts=meta["counts"], label_check=meta["label_check"], decisions=meta["decisions"]))
+
+    if missing:
+        raise ValueError(f"BC finalization refused: {len(missing)} planned games are missing")
 
     def totals(sel):
         c = Counter()
@@ -278,20 +283,20 @@ def finalize(out: Path) -> dict:
             c.update({"lc_" + k: v for k, v in r["label_check"].items() if isinstance(v, int)})
         decisions = sum(r["decisions"] for r in sel)
         valid = c["label_valid"]
-        return dict(games=len(sel), decisions=decisions, in_scope_share=c["in_scope"] / decisions,
+        return dict(games=len(sel), decisions=decisions, in_scope_share=c["in_scope"] / max(decisions, 1),
                     label_valid=valid,
-                    buttons={b: c["button_" + b] / valid for b in BUTTONS_WITH_STOP},
+                    buttons={b: c["button_" + b] / max(valid, 1) for b in BUTTONS_WITH_STOP},
                     excluded=dict(dead=c["dead"], out_of_lane=c["out_of_lane"],
                                   third_champion=c["third_champion"],
                                   not_representable=c["not_representable"]),
-                    attacks_resolved=f"{c['lc_attacks_resolved']}/{c['lc_attacks']}",
+                    attacks_target_in_obs=f"{c['lc_attacks_target_in_obs']}/{c['lc_attacks']}",
                     held=c["held"], held_on_unit=c["held_on_unit"],
-                    stops=c["lc_stops"], stops_resolved=c["lc_stops_resolved"],
-                    r_resolved=f"{c['lc_r_resolved']}/{c['lc_r_casts']}", click_valid=c["click_valid"],
+                    r_target_in_obs=f"{c['lc_r_target_in_obs']}/{c['lc_r_unit_casts']}", click_valid=c["click_valid"],
                     cooldown_conflicts=c["cooldown_conflicts"])
     by_opponent = Counter(r["opponent"] for r in rows)
     commits = sorted({r["converter_commit"] for r in rows})
     manifest = dict(
+        source_contract=SOURCE_CONTRACT,
         plan=dict((k, v) for k, v in p.items() if k not in ("games", "skipped")),
         converter_commit=commits, observation_lag=p["lag"], hold=p.get("hold", True), vocabulary=p["vocabulary"],
         stats=dict(names=list(STAT_NAMES), scale=list(STAT_SCALE)), buttons=list(BUTTONS_WITH_STOP),
@@ -326,8 +331,8 @@ def main():
     a.add_argument("--roles", default="top", help=f"comma list of {','.join(OB.ROLES)} (with --champions)")
     a.add_argument("--extra-champions", action="store_true", help="the other eight champions in the observation")
     a.add_argument("--datasets", nargs="+", type=Path, default=list(DATASETS), help="exported batch directories")
-    a.add_argument("--profile", default=OB.PROFILE, choices=OB.PROFILES, help="observation profile")
-    a.add_argument("--tier", type=int, default=CT.ARCHIVE_TIER, help="skill tier recorded in v2 (8 = Master)")
+    a.add_argument("--profile", default=OB.REPLAY_PROFILE, choices=OB.PROFILES, help="observation profile")
+    a.add_argument("--tier", type=int, default=0, help="skill tier recorded in v2 (8 = Master)")
     a = sub.add_parser("convert")
     a.add_argument("out", type=Path)
     a.add_argument("task", type=int)
