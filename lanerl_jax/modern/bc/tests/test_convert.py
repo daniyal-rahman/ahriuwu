@@ -1,35 +1,11 @@
-"""The converter: cooldown rebuild rules, the lag, the self-column map, and one real game end to end."""
-import json
-from pathlib import Path
+"""Replay-only hold, received countdowns, observation lag and the self-column map."""
 
 import numpy as np
 import pytest
 
 from lanerl_jax.modern import champions as K
 from lanerl_jax.modern import obs as OB
-from lanerl_jax.modern.actions import MODERN_BUTTONS
 from lanerl_jax.modern.bc import convert as C
-from lanerl_jax.modern.data.champions import cooldowns
-
-GAME = Path("/mnt/nfs/datasets/rofl_bc_2619_garen_top_native_20261015/games/NA1-5650865612")
-
-
-def test_spell_state_follows_garen_rules():
-    t = np.arange(0.0, 60.0, 0.1)
-    q_cd, e_cd, r_cd = cooldowns("Garen", "Q")[0], cooldowns("Garen", "E")[0], cooldowns("Garen", "R")[0]
-    casts = [(10.0, 0), (20.0, 2), (21.5, 2), (40.0, 3)]
-    cd, conflicts = C.spell_state(t, casts, attack_times=[11.0], rank_at=lambda tc, s: 1, haste_at=lambda tc: 0.0)
-    # Q: the window runs to the attack at 11.0, then the cooldown.
-    assert cd[105, 0] == 0.0 and cd[110, 0] == pytest.approx(q_cd, abs=0.11)
-    # E: a press 1.5 s into the spin ends it; the cooldown starts then.
-    assert cd[205, 2] == 0.0 and cd[215, 2] == pytest.approx(e_cd, abs=0.11)
-    # R: the cooldown starts after the cast time.
-    assert cd[400, 3] == 0.0 and cd[405, 3] == pytest.approx(r_cd - (0.5 - C.G.R_CAST_TIME), abs=0.11)
-    assert conflicts == 0
-    # Haste shortens the cooldown; a premature press counts as a conflict and still starts the spell.
-    cd2, conflicts2 = C.spell_state(t, [(10.0, 1), (12.0, 1)], [], lambda tc, s: 1, lambda tc: 100.0)
-    w_cd = cooldowns("Garen", "W")[0]
-    assert cd2[101, 1] == pytest.approx(w_cd / 2.0 - 0.1, abs=0.11) and conflicts2 == 1
 
 
 def test_self_columns_match_the_builder_layout():
@@ -53,33 +29,44 @@ def test_lagged_pairs_actions_with_older_observations():
     assert np.array_equal(lag.label_valid, [False, False, True, True, True, True])
 
 
-@pytest.mark.skipif(not GAME.exists(), reason="the Garen TOP native export is not mounted")
-def test_real_game_round_trip(tmp_path):
-    bc = C.convert_game(GAME, window=(300.0, 330.0))
-    T = len(bc.t)
-    assert T == 300 and bc.entities.shape == (T, OB.N_SLOTS, OB.MODERN_ENTITY_DIM)
-    assert bc.self_vec.shape == (T, OB.self_dim(OB.PROFILE)) and bc.global_vec.shape == (T, OB.GLOBAL_DIM)
-    assert np.isfinite(bc.entities).all() and np.isfinite(bc.self_vec).all()
-    assert bc.button.max() < len(MODERN_BUTTONS) and bc.meta["counts"]["label_valid"] > 0
-    lc = bc.meta["label_check"]
-    assert lc["attacks_resolved"] >= 0.9 * lc["attacks"] and lc["stops_resolved"] == lc["stops"]
-    bc.lagged(1).save(tmp_path)
-    saved = np.load(tmp_path / f"{GAME.name}.npz")
-    meta = json.loads((tmp_path / f"{GAME.name}.json").read_text())
-    assert saved["obs_index"][1] == 0 and meta["observation_lag"]["decisions"] == [1, 1]
-    assert meta["provenance"]["cooldown_fields_read"] is False
+def test_conversion_rejects_mixed_sources_before_reading_a_game(tmp_path):
+    from lanerl_jax.modern.bc.sources import ReplayOnlyUnavailable
+    with pytest.raises(ReplayOnlyUnavailable, match="player-team visibility"):
+        C.convert_game(tmp_path / "not-a-game")
+    assert not list(tmp_path.iterdir())
 
 
-def test_received_spell_state_uses_the_timers_then_the_kit_table():
-    t = np.arange(0.0, 60.0, 0.1)
-    # Jax: E sends a 1 s window then its cooldown at the recast; W sends its cooldown; Q sends nothing.
-    events = [(20.0, 2, 1.0, 1.0, 0), (21.6, 2, 16.5, 16.5, 0), (30.0, 1, 6.8, 6.8, 0), (30.0, 8, 5.0, 5.0, 0)]
-    casts = [(10.0, 0), (20.0, 2), (21.6, 2), (30.0, 1), (45.0, 0)]
-    cd, fallback = C.received_spell_state(t, events, casts, "Jax", rank_at=lambda tc, s: 1, haste_at=lambda tc: 0.0)
-    assert cd[205, 2] == pytest.approx(0.5, abs=0.11) and cd[220, 2] == pytest.approx(16.1, abs=0.11)
-    assert cd[300, 1] == pytest.approx(6.8, abs=0.11) and cd[370, 1] == 0.0 and cd[:300, 1].max() == 0.0
-    q_cd = cooldowns("Jax", "Q")[0]
-    assert fallback == 2 and cd[101, 0] == pytest.approx(q_cd - 0.1, abs=0.11) and cd[180, 0] == 0.0
-    assert cd[451, 0] == pytest.approx(q_cd - 0.1, abs=0.11)
-    # An item countdown (slot 8) never touches the ability columns.
-    assert cd[:, 3].max() == 0.0
+def test_received_timers_never_use_a_kit_or_future_message():
+    t = np.array([9., 10., 10.5, 11., 12., 13., 14., 15., 16.])
+    events = [(11., 0, 2., 2., 0), (15., 0, 1., 1., 0), (10., 8, 100., 100., 0)]
+    cd, unknown = C.received_spell_state(t, events, [(10., 0), (14., 0)])
+    assert np.isnan(cd[:3, 0]).all()  # no backfill from 11s to the 10s cast
+    np.testing.assert_allclose(cd[3:6, 0], [2., 1., 0.])
+    assert np.isnan(cd[6, 0])       # another cast invalidates the expired timer
+    np.testing.assert_allclose(cd[7:, 0], [1., 0.])
+    assert np.isnan(cd[:, 1:]).all()  # silent slots and item countdowns supply no ability values
+    assert unknown == int(np.isnan(cd).sum())
+
+
+def test_countdown_at_cast_time_wins_and_corrections_replace_it():
+    t = np.array([10., 11., 12., 13.])
+    cd, _ = C.received_spell_state(t, [(10., 2, 9., 9., 0), (12., 2, 0., 9., 1)], [(10., 2)])
+    np.testing.assert_allclose(cd[:, 2], [9., 8., 0., 0.])
+
+
+def test_missing_or_invalid_countdown_is_unknown():
+    cd, _ = C.received_spell_state([0., 1.], [(0., 0, -1., 1., 0)], [])
+    assert np.isnan(cd).all()
+
+
+def test_dataset_and_training_entrypoints_fail_before_io(tmp_path):
+    from lanerl_jax.modern.bc import dataset, train
+    from lanerl_jax.modern.bc.sources import ReplayOnlyUnavailable
+    for fn in (lambda: dataset.convert(tmp_path, 0, 1),
+               lambda: dataset.relabel(tmp_path, 0, 1),
+               lambda: dataset.finalize(tmp_path),
+               lambda: C.relabel_game(tmp_path, "Garen"),
+               lambda: train.load_games(tmp_path, "train", cache=tmp_path / "cache")):
+        with pytest.raises(ReplayOnlyUnavailable, match="not replay-only"):
+            fn()
+    assert not list(tmp_path.iterdir())

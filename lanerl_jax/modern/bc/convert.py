@@ -3,28 +3,12 @@ actions, 10 decisions a second over the lane window.
 
     python -m lanerl_jax.modern.bc.convert OUT_DIR GAME_DIR [GAME_DIR ...] [--lag 1 | --lag 1-2]
 
-For each decision the replay state (`replay.read_game`) is written into a modern ``ModernState`` of the
-top-lane world (two champions, the 40 top-lane minions nearest the champion, the top lane's structures),
-the world's own fog is computed over it (`views.visibility`: sight radii, walls and brush of the 26.19
-map) and the observation is built by the world's own `obs.build_modern_observation`. Every feature has the
-policy's layout, normalisation, selection and fog rules by construction; what differs is only what the state
-could be filled with (docs/modern/BC.md). Actions are labelled by `labels.label_actions`. The world is used
-only to format observations and to read labels back with `modern_orders_from` as a check: no simulation
-step runs in producing the data.
-
-Filled from the replay: positions, health, unit kinds, teams and minion types, turret life, both champions'
-levels and spell ranks, the champion's experience, current gold, last hits, mana, shield, recall channel,
-summoner cooldowns (from summoner casts), champion combat (from damage notices), the enemy's witnessed casts.
-
-Filled the world's way, then patched from the replay: the self block's attack damage, ability power, armour,
-magic resist, move speed and attack range are the world's own composition of a Garen with starting items,
-which the replay's replicated totals replace (items, runes and growth included). Spell cooldowns are rebuilt
-from the champion's received casts with the kit's cooldown table and the replay's ability haste
-(`spell_state`); the replay's ``cooldown.*`` fields are not read (known-wrong before decoder tag
-``2619-received-countdowns-v2``).
-
-Not available: wards (not decoded), the role quest (0), trinket charges (the world's starting value), jungle
-monsters and the other eight champions (decisions with a third champion near are out of scope).
+Conversion and relabeling are on hold: the retained formatter uses simulator
+fog and initial-state values that are not replay evidence. Training and dataset
+finalization reject this mixed-source path too. See docs/modern/BC.md section 10.
+Received spell countdowns never fall back to kit tables; missing timers remain
+NaN. Targeting uses received cast metadata, not champion kit rules. The retained
+formatter below is not a certified replay-only observation producer.
 
 Output per game: ``<game>.npz`` (arrays below, leading axis = decision) and ``<game>.json`` (provenance:
 dataset, decoder commit, converter commit; counts; label checks).
@@ -48,23 +32,22 @@ from .. import obs as OB
 from .. import world as MS
 from ..actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from
 from ..champions import garen as G
-from ..champions.core import cooldown_row
 from ..champions.summoners import COOLDOWN as SUMMONER_COOLDOWN
 from ..core import types as W
-from ..data.champions import cooldowns as kit_cooldowns
 from ..economy import RECALL_CAST, RECALL_CHANNEL
 from ..frame import make_lane_frame
 from ..train import LANE_HALF_WIDTH, default_loadouts
 from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
 from ..world.views import visibility
 from .labels import Labels, label_actions, cast_rules
+from .sources import REPLAY_ONLY_BLOCKERS, require_replay_only
 from .replay import (BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, lane_line,
                      read_game)
 from ..data import champion_table as CT
 from ..data import loadouts as DL
 
-__all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "spell_state", "parse_lag",
-           "world_config", "cooldown_tables", "stand_in_kit"]
+__all__ = ["LANE_WINDOW_S", "OBSERVATION_FIELDS", "BCGame", "convert_game", "received_spell_state", "parse_lag",
+           "world_config", "stand_in_kit"]
 
 #: Game clock 0:30 (the first wave leaves the base) to 14:00.
 LANE_WINDOW_S = (30.0, 840.0)
@@ -166,108 +149,26 @@ def world_config(blue: str, red: str, lane: int = _TOP):
                            lane_structures=True)
 
 
-def _hasted(cd: float, haste: float) -> float:
-    return cd * 100.0 / (100.0 + max(haste, 0.0))
+def received_spell_state(t, events, casts):
+    """Received timers only; NaN means unknown, never ready or a kit-table estimate.
 
-
-def spell_state(t, casts, attack_times, rank_at, haste_at):
-    """(T, 4) seconds of cooldown left at times `t`, rebuilt from Garen's received casts with the kit's
-    cooldown table (`data.champions.cooldowns`), the replay's ability haste and the kit's rules: Q's window
-    runs from the cast to the next attack (the empowered hit) or 4.5 s, then its cooldown; W's from the cast;
-    E spins 3 s, or until a press at least 1 s in, then its cooldown; R's from the end of its 0.435 s cast.
-    A press while the rebuilt cooldown or window says it would do nothing, within ``t``, is counted in
-    ``conflicts`` (a refund, or haste the replay did not replicate) and starts the spell anyway, since it
-    was received. Returns ``(cooldown (T, 4), conflicts)``."""
+    A received cast invalidates the previous timer until a countdown for the same
+    slot arrives. Messages at the cast's timestamp take precedence. No future
+    message is used to backfill an earlier decision. The second result counts
+    unknown decision/slot values, rather than table fallbacks.
+    """
     t = np.asarray(t, float)
-    tables = [list(kit_cooldowns(G.NAME, s)) for s in "QWER"]
-    cooldown = np.zeros((len(t), 4))
-    attack_times = np.sort(np.asarray(attack_times, float))
-    ready_at = np.zeros(4)
-    busy_until = np.full(4, -np.inf)       # Q's window or E's spin
-    conflicts = 0
-
-    def cool(slot, start, duration):
-        later = t >= start
-        cooldown[later, slot] = np.maximum(start + duration - t[later], 0.0)
-        ready_at[slot] = start + duration
-
-    casts = sorted(casts)
-    for tc, slot in casts:
-        if slot == 2 and tc <= busy_until[2]:
-            continue                           # a press during the spin (or the one ending it)
-        if t[0] <= tc <= t[-1] and (tc < ready_at[slot] - 0.05 or tc < busy_until[slot]):
-            conflicts += 1
-        rank = max(rank_at(tc, slot), 1)
-        base = _hasted(tables[slot][min(rank, len(tables[slot])) - 1], haste_at(tc))
-        if slot == 0:
-            i = np.searchsorted(attack_times, tc, side="right")
-            end = min(tc + G.Q_WINDOW, attack_times[i] if i < len(attack_times) else np.inf)
-            cooldown[(t >= tc) & (t < end), 0] = 0.0
-            busy_until[0] = end
-            cool(0, end, base)
-        elif slot == 1:
-            cool(1, tc, base)
-        elif slot == 2:
-            presses = [c for c, s in casts if s == 2 and tc + G.E_MIN_SPIN <= c < tc + G.E_DURATION]
-            end = min([tc + G.E_DURATION] + presses)
-            cooldown[(t >= tc) & (t < end), 2] = 0.0
-            busy_until[2] = end
-            cool(2, end, base)
-        else:
-            cool(3, tc + G.R_CAST_TIME, base)
-    return cooldown, conflicts
-
-
-_RECEIPT_WINDOW_S = 1.5      # a cast whose slot gets no countdown message within this is timed from the kit table
-
-
-def cooldown_tables(champion: str) -> list[list[float]]:
-    """Base cooldowns by rank per slot: the sim kit's table for a registered kit, else the champion table's."""
-    if champion in K.BY_NAME:
-        return [list(kit_cooldowns(champion, s)) for s in "QWER"]
-    idx = CT.index_of(champion)
-    if idx == 0:
-        raise ValueError(f"{champion!r} has neither a sim kit nor a champion-table row")
-    row = CT.champions()[idx - 1]
-    return [list(CT._cooldown_ranks(d, c))[:c] for d, c in zip(row["slots"], CT.rank_cap(row))]   # no kit: catalog
-
-
-def received_spell_state(t, events, casts, kit_name: str, rank_at, haste_at):
-    """(T, 4) seconds of cooldown left from the server's received countdowns (``replay.cooldown_events``,
-    exports with the countdown fix): after each message for slot ``s`` the timer is ``t_msg + remaining - t``
-    until the slot's next message. Abilities the server sends no countdown for (Jax's Q) fall back to the kit
-    table hasted at the cast, from the cast time: every cast of a slot without a message within
-    ``_RECEIPT_WINDOW_S`` is counted in ``fallback``; a slot with no table either (champion-table rows without
-    cooldown values) stays at 0 there. Returns ``(cooldown (T, 4), fallback)``."""
-    t = np.asarray(t, float)
-    cooldown = np.zeros((len(t), 4))
-    tables = cooldown_tables(kit_name)
-    if not any(tables):
-        raise ValueError(f"{kit_name}: no ability data (no decoder catalog, so its casts are not resolved either)")
-    fallback = 0
+    cooldown = np.full((len(t), 4), np.nan)
     for slot in range(4):
-        msgs = sorted((te, rem) for te, sl, rem, _dur, _mode in events if sl == slot)
-        times = np.asarray([te for te, _ in msgs], float)
-        for i, (te, rem) in enumerate(msgs):
-            end = msgs[i + 1][0] if i + 1 < len(msgs) else np.inf
+        updates = [(float(tc), 0, np.nan) for tc, sl in casts if sl == slot]
+        updates += [(float(te), 1, float(rem)) for te, sl, rem, _dur, _mode in events if sl == slot]
+        updates.sort(key=lambda row: (row[0], row[1]))
+        for i, (te, _kind, rem) in enumerate(updates):
+            end = updates[i + 1][0] if i + 1 < len(updates) else np.inf
             sel = (t >= te) & (t < end)
-            cooldown[sel, slot] = np.maximum(te + rem - t[sel], 0.0)
-        for tc, sl in sorted(casts):
-            if sl != slot:
-                continue
-            j = int(np.searchsorted(times, tc - 0.05))
-            if j < len(times) and times[j] <= tc + _RECEIPT_WINDOW_S:
-                continue
-            fallback += 1
-            table = tables[slot] if slot < len(tables) else []
-            if not table:
-                continue
-            rank = max(rank_at(tc, slot), 1)
-            base = _hasted(table[min(rank, len(table)) - 1], haste_at(tc))
-            until = min(tc + base, times[j] if j < len(times) else np.inf)
-            sel = (t >= tc) & (t < until)
-            cooldown[sel, slot] = np.maximum(cooldown[sel, slot], tc + base - t[sel])
-    return cooldown, fallback
+            if np.isfinite(rem) and rem >= 0:
+                cooldown[sel, slot] = np.maximum(te + rem - t[sel], 0.0)
+    return cooldown, int(np.isnan(cooldown).sum())
 
 
 def _fill(a):
@@ -380,21 +281,12 @@ def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
 def _own_fields(g: ReplayGame, s_me: int, T: int, champion: str = G.NAME):
     """The champion layer, economy, summoner and combat fields the observation reads, per decision; the
     other slot keeps the template's values (replaced where the opponent's are known: ranks, life).
-    Cooldowns come from the received countdowns when the export has them (``received_spell_state``), else
-    from Garen's kit rules (``spell_state``); ``conflicts`` counts kit fallbacks or rule conflicts."""
+    Cooldowns use received countdowns only; ``conflicts`` counts unknown decision/slot values."""
     t = g.t
     casts = [(a.t, a.slot) for a in g.actions if a.kind == "cast" and 0 <= a.slot < 4]
-    attacks = [a.t for a in g.actions if a.kind == "attack"]
-    at = lambda tc: int(np.clip(np.searchsorted(t, tc), 0, T - 1))  # noqa: E731
-    rank_at = lambda tc, s: int(g.spell_rank[at(tc), 0, s])        # noqa: E731
-    haste_at = lambda tc: float(g.haste[at(tc)])                   # noqa: E731
-    if g.provenance.get("cooldown_fields_read"):
-        cooldown, conflicts = received_spell_state(t, g.cooldown_events, casts, champion, rank_at, haste_at)
-    elif champion == G.NAME:
-        cooldown, conflicts = spell_state(t, casts, attacks, rank_at, haste_at)
-    else:
-        raise ValueError(f"{champion}: the export has no received countdowns and the converter only has "
-                         f"Garen's kit rules")
+    if not g.provenance.get("cooldown_fields_read"):
+        raise ValueError("BC requires an export with verified received countdown semantics")
+    cooldown, conflicts = received_spell_state(t, g.cooldown_events, casts)
     # A recall channels for 8.5 s unless the champion does anything else first.
     recalling = np.zeros(T, bool)
     for a in g.actions:
@@ -560,6 +452,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     in for the world template) and ``tier`` is the skill tier the self vector reports. ``role`` (``obs.ROLES``)
     picks the lane the world is built in (``ROLE_LANE``) and the v3 role columns; ``extra_champions`` puts the
     other eight champions in the observation and keeps the decisions they are near."""
+    require_replay_only("BC conversion")
     if profile not in OB.PROFILES:
         raise ValueError(f"unknown observation profile {profile!r}")
     v2 = profile in OB.TABLE_PROFILES
@@ -680,11 +573,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
                     buttons={b: int(np.sum((labels.button == i) & label_valid)) for i, b in enumerate(MODERN_BUTTONS)}),
         label_check=_label_check(g, labels, label_valid, order, unit_of_slot, slot_unit),
         patched_from_replay=patched,
-        not_from_replay=[("spell cooldowns: received countdowns, kit table where the server sends none "
-                          "(received_spell_state)") if g.provenance.get("cooldown_fields_read")
-                         else "spell cooldowns: rebuilt from casts (spell_state)", "wards: none",
-                         "quest: 0", "trinket charges: the world's starting value",
-                         "summoner cooldowns: unhasted"],
+        not_from_replay=list(REPLAY_ONLY_BLOCKERS),
         observation_lag=dict(decisions=[0, 0]))
     return BCGame(entities=entities, entity_pad_mask=pad, self_vec=self_vec.astype(np.float32),
                   global_vec=global_vec.astype(np.float32), champion_stats=stats, button=labels.button,
@@ -718,6 +607,7 @@ def relabel_game(game_dir: Path, champion: str, role: str = "top", hold: bool = 
                  window=LANE_WINDOW_S) -> Labels:
     """The labels `convert_game` gives the game now, without building observations (labels depend only on
     the replay's actions and positions and the lane frame)."""
+    require_replay_only("BC relabeling")
     lane = ROLE_LANE[role]
     g = read_game(game_dir, decision_times(*window), champion, lane)
     i_me = g.index(g.me)

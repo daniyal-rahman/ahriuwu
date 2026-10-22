@@ -37,6 +37,7 @@ from ..actions import MODERN_BUTTONS as BUTTONS_WITH_STOP
 from .convert import LANE_WINDOW_S, _converter_commit, convert_game, parse_lag, relabel_game
 from .. import obs as OB
 from ..data import champion_table as CT
+from .sources import require_replay_only
 
 __all__ = ["DATASETS", "MIN_GAME_S", "VAL_SHARE", "plan", "convert", "finalize"]
 
@@ -151,6 +152,7 @@ def _seed(game: str) -> int:
 
 
 def convert(out: Path, task: int, tasks: int):
+    require_replay_only("BC dataset conversion")
     from ..jax_cache import enable_compile_cache
     enable_compile_cache()
     p = json.loads((out / "plan.json").read_text())
@@ -214,6 +216,7 @@ def relabel(out: Path, task: int, tasks: int):
     ``games/<game>.labels.npz``, which overrides the .npz's (`train.game_arrays`); rewriting the .npz would
     recompress its observations. A game already relabelled is skipped. The label check
     (`convert._label_check`) is not redone: it stays the old labels'."""
+    require_replay_only("BC dataset relabeling")
     p = json.loads((out / "plan.json").read_text())
     lag = tuple(p["lag"]) if isinstance(p["lag"], list) else p["lag"]
     bases = list(dict.fromkeys(g.get("base", g["game"]) for g in p["games"]))
@@ -251,6 +254,7 @@ def relabel(out: Path, task: int, tasks: int):
 
 
 def finalize(out: Path) -> dict:
+    require_replay_only("BC dataset finalization")
     p = json.loads((out / "plan.json").read_text())
     rows, missing = [], []
     for g in p["games"]:

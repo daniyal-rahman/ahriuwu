@@ -47,6 +47,7 @@ from ..rl.policy import LanePolicy, make_policy_config
 from ..train import DEFAULT_BUTTONS_OFF
 from .convert import _self_columns
 from .targets import gaussian_target
+from .sources import require_replay_only
 
 __all__ = ["Game", "load_games", "windows", "make_loss", "evaluate", "main"]
 
@@ -208,6 +209,7 @@ def _raise_open_files():
 
 
 def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path | None = None) -> list[Game]:
+    require_replay_only("BC training data load")
     from concurrent.futures import ThreadPoolExecutor
     plan = json.loads((dataset / "plan.json").read_text())
     picked = [g for g in plan["games"] if g["split"] == split and (dataset / "games" / f"{g['game']}.npz").exists()]

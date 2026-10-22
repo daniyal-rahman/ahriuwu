@@ -78,40 +78,6 @@ def test_policy_embeds_the_ids_only_for_v2():
         raise AssertionError("a v1 policy accepted a v2 observation")
 
 
-def test_champion_table_agrees_with_the_sim_kits():
-    """For the 14 kits the table's cooldowns are the sim's own, and the table never calls an ability the sim
-    unit-targets anything else (the sim casts skillshots without a click, so 'point' in the table against 'self'
-    in a kit is the sim's abstraction, not a disagreement). Known exception: K'Sante E, an ally-targeted dash the
-    catalog leaves untyped."""
-    from lanerl_jax.modern import champions as K
-    from lanerl_jax.modern.bc.convert import cooldown_tables
-    from lanerl_jax.modern.bc.labels import cast_rules, table_cast_rules
-    from lanerl_jax.modern.data.champions import cooldowns as kit_cooldowns
-    differ = []
-    for kit in K.KITS:
-        row = CT.champions()[CT.index_of(kit.NAME) - 1]
-        for s, slot in enumerate("QWER"):
-            cap = CT.rank_cap(row)[s]
-            mine = [float(v) for v in kit_cooldowns(kit.NAME, slot)][:cap]
-            theirs = list(CT.cooldowns()[row["index"], s])[:len(mine)]
-            if mine != theirs:
-                differ.append((kit.NAME, slot, mine, theirs))
-        assert cooldown_tables(kit.NAME) == [list(kit_cooldowns(kit.NAME, s)) for s in "QWER"]
-        rules, table = cast_rules(kit.NAME), table_cast_rules(kit.NAME)
-        missing = (rules.unit_target - table.unit_target) - ({2} if kit.NAME == "KSante" else set())
-        if missing:
-            differ.append((kit.NAME, "unit-targeted in the kit, not in the table", sorted(missing)))
-    assert not differ, differ
-    # Champions without a kit get rules from the table; an unknown name is refused.
-    assert table_cast_rules("Camille").unit_target == frozenset({3})
-    try:
-        cast_rules("Nobody")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("an unknown champion got cast rules")
-
-
 def test_old_checkpoint_configs_without_a_profile_are_read_as_v1():
     from lanerl_jax.modern.rl.policy import restore_policy_config
     saved = PolicyConfig(core="gru")._asdict(); del saved["profile"]; saved["self_dim"] = OB.MODERN_WORLD_SELF_DIM

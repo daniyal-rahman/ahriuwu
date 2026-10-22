@@ -1,5 +1,8 @@
 # Behaviour cloning from decoded replays (modern world)
 
+**2026-10-22: conversion, relabeling, finalization and training are on hold for the replay-only requirement.**
+The descriptions and runs below are historical mixed-source behavior; see section 10 before running anything.
+
 Written 2026-10-17. Code: `lanerl_jax/modern/bc/` (`replay.py` reads a game, `labels.py` labels actions,
 `convert.py` builds the arrays, `dataset.py` builds the dataset, `targets.py` the click loss, `train.py` the
 supervised trainer). Data: the native-event exports of the rofl decoder. The first dataset is in section 8.
@@ -216,3 +219,57 @@ samples q 4.5%, stop 3.7%, e 1.2% (v2: under 1%), dies less than v2 (2.5 vs 3.6)
 CS 75 / 1.4 deaths; the gap is the sim's un-cloned skills (last-hit timing under a turret, trading) that
 the RL phase has to supply. `record.py` + `render.py` turn one episode into a video for eyeballing this.
 
+
+
+## 10. Replay-only source audit (2026-10-22)
+
+Dani requires all BC to come from replay evidence, including fields that were
+previously filled by the simulator without advancing it. No simulator tick is
+necessary for simulator defaults to contaminate an observation. Existing datasets
+and v1-v5 checkpoints are mixed-source artifacts, not replay-only artifacts.
+They remain preserved; v6 has not been started.
+
+| Consumer / feature | Current source and audit result | Required replacement |
+|---|---|---|
+| Entity inclusion, enemy visibility, witnessed-cast memory | `convert.state_of` calls `world.views.visibility`, using sim sight radii, brush/walls and an incomplete reconstructed world. Replay positions are spectator information, not team visibility. | Decoded team visibility, or an explicitly different masked spectator profile. Do not treat all received entities as player-visible. |
+| Structures | `_unit_fields` copies config positions/kinds, marks every structure alive with full health (1/1), then replaces only received turrets. Missing turret HP becomes 1. Inhibitors/Nexuses and missing turrets remain invented. | Received identities, positions, health and life; mask unknown structures/fields. |
+| Own Q/W/E/R timers | Previously `received_spell_state` filled unmatched casts from sim/catalog tables and `spell_state` supplied Garen kit windows/cooldowns for old exports. | Both fallback paths are removed. Received timers are held/decayed only after receipt. A new cast invalidates the prior timer until the next same-slot message. Missing/invalid timers are NaN, never zero. This is a display countdown, not proof of activation eligibility for charges/recasts. Slot/hash alignment remains unverified. |
+| Timer normalization, enemy cast-age normalization | v1 reads kit cooldowns. v2/v3 call `champion_table.cooldowns`; `_cooldown_ranks` replaces catalog values with sim-kit values for registered champions, and otherwise uses a default if absent. | Replay duration with availability, or a revised fixed numeric scaling shared with RL. A catalog name does not certify replay provenance. |
+| Champion descriptors | `champion_table.descriptors` mixes Data Dragon base stats, decoder asset catalogs and sim-kit cooldown overrides. | Separately sourced replay/build metadata with explicit availability; remove all kit overrides and invented defaults from the BC path. Identity/role/tier must retain their declared metadata source. |
+| Own combat stats | The formatter first composes starting inventory, runes and kit stats, then patches the consumed AD/AP/armor/MR/move speed/range/mana/shield columns. Replicated fields still use unmarked default zeros; AD/AP arithmetic is a converter interpretation. | Build these inputs directly from qualified replicated fields and retain availability; no temporary game-state composition. |
+| Summoner timers | `_own_fields` uses simulator `SUMMONER_COOLDOWN`, including a 300s default, from cast timestamps rather than received summoner countdowns. | Replay slot 4/5 countdowns, preserving canonical key mapping and unknowns. |
+| Recall | Simulator `RECALL_CAST + RECALL_CHANNEL` plus next-action heuristic. | Received channel state/cancel/end evidence; unknown otherwise. |
+| XP progress, unspent skill points | `obs` applies simulator XP thresholds, level caps, skill-point and kit starting-rank/bonus rules. | Replicated progress/skill-point fields or explicit masks. Ranks alone do not prove unspent points. |
+| Quest, trinket charges | Initial-state quest zero/incomplete and starting trinket charge. | Replicated state with availability; unknown is not zero/empty/incomplete. |
+| Labels | Casts previously selected targeting rules from sim kits, otherwise catalog rules. | Removed: use each received cast's targeting mode, target or endpoint. Missing unit target/unknown targeting remains unrepresentable; a unit mode without a target no longer implies self-cast. Received executions, inferred stop/held orders and canonical-camera cells remain proxies for decisions, not original key/click recordings. |
+| Position, HP, rank, gold, mana and other scalar gaps | Replay reader uses as-of stats; `_fill` also backfills the first future position. No availability masks reach the current policy. | Preserve field availability and causal as-of positions; never backfill from future observations. The decoder position integrator itself uses received paths/speeds, not sim motion. |
+| Geometry and numeric formatting | Lane frame/corridor uses sim geometry; camera projection, quantization, scaling, button order and slot layout are shared representation choices. | Obtain map placements from replay/build evidence. Shared formatting is permitted as a representation, but cannot supply hidden game state or mechanics. |
+| Supervised learner | `load_games` loads existing arrays/cache without a source contract; timing-spread targets inspect ready flags, so fake zero cooldowns also affect labels. | A verified replay-only dataset contract plus masks consumed by the policy/target code. Existing caches and relabel sidecars must not certify old observations. |
+
+`bc.sources.require_replay_only` now refuses conversion, relabeling, dataset
+finalization and training data loads before bulk IO or writes. The dataset guard
+runs before skip-existing and per-game exception handling so it cannot silently
+reuse mixed-source games or report a successful empty conversion. There is no
+CLI override. Planning and read-only inspection remain available. This is a
+hold on the old formatter, not a completed replacement for it; do not remove the
+gate merely by adding a metadata flag.
+
+The decoder checkout provides separate evidence that team fog is unavailable:
+`scene_policy_adapter.py` reports `player_fog_available=False`,
+`ready_for_unmodified_PPO_loader=False`, and requires explicit masks;
+`minion_memory.py` distinguishes spectator presentation from player visibility.
+That adapter also contains a pinned sim Nexus pad for its frame orientation,
+so it is not a drop-in replay-only replacement. No decoder changes were made.
+
+Next implementation needs an explicit observation contract: masked spectator
+pretraining (different information from human vision), or human-view BC once
+team visibility is qualified. In either case the policy must consume availability
+masks, and RL/init-from compatibility must be tested before a reconvert/training
+run. Unknown state cannot be relabeled as absence, full health, ready or noop.
+
+Validation: 17 focused local CPU checks passed for the gate, causal countdowns,
+unknown/silent slots, cast invalidation, timer corrections, labels and lag. No
+GPU work, reconversion or training was launched. Historical probe job 12793
+failed with `KeyError: values` on a non-scalar field; it did not establish the
+proposed cooldown hash/timing repair. Audit job 12792's result remains evidence
+of fallback prevalence, not proof of a matching fix.

@@ -36,45 +36,30 @@ from ..actions import MODERN_BUTTON_INDEX, screen_usage
 from ..screen import CAM_Y, FLOOR_Y, FOV_V_DEG, N_SCREEN_X, N_SCREEN_Y, RESOLUTION, TILT_DEG, target_on_screen
 from .replay import DECISION_DT, Action
 
-__all__ = ["table_cast_rules", "CAST_BUTTON", "SELF_CAST_SLOTS", "CastRules", "cast_rules", "Labels", "lane_to_screen", "screen_cell", "label_actions"]
+__all__ = ["CAST_BUTTON", "SELF_CAST_SLOTS", "CastRules", "cast_rules", "Labels", "lane_to_screen", "screen_cell", "label_actions"]
 
 #: Cast slot -> button. Slots not listed (items, unknown) have none.
 CAST_BUTTON = {0: "q", 1: "w", 2: "e", 3: "r", 4: "summoner_d", 5: "summoner_f", 12: "ward", 13: "recall"}
-#: Casts that take no cursor for the cloned champion (Garen: Q, W, E are self casts; recall).
-SELF_CAST_SLOTS = {0, 1, 2, 13}
+#: Protocol-defined no-cursor slots; ability targeting comes from received metadata.
+SELF_CAST_SLOTS = {13}
 
 
 class CastRules(NamedTuple):
-    """How a champion's Q/W/E/R take their target, from the modern kit (``cast_rules``)."""
+    """How a champion's Q/W/E/R take their target, when explicitly supplied by a caller."""
     self_cast: frozenset       # no cursor (the click loss is masked)
     unit_target: frozenset     # the cursor must be on the target unit; a non-enemy target is not representable
 
 
 def cast_rules(champion: str) -> CastRules:
-    """``CastRules`` of a champion. A registered modern kit: ``UNIT_TARGET_RANGE[s] > 0`` means unit-targeted
-    (Garen R, Jax Q); ``POINT_TARGET_RANGE[s] > 0`` a ground cast (Nasus E); the rest cast on the champion itself.
-    Any other champion: the champion table's cast types (``self`` / ``unit`` / ``point``, docs/modern/MULTICHAMP.md)."""
-    from .. import champions as K
-    if champion in K.BY_NAME:
-        kit = K.BY_NAME[champion]
-        unit = tuple(getattr(kit, "UNIT_TARGET_RANGE", (0.0,) * 4))
-        point = tuple(getattr(kit, "POINT_TARGET_RANGE", (0.0,) * 4))
-        return CastRules(self_cast=frozenset({s for s in range(4) if unit[s] <= 0 and point[s] <= 0} | {13}),
-                         unit_target=frozenset(s for s in range(4) if unit[s] > 0))
-    return table_cast_rules(champion)
+    """Only recall has a protocol-defined target rule; abilities use each received Action.
+
+    Champion identity must not select simulator kit rules or catalog guesses.
+    """
+    return CastRules(self_cast=frozenset({13}), unit_target=frozenset())
 
 
-def table_cast_rules(champion: str) -> CastRules:
-    """``CastRules`` from the champion table's cast types (any champion of the build; unknown -> all ground casts)."""
-    from ..data import champion_table as CT
-    idx = CT.index_of(champion)
-    if idx == 0:
-        raise ValueError(f"{champion!r} is not in the champion table")
-    types = [CT.CAST_TYPES[i] for i in CT.cast_types()[idx]]
-    return CastRules(self_cast=frozenset({s for s in range(4) if types[s] == "self"} | {13}),
-                     unit_target=frozenset(s for s in range(4) if types[s] == "unit"))
 #: Label a cast on the champion itself (target = ``me``: Annie E, Karma E) or one the decoder reads as
-#: self-targeted (``Action.mode`` "self", or "unit" with no target: recasts such as Lux E, Zed W, Aurora Q) as
+#: self-targeted (``Action.mode`` "self") as
 #: its button with no cursor, whatever the champion table says. False reproduces the labels of datasets converted before 2026-10-20 (not representable).
 MODE_SELF_CASTS = True
 
@@ -153,9 +138,9 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
     walking to, or a click on the unit it is auto-attacking (`held`); they stop when the champion arrives,
     stands still, loses the target, is given a new order, stops, recalls or ults. ``rules`` (``cast_rules``)
     says which ability slots cast on the champion itself and which need the cursor on the target unit
-    (default: Garen's); ``me`` is the champion's unit id (a cast on it is a self cast, ``MODE_SELF_CASTS``)."""
+    (default: recall only); ``me`` is the champion's unit id (a cast on it is a self cast, ``MODE_SELF_CASTS``)."""
     summoner_slot = summoner_slot or {4: 0, 5: 1}
-    rules = rules or CastRules(frozenset(SELF_CAST_SLOTS), frozenset({3}))
+    rules = rules or cast_rules("")
     n = len(t)
     b = MODERN_BUTTON_INDEX
     button = np.full(n, b["noop"], np.int32)
@@ -223,7 +208,7 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
         elif a.slot in CAST_BUTTON:
             slot = 4 + summoner_slot[a.slot] if a.slot in (4, 5) else a.slot
             button[k] = b[CAST_BUTTON[slot]]
-            if a.slot in rules.self_cast:
+            if a.slot in rules.self_cast or (a.slot < 4 and a.mode == "self"):
                 pass                                   # no cursor; the click loss is masked
             elif a.target is not None and a.target in enemies and unit_point(k, a.target) is not None:
                 click(k, *unit_point(k, a.target), unit=True)
@@ -231,15 +216,13 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
                 pass                                   # cast on itself: no cursor
             elif ALLY_TARGET_CLICKS and a.target is not None and a.slot < 4 and unit_point(k, a.target) is not None:
                 click(k, *unit_point(k, a.target), unit=True)      # an allied target
-            elif a.slot in rules.unit_target:
-                representable[k] = False               # a unit cast on an ally, a ward or an unseen unit
-                button[k] = b["noop"]
             elif a.target is not None and unit_point(k, a.target) is not None and a.slot in (4, 5):
                 click(k, *unit_point(k, a.target), unit=True)      # summoners may target any unit
+            elif a.slot in rules.unit_target or a.mode == "unit":
+                representable[k] = False               # a unit-targeted cast without a known target
+                button[k] = b["noop"]
             elif a.point is not None:
                 click(k, *a.point, unit=False)
-            elif MODE_SELF_CASTS and a.target is None and getattr(a, "mode", None) in ("self", "unit"):
-                pass                                   # a recast or self cast: no cursor
             else:
                 representable[k] = False
         else:

@@ -85,6 +85,22 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 replay-only hold.** Dani requires all BC inputs/labels to use replay
+evidence. Full source inventory: `docs/modern/BC.md` section 10. Beyond own spell
+cooldowns, the existing formatter uses sim fog, structure defaults, kit cooldowns
+hidden in champion-table descriptors/normalizers, summoner/recall/XP/skill rules,
+and quest/trinket defaults; missing values have no policy availability masks.
+Removed both own-spell kit cooldown fallback paths and kit/catalog targeting
+fallbacks; unknown countdowns remain NaN and casts invalidate stale timers.
+Conversion, relabeling, finalization and training data loads now fail explicitly
+before IO, including skip-existing/cache paths. v1-v5 data/checkpoints are
+preserved as historical mixed-source results; **no reconvert or v6 is running**.
+17 focused CPU checks pass. Player-team fog is explicitly unavailable in the
+current decoder sources; masked spectator pretraining versus qualified human-view
+BC is the unresolved observation contract. No simulator or decoder changes.
+
+
+
 Datasets `bc_modern_v1/v2` and runs v1-v3 are in `docs/modern/BC.md` sections 8-9 (v3 = class-weighted
 casts, gate vs afk Jax: CS 37, deaths 2.5; its episode video is
 `/mnt/nfs/shared/modern-bc/videos/garen-bc-v3-vs-afk-jax-seed1.mp4`). Running on 2026-10-18: the Jax-top

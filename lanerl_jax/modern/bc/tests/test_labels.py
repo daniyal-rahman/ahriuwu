@@ -43,7 +43,7 @@ def test_move_attack_repeat_and_cast_rules():
     actions = [Action(100.05, "path", point=(1400.0, 1100.0), n_waypoints=3),      # decision 0: move
                Action(100.31, "attack", target=minion),                             # decision 3: attack
                Action(100.72, "attack", target=minion),                             # decision 7: repeat -> held click
-               Action(101.02, "cast", slot=0),                                      # decision 10: Q, no click
+               Action(101.02, "cast", slot=0, mode="self"),                                      # decision 10: Q, no click
                Action(101.21, "cast", slot=3, target=champ),                        # decision 12: R on the champion
                Action(101.41, "cast", slot=7),                                      # decision 14: item: no button
                Action(101.63, "cast", slot=5, point=(1100.0, 1300.0))]              # decision 16: a summoner at a point
@@ -75,7 +75,7 @@ def test_stop_is_a_one_point_path_at_the_champion_while_walking():
 def test_priority_and_superseded_count():
     t, me, units, enemies, minion, _ = _game([])
     actions = [Action(100.01, "path", point=(1400.0, 1100.0), n_waypoints=2),
-               Action(100.05, "cast", slot=2)]                                       # same decision: the cast wins
+               Action(100.05, "cast", slot=2, mode="self")]                                       # same decision: the cast wins
     lab = label_actions(t, actions, me, units, AXIS, NORMAL, enemies)
     assert lab.button[0] == B["e"] and lab.n_superseded == 1
 
@@ -108,21 +108,34 @@ def test_held_labels_follow_the_active_order():
     assert not lab.held.any() and lab.button[1] == B["noop"]
 
 
-def test_cast_rules_come_from_the_kit_and_unit_casts_need_an_enemy_target():
+def test_cast_targeting_uses_received_metadata_without_champion_rules():
     from lanerl_jax.modern.bc.labels import cast_rules
-    garen, jax = cast_rules("Garen"), cast_rules("Jax")
-    assert garen.self_cast == frozenset({0, 1, 2, 13}) and garen.unit_target == frozenset({3})
-    assert jax.self_cast == frozenset({1, 2, 3, 13}) and jax.unit_target == frozenset({0})
+    assert cast_rules("Garen") == cast_rules("Jax") == cast_rules("Nobody")
+    assert cast_rules("Garen").self_cast == frozenset({13})
     t, me, units, enemies, minion, champ = _game([])
-    ally = 11
-    units[ally] = np.tile(np.array([[1100.0, 1000.0]]), (len(t), 1))
-    actions = [Action(100.05, "cast", slot=0, target=champ),       # decision 0: Q on the enemy champion
-               Action(100.52, "cast", slot=0, target=ally),        # decision 5: Q on an ally: not representable
-               Action(101.02, "cast", slot=1)]                     # decision 10: W, no click
-    lab = label_actions(t, actions, me, units, AXIS, NORMAL, enemies, rules=jax, hold=False)
-    assert lab.button[0] == B["q"] and lab.click_on_unit[0] and lab.click_valid[0]
-    assert not lab.representable[5] and lab.button[5] == B["noop"]
+    actions = [Action(100.05, "cast", slot=0, target=champ, mode="unit"),
+               Action(100.52, "cast", slot=0, mode="unit"),
+               Action(101.02, "cast", slot=1, mode="self"),
+               Action(101.52, "cast", slot=2)]
+    lab = label_actions(t, actions, me, units, AXIS, NORMAL, enemies, hold=False)
+    assert lab.button[0] == B["q"] and lab.click_on_unit[0]
+    assert not lab.representable[5]  # unit mode without a target is unknown, not a self cast
     assert lab.button[10] == B["w"] and not lab.click_valid[10]
+    assert not lab.representable[15]  # silent targeting metadata cannot borrow Garen's self-cast rule
+
+
+def test_received_self_and_allied_summoner_targets():
+    t, me, units, enemies, minion, champ = _game([])
+    actor, ally = 10, 11
+    units[actor] = me
+    units[ally] = np.tile([[1100., 1000.]], (len(t), 1))
+    actions = [Action(100.05, "cast", slot=2, target=actor, mode="unit"),
+               Action(100.52, "cast", slot=5, target=ally, mode="unit"),
+               Action(101.02, "cast", slot=0, target=ally, mode="unit")]
+    lab = label_actions(t, actions, me, units, AXIS, NORMAL, enemies, me=actor, hold=False)
+    assert lab.representable[[0, 5, 10]].all()
+    assert not lab.click_valid[0] and lab.click_on_unit[[5, 10]].all()
+    assert lab.button[5] == B["summoner_f"]
 
 
 def test_a_cast_record_on_an_unknown_slot_does_not_displace_the_real_cast():
