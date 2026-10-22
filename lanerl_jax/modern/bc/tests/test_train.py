@@ -18,7 +18,8 @@ def _game(name, n=50, seed=0, group="melee", kit=True):
     return T.Game(name, "train", group, kit, rng.random((n, 32, 20)).astype(np.float16), rng.random((n, 32)) > 0.5,
                   rng.random((n, MODERN_WORLD_SELF_DIM)).astype(np.float32), rng.random((n, 6)).astype(np.float32),
                   button, rng.integers(0, 96, n).astype(np.int32), rng.integers(0, 54, n).astype(np.int32),
-                  rng.random(n) > 0.1, click, click & (rng.random(n) > 0.5), click & (rng.random(n) > 0.5))
+                  rng.random(n) > 0.1, click, click & (rng.random(n) > 0.5), click & (rng.random(n) > 0.5),
+                  champion="Garen", role="top")
 
 
 def test_windows_cover_every_decision_once():
@@ -49,7 +50,10 @@ def test_loss_is_finite_and_masks_burn_in_and_self_casts():
     grads = jax.grad(lambda p: loss(p, jb)[0])(params)
     assert all(np.isfinite(np.asarray(g)).all() for g in jax.tree.leaves(grads))
     ev = T.evaluate(jax.jit(loss.per_decision), params, games, 16, 4, 4)
-    assert set(ev) == {"all", "melee", "kit_known"} and "move" in ev["all"]["recall"]
+    assert set(ev) == {"all", "melee", "kit_known", "champion:Garen", "role:top"}
+    assert "move" in ev["all"]["recall"]
+    assert "move" in ev["all"]["joint_button_click_exact_by"]
+    assert all(0. <= x <= 1. for x in ev["all"]["joint_button_click_exact_by"].values())
     assert ev["all"]["decisions"] == int(b["weight"].sum())
 
 

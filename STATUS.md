@@ -85,6 +85,13 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 GPU diagnostic attempt12858 stopped before training.** CPU preflight
+had42 passing checks and one old assertion expecting only the prior evaluation
+buckets. Updated the fixture/assertion to check champion/role groups and joint
+button-click metric bounds. No optimizer step ran. Re-submit the same diagnostic
+with the corrected test; source/observation implementation remains9b1a8a25.
+
+
 **2026-10-22 v4 implementation and conversion pilot passed.** New direct replay
 formatter replaces world-state construction. Unsupported fields stay NaN;
 v4 policy consumes missing masks and records columns never observed during BC
