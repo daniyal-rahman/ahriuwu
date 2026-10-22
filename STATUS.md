@@ -85,6 +85,18 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 heuristic fog approved.** Dani permits approximate fog only. Added
+`bc/fog.py`: current live replay allies supply circular sight (champion/turret
+1350, minion 1200), including allied champions outside observation slots. No sim
+fog call, wall/brush/ward/stealth/reveal mechanics or template-only sight targets;
+per-game provenance identifies the approximation. 21 focused CPU checks pass.
+Other source holds remain; no reconvert/v6 has started. Storage-aware cooldown
+probe job **12794** submitted on desktop CPU, registered to this chat; inspect its
+automatic receipt/output next, then continue non-fog source repairs. Evidence and
+remaining limitations: `docs/modern/BC.md` sections 10–11. The prior unresolved
+fog-choice statement below is superseded by this approval.
+
+
 **2026-10-22 replay-only hold.** Dani requires all BC inputs/labels to use replay
 evidence. Full source inventory: `docs/modern/BC.md` section 10. Beyond own spell
 cooldowns, the existing formatter uses sim fog, structure defaults, kit cooldowns

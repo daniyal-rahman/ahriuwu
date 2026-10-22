@@ -1,7 +1,8 @@
 # Behaviour cloning from decoded replays (modern world)
 
 **2026-10-22: conversion, relabeling, finalization and training are on hold for the replay-only requirement.**
-The descriptions and runs below are historical mixed-source behavior; see section 10 before running anything.
+The descriptions and runs below are historical mixed-source behavior; see sections 10–11 before running anything.
+Heuristic fog is now explicitly allowed; the other source holds remain in force.
 
 Written 2026-10-17. Code: `lanerl_jax/modern/bc/` (`replay.py` reads a game, `labels.py` labels actions,
 `convert.py` builds the arrays, `dataset.py` builds the dataset, `targets.py` the click loss, `train.py` the
@@ -273,3 +274,38 @@ GPU work, reconversion or training was launched. Historical probe job 12793
 failed with `KeyError: values` on a non-scalar field; it did not establish the
 proposed cooldown hash/timing repair. Audit job 12792's result remains evidence
 of fallback prevalence, not proof of a matching fix.
+
+
+## 11. Approved heuristic fog (2026-10-22)
+
+Dani explicitly allows rough heuristic fog as an exception to replay-only BC.
+There is no need to wait for decoded player-team visibility or to switch to
+unfogged spectator pretraining. This supersedes section 10's unresolved fog
+choice only; it does not authorize other simulator-filled features.
+
+`bc.fog.team_visibility` uses live allied replay champions, lane minions and
+turrets with finite positions as circular sight sources. The deliberately
+approximate radii are 1350/1200/1350 units respectively. They are heuristic
+parameters, not claimed decoded values, and are defined in the BC module without
+importing sim vision/config. Every available allied champion supplies sight,
+even when it is outside the policy slots. Targets must have a live replay unit
+and a finite current position; template-only slots never become visible. Frames
+are independent, without future backfill or retained enemy sightings. Wall/brush
+occlusion, wards, stealth, temporary reveals and units omitted by the replay
+reader are not modeled. These omissions can both over-reveal and under-reveal.
+
+The converter now supplies that visibility to entity selection and witnessed
+cast memory instead of calling `world.views.visibility`. Its per-game provenance
+records `fog.profile=replay-team-circles-v1`, `decoded=False`, the radii and omitted
+mechanics. The conversion hold remains for structures, descriptor/normalizer
+sources, economy/summoner mechanics and unmarked missing values. This helper is
+wired into the held formatter; no full replay conversion is claimed yet.
+
+Validation: 21 focused CPU checks pass (fog, source holds, countdowns, labels and
+lag). Fog checks cover team isolation, allied sources outside policy slots,
+dead/unknown sources and targets, radius boundaries, absent template slots and
+no future/stale visibility. No simulator behavior changes. CPU diagnostic job
+12794 was submitted through `t3-sbatch` to inspect six champion-slot countdown
+examples and relevant field names using storage-aware scalar/structured access;
+log `/mnt/nfs/shared/modern-bc/modern-bc-cooldown-probe-v2-12794.out`. Its automatic
+completion receipt will drive follow-up; no polling loop or training was started.

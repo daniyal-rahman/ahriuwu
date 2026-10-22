@@ -4,7 +4,8 @@ actions, 10 decisions a second over the lane window.
     python -m lanerl_jax.modern.bc.convert OUT_DIR GAME_DIR [GAME_DIR ...] [--lag 1 | --lag 1-2]
 
 Conversion and relabeling are on hold: the retained formatter uses simulator
-fog and initial-state values that are not replay evidence. Training and dataset
+initial-state values that are not replay evidence. Fog uses the explicitly
+approved replay-circle heuristic (section 11). Training and dataset
 finalization reject this mixed-source path too. See docs/modern/BC.md section 10.
 Received spell countdowns never fall back to kit tables; missing timers remain
 NaN. Targeting uses received cast metadata, not champion kit rules. The retained
@@ -38,7 +39,7 @@ from ..economy import RECALL_CAST, RECALL_CHANNEL
 from ..frame import make_lane_frame
 from ..train import LANE_HALF_WIDTH, default_loadouts
 from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
-from ..world.views import visibility
+from . import fog
 from .labels import Labels, label_actions, cast_rules
 from .sources import REPLAY_ONLY_BLOCKERS, require_replay_only
 from .replay import (BLUE, MINION_SUB, RED, STAT_SCALE, ReplayGame, decision_times, lane_distance, lane_line,
@@ -466,6 +467,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     frame = frames[me_team]
 
     f, unit_of_slot, s_me = _unit_fields(g, cfg, me_xy, extra_champions)
+    f["visible"] = fog.team_visibility(g.units, g.x, g.y, g.alive, unit_of_slot)
     own, conflicts = _own_fields(g, s_me, T, champion)
     f.update(own)
     template = MS.init_state(cfg)
@@ -482,10 +484,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
         s = s._replace(t=x["t"], kind=x["kind"], sub=x["sub"], team=x["team"], x=x["x"], y=x["y"], hp=x["hp"],
                        max_hp=x["max_hp"], alive=x["alive"], targetable=x["targetable"], champ=champ, econ=econ,
                        summoners=s.summoners._replace(ready_at=x["summoner_ready_at"]), combat=combat)
-        # Extra champions sit in ward slots, which the ward inputs would give ward sight (none placed).
-        vis, sight, _ = visibility(cfg, s.x, s.y, s.kind, s.sub, s.team, s.alive, s.reveal, s.t,
-                                   wards=None if extra_champions else s.wards, level=s.econ.level)
-        return s._replace(visible=vis, sight=sight)
+        return s._replace(visible=x["visible"])
 
     def enemy_seen(x):
         s = state_of(x)
@@ -556,7 +555,8 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     label_valid = in_scope & labels.representable
     meta = dict(
         provenance=dict(g.provenance, converter_commit=_converter_commit(),
-                        world_profile=cfg.profile, obs_profile=profile, action_profile="modern-world-v2"),
+                        world_profile=cfg.profile, obs_profile=profile, action_profile="modern-world-v2",
+                        fog=fog.provenance()),
         champion=champion, role=role, lane=lane, extra_champions=extra_champions,
         champion_kit=me_kit, champion_index=own_idx, opponent=g.opponent_name,
         opponent_kit=g.opponent_name if registered else None, opponent_index=opp_idx, skill_tier=tier,

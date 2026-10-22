@@ -1,8 +1,7 @@
-"""Replay-only BC gate. Evidence and remediation: docs/modern/BC.md section 10."""
+"""BC source gate; heuristic fog is approved (docs/modern/BC.md sections 10–11)."""
 
 # These are dependencies of the current formatter, not missing values to fill with zero.
 REPLAY_ONLY_BLOCKERS = (
-    "player-team visibility is reconstructed by world.views.visibility, not decoded",
     "structure presence/positions and missing health come from the world template",
     "cooldown normalizers and champion descriptors include sim-kit tables",
     "summoner timers, recall duration, XP progress and skill points use simulator rules",
