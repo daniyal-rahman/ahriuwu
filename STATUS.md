@@ -85,16 +85,22 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
-**Active: rollout/joint-target/held-out diagnostic12869**, registered on gpup,
-50min limit,8 Garen plus8 Jax episodes after CPU preflight and offline evaluation.
-It replaces12866 after the JSON-scalar fix; no optimizer rerun. Log:
-`/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-rollouts-12869.out`.
-Inspect automatic receipt next. Capacity preflight: the58470-row source plan has
-~473.6M decisions; extrapolating the pilot gives~502.6GiB for the current cache,
-which does not fit165GB free NVMe. Proposed lossless sparse-column/categorical
-cache estimates~105.1GiB at the same numeric precision; implement and validate
-that before full training. No existing data removed; no full conversion/training
-submitted. These are pilot-based estimates, not full-corpus measurements.
+**2026-10-22 rollout12869 failed in base-fraction reporting.** All43 checks
+passed and offline evaluation completed. Fixed-window casts34/35, but targeted
+joint button/click exact9/19; held-out button accuracy74.6% versus82.5% majority,
+with zero observed held-out cast recall. This tiny memorization checkpoint does
+not generalize. Gate incorrectly used `Transition.self_vec`; corrected to
+`obs_self`. Retry Garen/Jax episodes from an immutable source snapshot.
+
+Scratch cleanup authorized by Dani: removed obsolete474GB
+`/scratch/dani/bc-allroles-cache-TEMP` (only cache .bin/.json files; no active
+Slurm jobs), plus this thread's completed pilot/eval staging. Free NVMe now638GB.
+The current~502.6GiB full-cache estimate fits with20GiB reserve; actual capacity
+must still be checked before staging. Compaction is optional pending measured
+need. Host guidance now permits disposable scratch cleanup, requires independent
+copies/private job paths, code snapshots, capacity checks and exit cleanup.
+No periodic cleaner was installed; the old30-day cleanup claim was unverified.
+Full conversion/training remain unstarted. Rollout retry submission follows.
 
 
 **2026-10-22 rollout attempt12866 stopped before episodes.** All43 checks passed,

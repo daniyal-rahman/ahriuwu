@@ -129,7 +129,7 @@ def main(argv=None) -> None:
         small = jax.device_get({k: getattr(tr, k) for k in ("done_full", "cs", "gold", "xp", "deaths",
                                                               "lane_dist", "reward", "overflow")})
         col = _self_columns(pcfg.profile)
-        pose = np.asarray(jax.device_get(jnp.take(tr.self_vec[:, :, 0],
+        pose = np.asarray(jax.device_get(jnp.take(tr.obs_self[:, :, 0],
                           jnp.asarray([col["s"], col["n"], col["dead"]]), axis=-1)))
         frame = env.frames[0]
         x = float(frame.origin[0]) + NORM_XY * (pose[..., 0] * float(frame.axis[0]) + pose[..., 1] * float(frame.normal[0]))

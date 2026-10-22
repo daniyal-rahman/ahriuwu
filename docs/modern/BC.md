@@ -503,3 +503,15 @@ entity one-hots categorically (retaining the current fp16 ds/dn/HP values) gives
 an estimated105.1GiB. This compact cache is not implemented yet; it must preserve
 reconstructed arrays and be tested before full training. Estimates may change
 with full-corpus occupancy. No existing cache/data was deleted.
+
+
+Job12869:43 checks passed; fixed targeted-cast joint exact9/19 (47.4%),
+mean target distance8.63 cells. Held-out button accuracy74.6% versus82.5%
+majority; no observed held-out cast recall. These diagnose the intentionally
+memorized tiny checkpoint, not broad training. Episode reporting failed because
+the base metric used `self_vec` instead of `Transition.obs_self`; corrected.
+Dani authorized scratch reclamation: obsolete474GB BC cache removed after
+checking no active jobs and cache-only contents; free NVMe638GB. The earlier
+capacity blocker is superseded;~502.6GiB is still an estimate and requires a
+20GiB reserve plus staging duplication. Retry uses a private source snapshot,
+private compilation cache, and EXIT cleanup; checkpoint remains durable on NFS.
