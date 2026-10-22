@@ -99,3 +99,17 @@ def test_cache_rebuilds_when_observation_file_changes(tmp_path):
     d["self_vec"] *= 2.
     np.savez(f, **d)
     assert _arrays(f, cache)["self_vec"][0, 0] == 2.
+
+
+def test_archive_converter_provenance(tmp_path):
+    import pytest
+    from lanerl_jax.modern.bc.convert import _converter_commit
+
+    with pytest.raises(FileNotFoundError):
+        _converter_commit(tmp_path)
+    marker = tmp_path / ".bc-source-commit"
+    marker.write_text("a1234567" * 5 + "\n")
+    assert _converter_commit(tmp_path) == "a1234567"
+    marker.write_text("unknown")
+    with pytest.raises(ValueError, match="full Git SHA"):
+        _converter_commit(tmp_path)

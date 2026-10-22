@@ -537,3 +537,13 @@ lightweight desktop copy check. Replacement CPU12880 registered with the same
 40min/16GB limits and checks staged decoder hashes before conversion. No BC
 input/label change; no full-length sizing result yet. Host guidance updated to
 use independent content copies without preserving unsupported metadata.
+
+
+Full-length12880 verified decoder staging544/544 files but failed at converter
+provenance before saving the first game: the code archive has no `.git` file.
+Converter now supports a pinned `.bc-source-commit` containing a full40-character
+SHA, rejecting absent/malformed records; ordinary repositories/worktrees retain
+Git dirty-state reporting. Ten focused converter checks passed, including the
+archive provenance regression. Retry will use a fresh archive with its actual
+commit record and rerun the complete BC suite before full-length conversion.
+No finalized full-length dataset or sizing result exists yet.

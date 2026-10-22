@@ -93,7 +93,13 @@ memorized fixed windows and already failed held-out cast generalization. Buying
 remains disabled; no inference that the broader economy mismatch is resolved.
 Private scratch directory was removed on exit; NVMe still638GB free.
 
-**Active: CPU full-length representative conversion12880**,40min limit,16GB.
+**Full-length12880 FAILED/1 after decoder staging verified544 files.**
+The first conversion reached provenance recording, which assumed a Git worktree;
+isolated archives have no `.git`. Converter now accepts a validated full SHA
+from archive `.bc-source-commit`, retaining Git dirty tracking in checkouts.
+Regression test covers valid, missing and malformed archive records.
+A new pinned archive and preflight will precede retry submission. No sizing
+result or finalized full-length dataset was produced. Previous attempt details:
 Attempt12879 failed before conversion: `cp -a` could not preserve source
 permissions on scratch. Replaced with independent metadata-free copies and
 verified all544 decoder files against snapshot SHA256 hashes on desktop.

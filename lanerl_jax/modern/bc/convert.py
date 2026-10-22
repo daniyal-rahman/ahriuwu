@@ -97,13 +97,22 @@ class BCGame(NamedTuple):
         (out / f"{game}.json").write_text(json.dumps(self.meta, indent=1))
 
 
-def _converter_commit() -> str:
-    """This checkout's commit, ``-dirty`` if `lanerl_jax` has uncommitted changes. The worktree's git
-    directory is recorded under /srv/nfs; on the cluster nodes the same tree is at /mnt/nfs."""
-    repo = Path(__file__).resolve().parents[3]
-    git_dir = Path((repo / ".git").read_text().split("gitdir:")[1].strip())
-    if not git_dir.exists():
-        git_dir = Path(str(git_dir).replace("/srv/nfs/", "/mnt/nfs/", 1))
+def _converter_commit(repo: Path | None = None) -> str:
+    """Record checkout state or the pinned commit shipped with an isolated archive."""
+    repo = repo or Path(__file__).resolve().parents[3]
+    git_path = repo / ".git"
+    if not git_path.exists():
+        commit = (repo / ".bc-source-commit").read_text().strip()
+        if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+            raise ValueError("Invalid archive .bc-source-commit; expected full Git SHA")
+        return commit[:8]
+    git_dir = git_path
+    if git_path.is_file():
+        git_dir = Path(git_path.read_text().split("gitdir:")[1].strip())
+        if not git_dir.is_absolute():
+            git_dir = repo / git_dir
+        if not git_dir.exists():
+            git_dir = Path(str(git_dir).replace("/srv/nfs/", "/mnt/nfs/", 1))
     git = ["git", f"--git-dir={git_dir}", f"--work-tree={repo}"]
     head = subprocess.run(git + ["rev-parse", "--short=8", "HEAD"], capture_output=True, text=True,
                           check=True).stdout.strip()
