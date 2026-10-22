@@ -2,9 +2,8 @@
 
 # These are dependencies of the current formatter, not missing values to fill with zero.
 REPLAY_ONLY_BLOCKERS = (
-    "structure presence/positions and missing health come from the world template",
     "cooldown normalizers and champion descriptors include sim-kit tables",
-    "summoner timers, recall duration, XP progress and skill points use simulator rules",
+    "XP progress and skill points use simulator rules",
     "quest state and trinket charges inherit initial-state defaults",
     "missing scalar fields use unmarked defaults; the policy has no availability masks",
 )

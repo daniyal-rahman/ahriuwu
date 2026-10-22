@@ -85,6 +85,18 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 source check passed; more defaults removed.** Job12796 COMPLETED/0:
+one actual export, all ten actors,3399 unqualified broadcast records and2377
+separate cast schedules with unqualified clock alignment. Removed copied
+structure positions/full-health/life defaults; matched turrets now use received
+state and missing HP stays unknown. Summoner cooldown tables and sim recall
+channel duration are removed; missing timer/channel fields stay unknown. 27
+focused CPU checks pass. Remaining work: cooldown/descriptor normalization,
+progression/quest/trinket fields, reader-default/causal-position handling and
+policy availability masks. No active diagnostic, reconversion or v6 training.
+Evidence: `docs/modern/BC.md` section13; rough fog remains approved.
+
+
 **2026-10-22 countdown probe completed.** Job12794 exit0: all36 sampled casts
 across the six requested champion-slots have separate cast-schedule payloads
 that BC ignored; their clock-alignment qualification is false. Nearby broadcast

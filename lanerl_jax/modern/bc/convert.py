@@ -33,9 +33,7 @@ from .. import obs as OB
 from .. import world as MS
 from ..actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from
 from ..champions import garen as G
-from ..champions.summoners import COOLDOWN as SUMMONER_COOLDOWN
 from ..core import types as W
-from ..economy import RECALL_CAST, RECALL_CHANNEL
 from ..frame import make_lane_frame
 from ..train import LANE_HALF_WIDTH, default_loadouts
 from ..world.config import FOUNTAINS, NEXUS_POSITIONS, TIERS
@@ -59,8 +57,6 @@ THIRD_CHAMPION_RADIUS = 2000.0
 _TOP = 2
 #: The lane each replay role is converted in (0 bot, 1 mid, 2 top), and its index in ``obs.ROLES``.
 ROLE_LANE = {"top": 2, "mid": 1, "bot": 0, "support": 0}
-_RECALL_S = RECALL_CAST + RECALL_CHANNEL
-_RECALL_SLOT = 13
 _CHUNK = 500
 #: Rank-1 cooldowns used to normalise "time since the enemy cast" for an opponent without a kit module.
 _UNKNOWN_KIT_RANK1_CD = (10.0, 10.0, 10.0, 100.0)
@@ -150,7 +146,7 @@ def world_config(blue: str, red: str, lane: int = _TOP):
                            lane_structures=True)
 
 
-def received_spell_state(t, events, casts):
+def received_spell_state(t, events, casts, n_slots=4):
     """Received timers only; NaN means unknown, never ready or a kit-table estimate.
 
     A received cast invalidates the previous timer until a countdown for the same
@@ -159,8 +155,8 @@ def received_spell_state(t, events, casts):
     unknown decision/slot values, rather than table fallbacks.
     """
     t = np.asarray(t, float)
-    cooldown = np.full((len(t), 4), np.nan)
-    for slot in range(4):
+    cooldown = np.full((len(t), n_slots), np.nan)
+    for slot in range(n_slots):
         updates = [(float(tc), 0, np.nan) for tc, sl in casts if sl == slot]
         updates += [(float(te), 1, float(rem)) for te, sl, rem, _dur, _mode in events if sl == slot]
         updates.sort(key=lambda row: (row[0], row[1]))
@@ -198,7 +194,7 @@ def _frames(g: ReplayGame, cfg, lane: int = _TOP):
 def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
     """Per-decision arrays of the unit columns the observation and the click decoder read, and the replay
     unit each world slot holds (-1 none). Slots: 0/1 the blue/red laners, the minion block (nearest 40),
-    the structures (template positions; turrets take the replay's life and health); with ``extra_champions``
+    the received turrets (positions, life and health); with ``extra_champions``
     the other champions in the ward block (no wards are decoded), for the observation and fog only."""
     T = len(g.t)
     lay = cfg.layout
@@ -206,13 +202,14 @@ def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
     i_me, i_opp = g.index(g.me), g.index(g.opponent)
     s_me = g.units[i_me].team                 # BLUE = slot 0, RED = slot 1
     kind0, sub0, team0 = (np.asarray(a) for a in (cfg.unit_kind, cfg.unit_sub, cfg.unit_team))
-    x0, y0 = np.asarray(cfg.unit_x), np.asarray(cfg.unit_y)
-    f = dict(kind=np.tile(kind0, (T, 1)).astype(np.int32), sub=np.tile(sub0, (T, 1)).astype(np.int32),
-             team=np.tile(team0, (T, 1)).astype(np.int32), x=np.tile(x0, (T, 1)).astype(np.float32),
-             y=np.tile(y0, (T, 1)).astype(np.float32), hp=np.zeros((T, N), np.float32),
-             max_hp=np.zeros((T, N), np.float32), alive=np.zeros((T, N), bool))
+    f = {name: np.zeros((T, N), dtype) for name, dtype in (
+        ("kind", np.int32), ("sub", np.int32), ("team", np.int32),
+        ("x", np.float32), ("y", np.float32), ("hp", np.float32),
+        ("max_hp", np.float32), ("alive", bool))}
+    f["kind"][:, :2] = W.KIND_CHAMPION
+    f["team"][:, :2] = (BLUE, RED)
     unit_of_slot = np.full((T, N), -1, np.int64)
-    known = g.alive & np.isfinite(g.x) & np.isfinite(g.hp) & np.isfinite(g.max_hp)
+    known = g.alive & np.isfinite(g.x) & np.isfinite(g.y) & np.isfinite(g.hp) & np.isfinite(g.max_hp)
 
     def put(k, slot, i, alive):
         unit_of_slot[k, slot] = i
@@ -226,8 +223,8 @@ def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
         put(k, 1 - s_me, i_opp, known[k, i_opp])
     f["x"][:, s_me], f["y"][:, s_me] = me_xy[:, 0], me_xy[:, 1]
     opp_xy = np.stack([g.x[:, i_opp], g.y[:, i_opp]], -1)
-    f["x"][:, 1 - s_me] = np.where(known[:, i_opp], opp_xy[:, 0], x0[1 - s_me])
-    f["y"][:, 1 - s_me] = np.where(known[:, i_opp], opp_xy[:, 1], y0[1 - s_me])
+    f["x"][:, 1 - s_me] = np.where(known[:, i_opp], opp_xy[:, 0], 0.0)
+    f["y"][:, 1 - s_me] = np.where(known[:, i_opp], opp_xy[:, 1], 0.0)
     # Minions: the nearest 40 known, in the top lane's block.
     minions = np.asarray([i for i, u in enumerate(g.units) if u.family == "minion"])
     n_slots = lay.monster0 - lay.minion0
@@ -257,25 +254,22 @@ def _unit_fields(g: ReplayGame, cfg, me_xy, extra_champions: bool = False):
             f["kind"][:, slot], f["team"][:, slot] = W.KIND_CHAMPION, g.units[i].team
             f["x"][:, slot] = np.where(known[:, i], g.x[:, i], 0.0)
             f["y"][:, slot] = np.where(known[:, i], g.y[:, i], 0.0)
-    # Structures: the template's, with the replay's turret life and health where the replay has the turret.
+    # The template supplies slot addresses only, never a structure's state.
     lane0 = np.asarray(cfg.unit_lane)
     for slot in range(lay.struct0, N):
-        f["alive"][:, slot] = True
-        f["hp"][:, slot] = f["max_hp"][:, slot] = 1.0
         if kind0[slot] != W.KIND_TURRET:
             continue
         tier = next(name for name, v in TIERS.items() if v == sub0[slot])
         key = (int(team0[slot]), int(lane0[slot]), tier)
-        if key in g.turret_id:
-            i = g.index(g.turret_id[key])
-            unit_of_slot[:, slot] = i
-            f["alive"][:, slot] = g.alive[:, i]
-            f["hp"][:, slot] = np.nan_to_num(g.hp[:, i], nan=1.0)
-            f["max_hp"][:, slot] = np.nan_to_num(g.max_hp[:, i], nan=1.0)
-    f["hp"] = np.nan_to_num(f["hp"]).astype(np.float32)
-    f["max_hp"] = np.nan_to_num(f["max_hp"]).astype(np.float32)
-    structure = np.asarray(W.is_structure(cfg.unit_kind))
-    f["targetable"] = f["alive"] & ((f["kind"] != W.KIND_NONE) & ~structure[None] | structure[None])
+        if key not in g.turret_id:
+            continue
+        i = g.index(g.turret_id[key])
+        unit_of_slot[:, slot] = i
+        f["kind"][:, slot], f["sub"][:, slot], f["team"][:, slot] = W.KIND_TURRET, sub0[slot], g.units[i].team
+        f["x"][:, slot], f["y"][:, slot] = g.x[:, i], g.y[:, i]
+        f["alive"][:, slot] = g.alive[:, i] & np.isfinite(g.x[:, i]) & np.isfinite(g.y[:, i])
+        f["hp"][:, slot], f["max_hp"][:, slot] = g.hp[:, i], g.max_hp[:, i]
+    f["targetable"] = f["alive"] & (f["kind"] != W.KIND_NONE)
     return f, unit_of_slot, s_me
 
 
@@ -284,25 +278,15 @@ def _own_fields(g: ReplayGame, s_me: int, T: int, champion: str = G.NAME):
     other slot keeps the template's values (replaced where the opponent's are known: ranks, life).
     Cooldowns use received countdowns only; ``conflicts`` counts unknown decision/slot values."""
     t = g.t
-    casts = [(a.t, a.slot) for a in g.actions if a.kind == "cast" and 0 <= a.slot < 4]
-    if not g.provenance.get("cooldown_fields_read"):
-        raise ValueError("BC requires an export with verified received countdown semantics")
-    cooldown, conflicts = received_spell_state(t, g.cooldown_events, casts)
-    # A recall channels for 8.5 s unless the champion does anything else first.
-    recalling = np.zeros(T, bool)
-    for a in g.actions:
-        if a.kind == "cast" and a.slot == _RECALL_SLOT:
-            later = [b.t for b in g.actions if b.t > a.t and (b.kind != "path" or b.n_waypoints > 1)]
-            end = min([a.t + _RECALL_S] + later[:1])
-            recalling[(t >= a.t) & (t < end)] = True
-    # Summoner spells: ready when cast time + cooldown (haste not replicated per spell; unhasted).
-    ready_at = np.zeros((T, 3))
-    for a in g.actions:
-        if a.kind == "cast" and a.slot in (4, 5):
-            slot = g.summoner_slot[a.slot]
-            ready = a.t + SUMMONER_COOLDOWN.get(g.summoners[slot], 300.0)
-            later = t >= a.t
-            ready_at[later, slot] = np.maximum(ready_at[later, slot], ready)
+    casts = [(a.t, a.slot) for a in g.actions if a.kind == "cast" and 0 <= a.slot < 6]
+    timers, conflicts = received_spell_state(t, g.cooldown_events, casts, n_slots=6)
+    cooldown = timers[:, :4]
+    # A recall press does not establish channel duration or completion.
+    recalling = np.full(T, np.nan, np.float32)
+    # Replay summoner slots are canonicalized only after reconstructing their timers.
+    ready_at = np.full((T, 3), np.nan)
+    for wire_slot, policy_slot in g.summoner_slot.items():
+        ready_at[:, policy_slot] = t + timers[:, wire_slot]
 
     def both(me_v, other_v, dtype):
         out = np.zeros((T, 2) + np.shape(me_v)[1:], dtype)
@@ -317,7 +301,7 @@ def _own_fields(g: ReplayGame, s_me: int, T: int, champion: str = G.NAME):
         level=both(g.level, np.maximum(g.champion_stats[:, 1, 10], 1), np.int32),
         xp=both(g.xp, 0.0, np.float32), gold=both(g.gold, 0.0, np.float32),
         dead=both(~g.alive[:, g.index(g.me)], ~g.alive[:, i_opp], bool),
-        recall_channeling=both(recalling, False, bool),
+        recall_channeling=both(recalling, np.nan, np.float32),
         summoner_ready_at=both(ready_at, np.zeros((T, 3)), np.float32),
         last_champion_combat=both(g.last_champion_combat, -1e9, np.float32),
         t=t.astype(np.float32))

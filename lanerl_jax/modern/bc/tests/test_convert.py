@@ -31,7 +31,7 @@ def test_lagged_pairs_actions_with_older_observations():
 
 def test_conversion_rejects_mixed_sources_before_reading_a_game(tmp_path):
     from lanerl_jax.modern.bc.sources import ReplayOnlyUnavailable
-    with pytest.raises(ReplayOnlyUnavailable, match="structure presence"):
+    with pytest.raises(ReplayOnlyUnavailable, match="sim-kit tables"):
         C.convert_game(tmp_path / "not-a-game")
     assert not list(tmp_path.iterdir())
 

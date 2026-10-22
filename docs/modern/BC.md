@@ -352,3 +352,36 @@ one actual probe export; log
 No reconversion or training was started. Next: inspect that automatic receipt,
 then build the remaining replay-field availability handling; the fog exception
 remains limited to section11.
+
+
+## 13. Real-source check and removal of structure/summoner defaults (2026-10-22)
+
+Job12796 completed/0. On gameNA1-5650865612, all ten actors were inspected:
+3399 broadcast packets, zero with qualified timer/slot evidence; 2377 separate
+cast schedules, zero with qualified clock alignment. This checks the reader's
+rejection and source-inventory path on one real export, not the correctness of
+schedules or coverage of the archive. Output:
+`/mnt/nfs/shared/modern-bc/modern-bc-countdown-source-check-12796.out`.
+
+Further removals in the held formatter:
+
+- `_unit_fields` uses template layout/type/team/lane only to address slots. It
+  no longer copies any template positions or creates live/full-health structures.
+  A matched turret's position, life and HP come from its replay unit. Missing HP
+  remains NaN; absent turrets, inhibitors and Nexuses have no replay entity and
+  remain empty slots. Empty padding is not evidence a missing structure is dead.
+- Summoner slots4/5 use the same qualified received-timer reconstruction as
+  abilities, then map to canonical D/F. No summoner cooldown constants, 300s
+  fallback or haste rule is read. Unknown timers remain NaN rather than ready.
+- A recall press supplies an action label, not a timed channel state. The sim
+  8.5s duration and next-action completion heuristic are removed; the observation
+  channel field remains unknown without received state evidence.
+
+27 focused CPU checks pass. New fixtures need no template positions, verify a
+received turret's coordinates and missing HP, exclude template-only structures,
+and verify summoner key mapping, unknown timers and unknown recall state. No
+simulation step, dataset reconversion or training was run. Remaining source
+holds cover cooldown/descriptor normalization, progression/quest/trinket fields,
+unmarked reader defaults, causal positions and policy availability handling.
+The accepted heuristic fog is unchanged. Source audit section10 describes the
+starting implementation; sections11–13 record the approved exception and repairs.
