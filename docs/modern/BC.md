@@ -515,3 +515,15 @@ checking no active jobs and cache-only contents; free NVMe638GB. The earlier
 capacity blocker is superseded;~502.6GiB is still an estimate and requires a
 20GiB reserve plus staging duplication. Retry uses a private source snapshot,
 private compilation cache, and EXIT cleanup; checkpoint remains durable on NFS.
+
+
+Rollout12873 COMPLETED/0:43 checks;8 Garen and8 Jax episodes,540s each,
+100ms observation lag, AFK opponents. Mean CS2.25/1.25, deaths0.25/1.0,
+kills0.875/0.375, base fraction0.31%/1.40%, overflow0. The tiny memorization
+checkpoint integrates successfully but farms poorly and does not generalize;
+these results do not resolve buying or establish a useful BC policy. Outputs:
+`v6-pilot-20261022/gate-Garen.json` and `gate-Jax.json`. Isolated scratch cleanup
+verified after completion,638GB free remains. CPU12879 now measures full-length
+conversion and current cache size on the same eight champion-games, with the
+original split and30..840s window. Independent source/decoder/data copies,
+local cache, durable NFS outputs and EXIT cleanup; no full-corpus training yet.

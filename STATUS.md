@@ -85,6 +85,23 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 rollout12873 COMPLETED/0.** All43 BC checks passed;8 Garen
+and8 Jax nine-minute episodes completed against AFK opponents with zero overflow.
+Mean CS2.25/1.25, deaths0.25/1.0, kills0.875/0.375; mean base fraction0.31%/1.40%.
+This confirms integration, not useful policy quality: the tiny checkpoint only
+memorized fixed windows and already failed held-out cast generalization. Buying
+remains disabled; no inference that the broader economy mismatch is resolved.
+Private scratch directory was removed on exit; NVMe still638GB free.
+
+**Active: CPU full-length representative conversion12879**,40min limit,16GB.
+Eight selected champion-games retain the existing train/val split, now30..840s
+(8100 decisions each). Measures conversion time, peak RSS, dataset/cache bytes;
+finalizes and loads both splits. Source snapshot2258de68 and decoder scripts
+copied/hashed before launch; data/code/cache use independent private scratch.
+Outputs persist under `v6-pilot-20261022/full-length-dataset` and
+`full-length-result.json`; log `modern-bc-v6-full-length-12879.out` there.
+Inspect automatic receipt before scaling to full corpus. No broad training/PPO.
+
 **2026-10-22 rollout12869 failed in base-fraction reporting.** All43 checks
 passed and offline evaluation completed. Fixed-window casts34/35, but targeted
 joint button/click exact9/19; held-out button accuracy74.6% versus82.5% majority,
