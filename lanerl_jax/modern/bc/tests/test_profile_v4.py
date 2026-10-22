@@ -46,6 +46,7 @@ def test_v4_sim_inputs_use_fixed_scaling_and_mask_unsupported_fields(monkeypatch
     monkeypatch.setattr(OB.CT, "descriptors", forbidden)
     out = OB.build_modern_observation(s, 0, OB.modern_frames(cfg)[0], cfg, profile=OB.REPLAY_PROFILE)
     sv = np.asarray(out.self_vec)
+    assert sv[2] == 0.  # no assumed skill tier in simulation after BC used unknown
     np.testing.assert_allclose(sv[9:13], [1., .5, 0., 2.])
     assert np.isnan(sv[[18, 23, 24, 25, 29, 30]]).all()
     assert np.isnan(sv[35:35 + 2 * OB.CT.SIDE_DIM]).all()

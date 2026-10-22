@@ -468,3 +468,21 @@ reruns43 BC checks before512 fixed-window updates using the full architecture.
 Outputs live under the pilot directory; the result pointer is
 `overfit-result.json`. No full v6 training is submitted before its result is
 inspected, and a memorization pass alone does not establish rollout quality.
+
+
+GPU12859 COMPLETED/0:43 BC tests passed; the512-update memorization diagnostic
+passed its predefined loss/cast/click checks. Fixed-window loss10.399→1.405,
+button accuracy92.1%, cast accuracy34/35 (97.1%), click NLL8.556→1.379,
+exact clicks60.5%, mean cell distance54.85→3.03. These are training-window
+metrics, not evidence of generalization or rollout quality. Saved checkpoint:
+`/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-overfit-20261022-113216-2e9dd8f6/ckpt_000000512.msgpack`.
+
+Before rollouts, corrected a default-tier mismatch: v4 simulation now defaults
+to unknown tier0, matching BC, while older profiles retain their historical
+Master default. An explicit tier argument still overrides the default. The v4
+test checks that value. The gate now records alive time within2500 units of
+fountain, reconstructed from the lagged observation pose (100ms delay), alongside
+CS/deaths/buttons/overflow. Buying remains masked in the initial baseline; it
+must not be treated as a resolved economy gap. Next job evaluates joint targeted
+cast accuracy on fixed windows, true held-out pilot games, and8 Garen plus8 Jax
+full lane episodes. No full-dataset conversion/training is launched yet.

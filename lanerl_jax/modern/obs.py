@@ -112,7 +112,7 @@ def modern_frames(cfg, lane: int | None = None) -> tuple[LaneFrame, LaneFrame]:
 
 
 def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0,
-                             profile: str = PROFILE, tier: int = CT.ARCHIVE_TIER, role: int = 0,
+                             profile: str = PROFILE, tier: int | None = None, role: int = 0,
                              extra_champions: bool = False) -> ModernObservation:
     """One champion's observation of the modern world. ``me`` is its unit index (0 or 1). ``profile`` selects
     the self-vector layout (``PROFILES``); ``tier`` is the skill tier v2/v3 report (the archive convention),
@@ -121,6 +121,8 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
     ``1 - me`` and the spare rows take champions before anything else. Off, the 1v1 computation is unchanged."""
     if profile not in SELF_DIM:
         raise ValueError(f"unknown observation profile {profile!r}")
+    if tier is None:
+        tier = 0 if profile == REPLAY_PROFILE else CT.ARCHIVE_TIER
     n = state.kind.shape[0]
     other = 1 - me
     my_team = state.team[me]

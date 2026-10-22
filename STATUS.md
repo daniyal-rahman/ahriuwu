@@ -85,14 +85,17 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
-**Active: GPU memorization diagnostic12859**, submitted on gpup with30min limit,
-12GB host memory and registered terminal feedback to this chat. It reruns the43
-BC checks, stages the small v4 dataset to /scratch, then fits fixed spell-containing
-windows for512 updates with the full policy architecture. Output:
-`/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-overfit-12859.out`;
-result pointer `overfit-result.json` in the same directory. Inspect the actual
-receipt and metrics next, then proceed to rollouts only if the learning check
-passes. This is a diagnostic, not the full v6 run. No polling/watcher loop.
+**2026-10-22 memorization12859 passed.** All43 BC checks passed, then512
+updates reduced fixed-window loss10.399→1.405, click NLL8.556→1.379 and click
+distance54.85→3.03 cells. Cast accuracy34/35 (97.1%); button accuracy92.1%.
+This is memorized training data, not generalization. Checkpoint:
+`/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-overfit-20261022-113216-2e9dd8f6/ckpt_000000512.msgpack`.
+Next: targeted-cast joint accuracy, held-out pilot evaluation and8 Garen /8 Jax
+full-lane episodes. Found and fixed a rollout contract mismatch before starting:
+v4 sim observations now default tier0, matching unknown-tier BC (older profiles
+retain tier8). Gate will report alive time within2500 units of fountain. Buying
+remains masked in this baseline, so economy mismatch remains explicit. No full
+v6 run is submitted.
 
 
 **2026-10-22 GPU diagnostic attempt12858 stopped before training.** CPU preflight

@@ -31,6 +31,9 @@ from ..jax_cache import enable_compile_cache
 from ..rl.policy import PolicyConfig, restore_policy_config
 from ..rl.ppo import PPOConfig
 from ..rl.run_dir import file_sha256
+from ..obs import NORM_XY
+from ..world.config import FOUNTAINS
+from .convert import _self_columns
 
 
 def _policy_config(ckpt: Path) -> PolicyConfig:
@@ -117,7 +120,7 @@ def main(argv=None) -> None:
     max_chunks = int(math.ceil(a.episodes * per_episode / a.rollout)) + 2
     n_b = len(MODERN_BUTTONS)
     acc = dict(deaths=np.zeros(a.envs), kills=np.zeros(a.envs), lane=np.zeros(a.envs), steps=np.zeros(a.envs),
-               reward=np.zeros(a.envs), buttons=np.zeros((a.envs, n_b)), overflow=np.zeros(a.envs))
+               reward=np.zeros(a.envs), base=np.zeros(a.envs), buttons=np.zeros((a.envs, n_b)), overflow=np.zeros(a.envs))
     rows: list[dict] = []
     finished = np.zeros(a.envs, int)
     t1 = time.perf_counter()
@@ -125,6 +128,13 @@ def main(argv=None) -> None:
         runner, tr, _ = collect(runner)
         small = jax.device_get({k: getattr(tr, k) for k in ("done_full", "cs", "gold", "xp", "deaths",
                                                               "lane_dist", "reward", "overflow")})
+        col = _self_columns(pcfg.profile)
+        pose = np.asarray(jax.device_get(jnp.take(tr.self_vec[:, :, 0],
+                          jnp.asarray([col["s"], col["n"], col["dead"]]), axis=-1)))
+        frame = env.frames[0]
+        x = float(frame.origin[0]) + NORM_XY * (pose[..., 0] * float(frame.axis[0]) + pose[..., 1] * float(frame.normal[0]))
+        y = float(frame.origin[1]) + NORM_XY * (pose[..., 0] * float(frame.axis[1]) + pose[..., 1] * float(frame.normal[1]))
+        in_base = (np.hypot(x - FOUNTAINS[0][0], y - FOUNTAINS[0][1]) < 2500.) & (pose[..., 2] < .5)
         button = np.asarray(tr.action[0][:, :, 0])                                   # (T, n) blue buttons
         T = button.shape[0]
         for t in range(T):
@@ -133,6 +143,7 @@ def main(argv=None) -> None:
             acc["lane"] += small["lane_dist"][t, :, 0]
             acc["reward"] += small["reward"][t, :, 0]
             acc["steps"] += 1
+            acc["base"] += in_base[t]
             acc["overflow"] = np.maximum(acc["overflow"], small["overflow"][t, :, 0])
             acc["buttons"][np.arange(a.envs), button[t]] += 1
             for e in np.flatnonzero(small["done_full"][t, :, 0]):
@@ -144,7 +155,8 @@ def main(argv=None) -> None:
                     "cs": float(small["cs"][t, e, 0]), "gold": float(small["gold"][t, e, 0]),
                     "xp": float(small["xp"][t, e, 0]), "deaths": float(acc["deaths"][e]),
                     "kills": float(acc["kills"][e]), "lane_dist": float(acc["lane"][e] / max(acc["steps"][e], 1)),
-                    "reward": float(acc["reward"][e]), "overflow": float(acc["overflow"][e]),
+                    "reward": float(acc["reward"][e]),
+                    "base_fraction": float(acc["base"][e] / max(acc["steps"][e], 1)), "overflow": float(acc["overflow"][e]),
                     "red_cs": float(small["cs"][t, e, 1]), "red_gold": float(small["gold"][t, e, 1]),
                     "red_xp": float(small["xp"][t, e, 1]),
                     "buttons": {b: round(float(shares[i]), 5) for i, b in enumerate(MODERN_BUTTONS) if shares[i]},
@@ -162,7 +174,7 @@ def main(argv=None) -> None:
         v = np.asarray([r[key] for r in rows], np.float64)
         return {"mean": float(v.mean()), "median": float(np.median(v)), "min": float(v.min()),
                 "max": float(v.max())} if len(v) else {}
-    keys = ("cs", "gold", "xp", "deaths", "kills", "lane_dist", "reward", "red_cs", "red_gold", "red_xp")
+    keys = ("cs", "gold", "xp", "deaths", "kills", "lane_dist", "base_fraction", "reward", "red_cs", "red_gold", "red_xp")
     summary = {k: stat(k) for k in keys}
     shares = {b: float(np.mean([r["buttons"].get(b, 0.0) for r in rows])) for b in MODERN_BUTTONS} if rows else {}
     summary["buttons"] = {b: round(v, 5) for b, v in shares.items() if v}
