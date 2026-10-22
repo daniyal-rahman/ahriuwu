@@ -93,6 +93,13 @@ memorized fixed windows and already failed held-out cast generalization. Buying
 remains disabled; no inference that the broader economy mismatch is resolved.
 Private scratch directory was removed on exit; NVMe still638GB free.
 
+**Active: full-length CPU retry12882**,40min/16GB, source snapshot6b20bdcf.
+Archive includes its full Git SHA; job verifies decoder staging, runs all BC
+checks from the archive, then converts/finalizes/cache-loads the eight complete
+30..840s windows. Log: `v6-pilot-20261022/modern-bc-v6-full-length-12882.out`
+under `/mnt/nfs/shared/modern-bc`. Await automatic receipt; no model polling.
+Ten focused converter checks already passed locally. No broad training/PPO.
+
 **Full-length12880 FAILED/1 after decoder staging verified544 files.**
 The first conversion reached provenance recording, which assumed a Git worktree;
 isolated archives have no `.git`. Converter now accepts a validated full SHA
