@@ -100,7 +100,10 @@ must still be checked before staging. Compaction is optional pending measured
 need. Host guidance now permits disposable scratch cleanup, requires independent
 copies/private job paths, code snapshots, capacity checks and exit cleanup.
 No periodic cleaner was installed; the old30-day cleanup claim was unverified.
-Full conversion/training remain unstarted. Rollout retry submission follows.
+Full conversion/training remain unstarted. Isolated rollout retry **12873** is
+registered on gpup (50min), source snapshot2258de68, private scratch/cache and
+EXIT cleanup. Log: `/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-rollouts-12873.out`.
+Inspect its automatic completion receipt next.
 
 
 **2026-10-22 rollout attempt12866 stopped before episodes.** All43 checks passed,
