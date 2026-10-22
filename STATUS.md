@@ -93,13 +93,17 @@ memorized fixed windows and already failed held-out cast generalization. Buying
 remains disabled; no inference that the broader economy mismatch is resolved.
 Private scratch directory was removed on exit; NVMe still638GB free.
 
-**Active: CPU full-length representative conversion12879**,40min limit,16GB.
+**Active: CPU full-length representative conversion12880**,40min limit,16GB.
+Attempt12879 failed before conversion: `cp -a` could not preserve source
+permissions on scratch. Replaced with independent metadata-free copies and
+verified all544 decoder files against snapshot SHA256 hashes on desktop.
+Cleanup of failed staging verified. No BC implementation/data semantics changed.
 Eight selected champion-games retain the existing train/val split, now30..840s
 (8100 decisions each). Measures conversion time, peak RSS, dataset/cache bytes;
 finalizes and loads both splits. Source snapshot2258de68 and decoder scripts
 copied/hashed before launch; data/code/cache use independent private scratch.
 Outputs persist under `v6-pilot-20261022/full-length-dataset` and
-`full-length-result.json`; log `modern-bc-v6-full-length-12879.out` there.
+`full-length-result.json`; log `modern-bc-v6-full-length-12880.out` there.
 Inspect automatic receipt before scaling to full corpus. No broad training/PPO.
 
 **2026-10-22 rollout12869 failed in base-fraction reporting.** All43 checks

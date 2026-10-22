@@ -527,3 +527,13 @@ verified after completion,638GB free remains. CPU12879 now measures full-length
 conversion and current cache size on the same eight champion-games, with the
 original split and30..840s window. Independent source/decoder/data copies,
 local cache, durable NFS outputs and EXIT cleanup; no full-corpus training yet.
+
+
+Full-length attempt12879 failed during staging before conversion: preserving
+source permissions with `cp -a` is unsupported on this scratch path. Failed-job
+staging was cleaned. Changed shell staging to `cp -rL --reflink=never
+--no-preserve=all`; all544 decoder files match recorded SHA256 hashes in a
+lightweight desktop copy check. Replacement CPU12880 registered with the same
+40min/16GB limits and checks staged decoder hashes before conversion. No BC
+input/label change; no full-length sizing result yet. Host guidance updated to
+use independent content copies without preserving unsupported metadata.
