@@ -30,6 +30,9 @@ def main(argv=None) -> None:
     p = build_parser()
     p.set_defaults(envs=1, rollout=1, episodes=1)
     p.add_argument("--max-s", type=float, default=None, help="stop after this many game seconds (default: episode)")
+    p.add_argument("--spend-in-fountain", type=float, default=None,
+                   help="test: hold blue's current gold at most this while in its shop area or dead (the world has no "
+                        "buying; replay players spend nearly all of it within a second of arriving)")
     a = p.parse_args(argv)
     a.envs, a.rollout = 1, 1
     s = setup(a)
@@ -46,6 +49,16 @@ def main(argv=None) -> None:
                     game_over=world.game_over)
     extract = jax.jit(extract)
     orders_of = jax.jit(lambda action, world: modern_orders_from(action, world, env.frames))
+
+    @jax.jit
+    def spend(runner):
+        from ..items.inventory import in_shop_area
+        w = runner.env_state.world
+        shop = in_shop_area(w.x[:, 0], w.y[:, 0], w.team[:, 0], ~w.alive[:, 0])
+        gold = w.econ.gold.at[:, 0].set(jnp.where(shop, jnp.minimum(w.econ.gold[:, 0], a.spend_in_fountain),
+                                                  w.econ.gold[:, 0]))
+        world = w._replace(econ=w.econ._replace(gold=gold))
+        return runner._replace(env_state=runner.env_state._replace(world=world))
     env0 = lambda tree: jax.tree.map(lambda v: v[0], tree)           # noqa: E731
 
     deadline = a.max_s if a.max_s else a.episode_s
@@ -53,6 +66,8 @@ def main(argv=None) -> None:
     rows, acts, ords, rewards = [], [], [], []
     t1 = time.perf_counter()
     for step in range(max_steps):
+        if a.spend_in_fountain is not None:
+            runner = spend(runner)
         world = env0(runner.env_state.world)
         snap = jax.device_get(extract(world))
         runner, tr, _ = collect(runner)
@@ -94,6 +109,7 @@ def main(argv=None) -> None:
                decision_hz=np.asarray(hz, np.float32),
                meta=np.asarray(str(dict(checkpoint=str(a.checkpoint), sha256=file_sha256(a.checkpoint),
                                         opponent=a.opponent, opponent_from=str(s["opp_ckpt"]), seed=a.seed,
+                                        spend_in_fountain=a.spend_in_fountain,
                                         episode_s=a.episode_s, start_s=a.start_s, fog=a.fog))))
     path = a.out or a.checkpoint.parent / f"episode-{a.opponent}-{dt.datetime.now(dt.UTC):%Y%m%d-%H%M%S}.npz"
     np.savez_compressed(path, **out)
