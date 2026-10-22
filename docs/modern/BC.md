@@ -458,3 +458,13 @@ accuracy and click loss as well as total loss, saves a diagnostic checkpoint,
 and stages data/cache under desktop /scratch. This is not a generalization
 result or the full v6 run. Broad training and rollout acceptance remain pending;
 no claim of improved sim behavior follows from CPU conversion checks alone.
+
+
+GPU diagnostic12858 stopped before optimizer start because one old test asserted
+the prior evaluation group set (42 other checks passed). That assertion now
+checks champion/role buckets and joint click accuracy bounds. Replacement12859
+is registered to the chat on gpup,30min limit, explicit/mnt cwd. Its preflight
+reruns43 BC checks before512 fixed-window updates using the full architecture.
+Outputs live under the pilot directory; the result pointer is
+`overfit-result.json`. No full v6 training is submitted before its result is
+inspected, and a memorization pass alone does not establish rollout quality.

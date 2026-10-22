@@ -85,6 +85,16 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**Active: GPU memorization diagnostic12859**, submitted on gpup with30min limit,
+12GB host memory and registered terminal feedback to this chat. It reruns the43
+BC checks, stages the small v4 dataset to /scratch, then fits fixed spell-containing
+windows for512 updates with the full policy architecture. Output:
+`/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-overfit-12859.out`;
+result pointer `overfit-result.json` in the same directory. Inspect the actual
+receipt and metrics next, then proceed to rollouts only if the learning check
+passes. This is a diagnostic, not the full v6 run. No polling/watcher loop.
+
+
 **2026-10-22 GPU diagnostic attempt12858 stopped before training.** CPU preflight
 had42 passing checks and one old assertion expecting only the prior evaluation
 buckets. Updated the fixture/assertion to check champion/role groups and joint
