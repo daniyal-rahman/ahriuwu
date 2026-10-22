@@ -486,3 +486,20 @@ CS/deaths/buttons/overflow. Buying remains masked in the initial baseline; it
 must not be treated as a resolved economy gap. Next job evaluates joint targeted
 cast accuracy on fixed windows, true held-out pilot games, and8 Garen plus8 Jax
 full lane episodes. No full-dataset conversion/training is launched yet.
+
+
+Rollout attempt12866 passed43 checks but stopped before episodes when writing
+an offline metric with NumPy float32 to JSON. `evaluate` now returns native
+numeric leaves, and its test asserts JSON serialization. Replacement12869 is
+registered on gpup (50min, explicit/mnt cwd); inspect its receipt and actual
+joint-target/held-out/episode metrics before proceeding.
+
+Full-cache capacity preflight:165GB free desktop NVMe,718GB free NFS. The source
+plan contains58470 champion-games (~473.6M decisions). Extrapolating the16 pilot
+windows gives502.6GiB for the current cache, so it must not be staged as-is.
+Pilot self vectors have24–27 ever-observed columns; entity occupancy ranges
+4.78–11.73 rows/decision. Omitting always-missing self columns and encoding exact
+entity one-hots categorically (retaining the current fp16 ds/dn/HP values) gives
+an estimated105.1GiB. This compact cache is not implemented yet; it must preserve
+reconstructed arrays and be tested before full training. Estimates may change
+with full-corpus occupancy. No existing cache/data was deleted.

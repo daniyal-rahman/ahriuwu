@@ -85,6 +85,18 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**Active: rollout/joint-target/held-out diagnostic12869**, registered on gpup,
+50min limit,8 Garen plus8 Jax episodes after CPU preflight and offline evaluation.
+It replaces12866 after the JSON-scalar fix; no optimizer rerun. Log:
+`/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-rollouts-12869.out`.
+Inspect automatic receipt next. Capacity preflight: the58470-row source plan has
+~473.6M decisions; extrapolating the pilot gives~502.6GiB for the current cache,
+which does not fit165GB free NVMe. Proposed lossless sparse-column/categorical
+cache estimates~105.1GiB at the same numeric precision; implement and validate
+that before full training. No existing data removed; no full conversion/training
+submitted. These are pilot-based estimates, not full-corpus measurements.
+
+
 **2026-10-22 rollout attempt12866 stopped before episodes.** All43 checks passed,
 but offline evaluation could not JSON-serialize a NumPy float32 metric. Evaluation
 now returns native scalar numbers, with a serialization assertion. No checkpoint
