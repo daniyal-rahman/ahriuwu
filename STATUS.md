@@ -93,18 +93,25 @@ memorized fixed windows and already failed held-out cast generalization. Buying
 remains disabled; no inference that the broader economy mismatch is resolved.
 Private scratch directory was removed on exit; NVMe still638GB free.
 
-**Active: full-length CPU retry12883**,40min/16GB, source snapshot6b20bdcf.
-12882 passed44 checks and converted all eight8100-decision games in2.9–5.7s
-per game;7186/6810/6607/7226/7585/5385/6989/7425 valid decisions.
-Finalization failed because the sizing worker omitted the required plan
-`vocabulary`; no finalized dataset or cache size was persisted. Scratch cleaned.
-Worker now preserves the original plan metadata and split (as the successful
-short-window pilot did), overriding only v4/tier0/lag/window/selected games.
-Preflight checked all literal plan fields consumed by finalize, vocabulary
-coverage, both splits, worker syntax and shell syntax. Retry stages the complete
-plan alongside immutable code/decoder copies and reruns all BC checks.
-Log: `/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-full-length-12883.out`.
-Inspect automatic receipt; no broad training/PPO yet.
+**Full-length12883 COMPLETED/0.** All44 checks passed;8 full8100-decision
+games converted/finalized and both splits cache-loaded (40799 valid train,
+14414 valid val). Conversion+save2.9–5.7s/game; max RSS2.34GiB. Dataset6.35MB,
+cache69.91MB for64800 decisions; sample extrapolation475.9GiB full cache.
+This fits638GB free NVMe with reserve, subject to actual full-corpus occupancy.
+Private scratch cleanup verified. Result: `v6-pilot-20261022/full-length-result.json`
+under `/mnt/nfs/shared/modern-bc`.
+
+**Active: replay-only full conversion array12886**, CPU desktop,8 shards with
+at most2 concurrent,10GB/2cores each,12h limit per shard. Plan58470 champion-games
+across7309 replay bases; original game splits retained; v4/tier0/100ms lag,
+30..840s. Source archive6b20bdcf plus verified decoder snapshot; each job has
+private code/data/cache and stages one replay base at a time. Completed game
+arrays and metadata copy atomically to NFS (metadata last); resume validates
+source contract/converter commit. Failed games get explicit traceback records;
+no silent exclusions/finalization. Space reserves checked before each base.
+Logs: `/mnt/nfs/shared/modern-bc/v6-full-20261022/modern-bc-v6-convert-12886_*.out`.
+Inspect automatic receipts, then finalize/validate full corpus before any broad
+training. Full training/PPO unstarted; buying mismatch remains separate.
 
 **Full-length12880 FAILED/1 after decoder staging verified544 files.**
 The first conversion reached provenance recording, which assumed a Git worktree;

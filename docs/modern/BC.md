@@ -558,3 +558,22 @@ consumed by finalization, champion vocabulary coverage and both data splits.
 Replacement CPU12883 registered with the same source snapshot6b20bdcf and
 40min/16GB limits. No BC code/label change; cache sizing and durable finalized
 dataset still pending. Failed-job private scratch cleanup verified.
+
+
+Full-length12883 COMPLETED/0:44 checks,8 full games (64800 decisions),
+40799 valid train/14414 valid validation decisions. Finalization and both split
+cache loads passed. Conversion+save2.9–5.7s/game, max RSS2.34GiB; dataset6350884
+bytes, cache69913944 bytes, extrapolated475.9GiB over473607000 decisions.
+Current638GB free NVMe leaves reserve, but full-corpus occupancy remains unknown.
+Private scratch cleanup verified. Durable outputs: pilot `full-length-dataset`
+and `full-length-result.json`.
+
+Full replay-only conversion array12886 registered:8 shards,2 concurrent,
+CPU desktop10GB/2cores each,12h limit. Plan58470 champion-games/7309 bases,
+original train/validation split, v4/tier0/100ms lag and30..840s. Frozen converter
+6b20bdcf/decoder copies; private scratch with per-base deep copies and EXIT
+cleanup. Completed per-game arrays and metadata persist to
+`/mnt/nfs/shared/modern-bc/v6-full-20261022/games` with metadata committed last;
+failures remain explicit and must be reconciled before finalization. No broad
+training/PPO has started. Only replay inputs plus approved heuristic fog enter
+BC; the simulator is used for the separate rollout diagnostic.
