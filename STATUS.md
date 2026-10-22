@@ -85,6 +85,18 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 countdown probe completed.** Job12794 exit0: all36 sampled casts
+across the six requested champion-slots have separate cast-schedule payloads
+that BC ignored; their clock-alignment qualification is false. Nearby broadcast
+operands also explicitly mark timer/slot semantics unvalidated. Reader now
+requires matching packet-level timer/slot evidence, no longer decoder ancestry,
+and inventories cast schedules separately. 25 focused CPU checks pass. Real
+export reader check **12796** submitted on desktop CPU, registered to this chat;
+inspect its receipt next. Details: `docs/modern/BC.md` section12. Other source and
+availability repairs remain; no reconvert/v6. Historical audit percentages are
+coverage measurements, not proof of authoritative countdown semantics.
+
+
 **2026-10-22 heuristic fog approved.** Dani permits approximate fog only. Added
 `bc/fog.py`: current live replay allies supply circular sight (champion/turret
 1350, minion 1200), including allied champions outside observation slots. No sim

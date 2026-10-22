@@ -25,10 +25,11 @@ What is read, and how it is put on the grid:
 * both laners' combat stats as the game replicated them (`STAT_NAMES`; items, runes and level growth
   included), zero-order hold.
 
-``cooldown.*`` fields (the server's received countdowns: slot, remaining seconds at receipt, duration) are
-read only from exports whose decoder includes the countdown fix (tag ``2619-received-countdowns-v2``, commit
-19cbb838; ``countdowns_received``). Older exports have known-wrong ability cooldowns; for them `convert.py`
-rebuilds cooldowns from the casts with the champion's kit rules (Garen only).
+Broadcast ``cooldown.*`` scalars are accepted only with matching packet-level
+slot/timer qualification, never merely because of a decoder commit or field name.
+Cast-start schedules are inventoried separately: replay-derived display estimates
+with unqualified clock alignment must not silently become exact readiness.
+Missing countdowns stay unknown; there is no sim-kit fallback.
 
 Not in the replay: fog of war (the replay sees the whole map), the player's camera and clicks, the click
 latency, and wards (not decoded as units).
@@ -50,8 +51,6 @@ __all__ = ["DECODER_SCRIPTS", "DECISION_DT", "BLUE", "RED", "MINION_SUB", "STAT_
            "lane_distance"]
 
 DECODER_SCRIPTS = Path("/mnt/nfs/projects/ahriuwu-rofl-decoder-2619/scripts/rofl_decode")
-#: The repository every worktree (decoder, this one) shares; readable from both nodes under /mnt/nfs.
-MAIN_GIT_DIR = Path("/mnt/nfs/projects/_archive/ahriuwu-main-administrative-20261001/.git")
 DECISION_DT = 0.1
 BLUE, RED = 0, 1                      # the modern world's team ids (``core.types``: team = champion slot)
 _TEAM = {"ORDER": BLUE, "CHAOS": RED}
@@ -142,24 +141,6 @@ def decoder_commit(dataset: Path) -> str:
     if provenance.exists():
         return json.loads(provenance.read_text())["decoder_commit"][:8]
     raise ValueError(f"{dataset} records no decoder commit")
-
-
-#: The decoder commit that corrected the received ability countdowns (tag ``2619-received-countdowns-v2``).
-COUNTDOWN_FIX_COMMIT = "19cbb838"
-
-
-@lru_cache(maxsize=None)
-def countdowns_received(dataset: Path) -> bool:
-    """Whether a dataset's decoder commit descends from ``COUNTDOWN_FIX_COMMIT``, asked of the shared repository
-    (``MAIN_GIT_DIR``: the decoder worktree's own ``.git`` names a path only the login node has). A commit git
-    cannot resolve raises rather than silently counting as not fixed."""
-    import subprocess
-    commit = decoder_commit(dataset)
-    r = subprocess.run(["git", f"--git-dir={MAIN_GIT_DIR}", "merge-base", "--is-ancestor", COUNTDOWN_FIX_COMMIT,
-                        commit], capture_output=True, text=True)
-    if r.returncode not in (0, 1):
-        raise RuntimeError(f"git could not tell whether {commit} has the countdown fix: {r.stderr.strip()}")
-    return r.returncode == 0
 
 
 @lru_cache(maxsize=None)
@@ -377,10 +358,9 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
                          f"the decoder checkout has {position_model.VERSION}")
     fields = _fields_of(export / "event-training", loader)
     dataset = game_dir.parent.parent
-    fixed = countdowns_received(dataset)
     provenance = dict(dataset=str(dataset), game=game_dir.name, decoder_commit=decoder_commit(dataset),
                       position_model=manifest["position_model"], replay_sha256=manifest["replay_sha256"],
-                      cooldown_fields_read=fixed)
+                      cooldown_fields_read=False)
 
     roster = manifest["initial_roster"]
     me_row = next(r for r in roster if r["name"] == champion)
@@ -402,7 +382,8 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
     cs = np.searchsorted(np.asarray(last_hit_times), t, side="right").astype(np.int32)
     champion_stats = np.stack([_combat_stats(fields, c, t) for c in (me, opponent)], 1)
     actions, opponent_casts = _actions(fields, me, opponent)
-    cooldown_events = _cooldown_events(fields, me) if fixed else []
+    cooldown_events, cooldown_audit = _cooldown_events(fields, me)
+    provenance.update(cooldown_fields_read=bool(cooldown_events), cooldown_source_audit=cooldown_audit)
     return ReplayGame(
         game=game_dir.name, provenance=provenance, me=me, opponent=opponent, opponent_name=opp_row["name"],
         summoners=summoners, summoner_slot=summoner_slot, units=units, t=t, x=x, y=y, hp=hp, max_hp=max_hp, alive=alive, level=level,
@@ -503,18 +484,56 @@ def canonical_summoners(ids) -> Tuple[Tuple[int, int], Dict[int, int]]:
 
 
 def _cooldown_events(fields: _Fields, me: int):
-    """The champion's received countdown events ``(t, slot, remaining, duration, mode)`` in time order. Each is
-    one server message: ``slot`` 0-3 abilities (Jax's Q sends none), 4/5 summoners, 6-11 items, 12 trinket;
-    ``remaining`` seconds left at receipt (the timer the client shows), ``duration`` the full countdown, ``mode``
-    the native operand (1: a remaining-time correction)."""
+    """Qualified broadcast timers and an inventory of separate cast schedules.
+
+    Raw operands and their scalar aliases can have different update ordinals.
+    Join by source packet event index AND receipt clock, never by row position or
+    nearest time. A named scalar or a decoder ancestor does not prove its meaning.
+    """
     names = ("cooldown.slot", "cooldown.remaining_at_receipt", "cooldown.received_duration", "cooldown.mode")
-    if any(n not in fields.native["fields"] for n in names):
-        return []
-    s = [fields.series(n, me) for n in names]
-    ok = np.logical_and.reduce([x["available"] for x in s])
-    t = s[0]["time_seconds"]
-    return sorted((float(t[i]), int(s[0]["values"][i]), float(s[1]["values"][i]), float(s[2]["values"][i]),
-                   int(s[3]["values"][i])) for i in np.flatnonzero(ok))
+    packets = {}
+    for name in (*names, "cooldown.received_operands"):
+        if name not in fields.native["fields"]:
+            continue
+        table = fields.native["fields"][name]
+        rows, times, ids = fields.rows(name, "champion")
+        for row, tm, uid in zip(rows, times, ids):
+            if uid != me:
+                continue
+            key = (int(table["event_index"][row]), float(tm))
+            value = table["values"][row].item() if "values" in table else fields.value(name, row)
+            packet = packets.setdefault(key, {})
+            # Ambiguous duplicate fields cannot certify a packet.
+            if name in packet:
+                packet["duplicate"] = True
+            packet[name] = value
+    events = []
+    broadcast = sum("cooldown.slot" in packet for packet in packets.values())
+    for (_event, tm), packet in packets.items():
+        proof = packet.get("cooldown.received_operands", {})
+        if (packet.get("duplicate") or not isinstance(proof, dict)
+                or proof.get("timer_semantics_validated") is not True
+                or proof.get("slot_array_index_semantics_validated") is not True
+                or any(name not in packet for name in names)):
+            continue
+        slot, remaining, duration, mode = (packet[name] for name in names)
+        if (slot not in range(13) or proof.get("slot_lookup_operand") != slot
+                or not all(isinstance(v, (int, float)) and np.isfinite(v) for v in (remaining, duration, mode))
+                or remaining < 0 or duration < 0):
+            continue
+        events.append((tm, int(slot), float(remaining), float(duration), int(mode)))
+    schedules, clock_qualified = 0, 0
+    rows, _times, ids = fields.rows("cooldown.cast_start", "champion")
+    for row, uid in zip(rows, ids):
+        if uid == me:
+            value = fields.value("cooldown.cast_start", row)
+            schedules += 1
+            clock_qualified += isinstance(value, dict) and value.get("clock_alignment_qualified") is True
+    audit = dict(broadcast_packets=broadcast, qualified_broadcast_packets=len(events),
+                 rejected_broadcast_packets=broadcast - len(events), cast_schedule_records=schedules,
+                 clock_qualified_cast_schedules=int(clock_qualified),
+                 cast_schedules_consumed=False, qualification="packet evidence, not decoder ancestry")
+    return sorted(events), audit
 
 
 def _actions(fields: _Fields, me: int, opponent: int):

@@ -309,3 +309,46 @@ no future/stale visibility. No simulator behavior changes. CPU diagnostic job
 examples and relevant field names using storage-aware scalar/structured access;
 log `/mnt/nfs/shared/modern-bc/modern-bc-cooldown-probe-v2-12794.out`. Its automatic
 completion receipt will drive follow-up; no polling loop or training was started.
+
+
+## 12. Cooldown probe result and packet qualification (2026-10-22)
+
+Probe12794 completed (exit0). All six sampled casts per requested champion-slot
+(Sylas Q, Viktor E, Renekton Q, Lulu Q, Kai'Sa Q and Garen Q) contain a separate
+`received_cast_countdown` / `cooldown.cast_start` payload. The BC reader previously
+ignored this field and read only broadcast scalar aliases. This explains a missing
+source in the reader; it does not establish the accuracy of every scheduled timer
+or explain every fallback in the 400-game audit. Every sampled cast schedule has
+`clock_alignment_qualified=False`. Nearby broadcast operands explicitly have
+`timer_semantics_validated=False` and
+`slot_array_index_semantics_validated=False`. Garen Q examples include a broadcast
+zero at the cast and an 8s value later; these cannot be repaired by assuming every
+same-slot numeric value is a timer with validated semantics.
+
+`replay._cooldown_events` no longer certifies these aliases based on descendant
+status from commit19cbb838. It joins scalar aliases to operand evidence using
+source packet event index plus receipt time and actor. Both timer and slot
+qualification must be explicitly true, the slot must agree, and values must be
+finite/nonnegative. Missing proof, ambiguous duplicates and a different packet
+at the same clock do not qualify. This is intentionally stricter than accepting
+a plausible duration. Per-game `cooldown_source_audit` records accepted/rejected
+broadcast counts, cast-schedule counts and how many schedules qualify their
+clock alignment. Cast schedules remain unconsumed until their display-estimate
+and availability contract is represented; they are not sim cooldown fallbacks.
+`cooldown_fields_read` now means qualified broadcast evidence was accepted, not
+that a particular decoder ancestor exists.
+
+The initial400-game fallback percentages are historical converter-coverage
+statistics; they do not prove the accepted broadcasts were authoritative timers.
+There is now replay-derived cast-schedule evidence to investigate for the gaps,
+so no timing/hash repair is claimed from this probe alone. A display countdown
+must also remain distinct from ability activation eligibility/charges/recasts.
+
+Validation: 25 focused CPU checks pass, including packet identity, missing/false
+qualification, duplicate rows, slot disagreement and nonfinite values. Job12796
+was submitted on desktop CPU to exercise the revised reader on all ten actors in
+one actual probe export; log
+`/mnt/nfs/shared/modern-bc/modern-bc-countdown-source-check-12796.out`.
+No reconversion or training was started. Next: inspect that automatic receipt,
+then build the remaining replay-field availability handling; the fog exception
+remains limited to section11.
