@@ -464,7 +464,7 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                          event_decisions=int(a["n_ev"]), event_button_nll=a["ce_ev"] / max(a["n_ev"], 1),
                          held_clicks=int(a["n_hc"]), held_click_nll=a["ce_hc"] / max(a["n_hc"], 1),
                          held_click_dist=a["dist_hc"] / max(a["n_hc"], 1))
-    return out
+    return jax.tree.map(lambda v: v.item() if isinstance(v, np.generic) else v, out)
 
 
 def build_parser():

@@ -85,6 +85,14 @@ Existing timings above predate the latest review fixes. New speedups remain unme
 
 ## Modern behaviour cloning (branch modern/bc, thread 200b87b6)
 
+**2026-10-22 rollout attempt12866 stopped before episodes.** All43 checks passed,
+but offline evaluation could not JSON-serialize a NumPy float32 metric. Evaluation
+now returns native scalar numbers, with a serialization assertion. No checkpoint
+or data change; retry the evaluation/rollout job. Capacity check: desktop NVMe
+has165GB free, NFS718GB. Full cache preparation must fit that limit and preserve
+existing data; full conversion/training remain unstarted.
+
+
 **2026-10-22 memorization12859 passed.** All43 BC checks passed, then512
 updates reduced fixed-window loss10.399→1.405, click NLL8.556→1.379 and click
 distance54.85→3.03 cells. Cast accuracy34/35 (97.1%); button accuracy92.1%.

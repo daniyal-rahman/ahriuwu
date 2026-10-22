@@ -55,6 +55,8 @@ def test_loss_is_finite_and_masks_burn_in_and_self_casts():
     assert "move" in ev["all"]["joint_button_click_exact_by"]
     assert all(0. <= x <= 1. for x in ev["all"]["joint_button_click_exact_by"].values())
     assert ev["all"]["decisions"] == int(b["weight"].sum())
+    import json
+    json.dumps(ev)  # native numeric metrics must serialize as numbers, not numpy scalars or strings
 
 
 def test_dropout_zeroes_enemy_identity():
