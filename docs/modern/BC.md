@@ -547,3 +547,14 @@ Git dirty-state reporting. Ten focused converter checks passed, including the
 archive provenance regression. Retry will use a fresh archive with its actual
 commit record and rerun the complete BC suite before full-length conversion.
 No finalized full-length dataset or sizing result exists yet.
+
+
+12882 passed44 BC tests and converted all eight full-length games (8100 rows
+per game,2.9–5.7s conversion+save each). Finalization failed because the temporary
+sizing worker omitted `vocabulary` from its hand-built plan. The worker now
+preserves all original source-plan metadata and overrides only the approved
+profile/tier/lag/window/game subset. Preflight checks every literal plan key
+consumed by finalization, champion vocabulary coverage and both data splits.
+Replacement CPU12883 registered with the same source snapshot6b20bdcf and
+40min/16GB limits. No BC code/label change; cache sizing and durable finalized
+dataset still pending. Failed-job private scratch cleanup verified.

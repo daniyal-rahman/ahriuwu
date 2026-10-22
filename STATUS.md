@@ -93,12 +93,18 @@ memorized fixed windows and already failed held-out cast generalization. Buying
 remains disabled; no inference that the broader economy mismatch is resolved.
 Private scratch directory was removed on exit; NVMe still638GB free.
 
-**Active: full-length CPU retry12882**,40min/16GB, source snapshot6b20bdcf.
-Archive includes its full Git SHA; job verifies decoder staging, runs all BC
-checks from the archive, then converts/finalizes/cache-loads the eight complete
-30..840s windows. Log: `v6-pilot-20261022/modern-bc-v6-full-length-12882.out`
-under `/mnt/nfs/shared/modern-bc`. Await automatic receipt; no model polling.
-Ten focused converter checks already passed locally. No broad training/PPO.
+**Active: full-length CPU retry12883**,40min/16GB, source snapshot6b20bdcf.
+12882 passed44 checks and converted all eight8100-decision games in2.9–5.7s
+per game;7186/6810/6607/7226/7585/5385/6989/7425 valid decisions.
+Finalization failed because the sizing worker omitted the required plan
+`vocabulary`; no finalized dataset or cache size was persisted. Scratch cleaned.
+Worker now preserves the original plan metadata and split (as the successful
+short-window pilot did), overriding only v4/tier0/lag/window/selected games.
+Preflight checked all literal plan fields consumed by finalize, vocabulary
+coverage, both splits, worker syntax and shell syntax. Retry stages the complete
+plan alongside immutable code/decoder copies and reruns all BC checks.
+Log: `/mnt/nfs/shared/modern-bc/v6-pilot-20261022/modern-bc-v6-full-length-12883.out`.
+Inspect automatic receipt; no broad training/PPO yet.
 
 **Full-length12880 FAILED/1 after decoder staging verified544 files.**
 The first conversion reached provenance recording, which assumed a Git worktree;
