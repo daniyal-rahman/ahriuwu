@@ -617,3 +617,11 @@ Audit13005 finalized metadata:52590 train/5880 val player perspectives,
 340720945/38055900 valid labels,7309 unique26.19 matches. Full-array checks
 still running;2000 files/341s measured, time limit raised2h→4h. Full training
 13009 remains dependency-blocked until audit succeeds; no optimization has begun.
+
+
+Full audit13005 COMPLETED/0 in5629s (~94min): all58470 player perspectives
+from7309 unique26.19 matches passed source/fog/converter/split/shape/nonfinite
+and action/cell bounds.473607000 total decisions,340720945 train/38055900
+held-out valid labels; NPZ storage44237490316 bytes. `audit-result.json` passed.
+GPU13009 released after both prerequisites and is running; initial capacity/data
+staging/cache phase has no optimizer output yet. Full BC results remain pending.

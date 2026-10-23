@@ -108,22 +108,23 @@ Scratch cleanup verified,638GB free. This is the approved heuristic-fog dataset.
 Dani explicitly says do not wait on decoder work; continue standalone BC.
 RL/PPO and economy work are removed from the current plan.
 
-**Active: finalization/full array audit13005**, desktop CPU6GB/2cores,4h limit.
-Initial scan reached2000 player-perspective arrays in341s; raised the time limit
-from2h to4h to cover that measured pace. Manifest finalized:52590 train/5880 val
-perspectives from7309 unique26.19 matches;340720945/38055900 valid labels.
-Full-array audit remains running, so its pass receipt is not yet present.
-Checks source/fog/converter contract, train/val base separation, all expected
-array shapes, finite-or-missing numerics and action/cell bounds. Manifest plus
-`audit-result.json` persist under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
-Log `modern-bc-v6-audit-13005.out` there. Broad training waits for this audit.
+**Full audit13005 COMPLETED/0.** All58470 player-perspective arrays from7309
+unique26.19 matches passed source/fog/converter, split separation, shape,
+finite-or-missing and action/cell checks.473607000 total decisions;
+340720945 train/38055900 held-out valid labels. Compressed NPZ44.24GB;
+audit5629s (~94min). Durable `audit-result.json` passed.
+
+**Full BC13009 RUNNING on desktop gpup**, prerequisites13005+13007 succeeded.
+Initial stage is capacity checking, independent NVMe data staging and cache
+preparation; no optimizer-step output yet at the receipt inspection. Checkpoints
+and500-step held-out metrics will follow. No RL/PPO.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64
 steps, preserved best sampled checkpoint, and forced plateau stopping at4steps.
 These are workflow checks on one train/one held-out perspective, not policy
 quality evidence. Durable `train-smoke-result.json` passed. Source137e30b3.
-Full GPU BC13009 is queued with `afterok:13005:13007` and asserts both durable
+Full GPU BC13009 was released by `afterok:13005:13007` and asserts both durable
 passed receipts before staging.24GB/4cores,16h cap,3 epochs maximum (no minimum),
 500-step checkpoint/evaluation on512 fixed champion/role-spread held-out games;
 early stop after4 checks without0.001 improvement in event-button+click NLL.
