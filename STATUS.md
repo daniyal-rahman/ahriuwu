@@ -101,17 +101,26 @@ This fits638GB free NVMe with reserve, subject to actual full-corpus occupancy.
 Private scratch cleanup verified. Result: `v6-pilot-20261022/full-length-result.json`
 under `/mnt/nfs/shared/modern-bc`.
 
-**Active: replay-only full conversion array12886**, CPU desktop,8 shards with
-at most2 concurrent,10GB/2cores each,12h limit per shard. Plan58470 champion-games
-across7309 replay bases; original game splits retained; v4/tier0/100ms lag,
-30..840s. Source archive6b20bdcf plus verified decoder snapshot; each job has
-private code/data/cache and stages one replay base at a time. Completed game
-arrays and metadata copy atomically to NFS (metadata last); resume validates
-source contract/converter commit. Failed games get explicit traceback records;
-no silent exclusions/finalization. Space reserves checked before each base.
-Logs: `/mnt/nfs/shared/modern-bc/v6-full-20261022/modern-bc-v6-convert-12886_*.out`.
-Inspect automatic receipts, then finalize/validate full corpus before any broad
-training. Full training/PPO unstarted; buying mismatch remains separate.
+**2026-10-23 full conversion12886 COMPLETED/0,8/8 shards.** Verified58470
+NPZ+metadata pairs,7309 replay bases, no failed games in shard receipts or failure
+records. Converter6b20bdcf throughout. Per-shard5.7–6.0h; full run~23h at2 workers.
+Scratch cleanup verified,638GB free. This is the approved heuristic-fog dataset.
+Dani explicitly says do not wait on decoder work; continue standalone BC.
+RL/PPO and economy work are removed from the current plan.
+
+**Active: finalization/full array audit13005**, desktop CPU6GB/2cores,2h limit.
+Checks source/fog/converter contract, train/val base separation, all expected
+array shapes, finite-or-missing numerics and action/cell bounds. Manifest plus
+`audit-result.json` persist under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
+Log `modern-bc-v6-audit-13005.out` there. Broad training waits for this audit.
+
+Implementing opt-in within-epoch BC checkpoints and fixed champion/role-spread
+held-out evaluations, plateau stopping on event-button+click NLL, and immediate
+nonfinite training/gradient stopping. No three-epoch minimum. A short isolated
+training smoke will verify the actual checkpoint/evaluation path before full BC.
+Native decoder v18 is released as partial player view; complete rendered/terrain
+FoW remains unqualified and existing production exports are unchanged. Per Dani,
+this no longer blocks the approved heuristic baseline. No training/PPO active yet.
 
 **Full-length12880 FAILED/1 after decoder staging verified544 files.**
 The first conversion reached provenance recording, which assumed a Git worktree;

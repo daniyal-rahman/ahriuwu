@@ -577,3 +577,19 @@ cleanup. Completed per-game arrays and metadata persist to
 failures remain explicit and must be reconciled before finalization. No broad
 training/PPO has started. Only replay inputs plus approved heuristic fog enter
 BC; the simulator is used for the separate rollout diagnostic.
+
+
+2026-10-23: full conversion12886 COMPLETED/0,8/8 shard receipts,58470 NPZ
+and58470 metadata files, no failed games. Audit13005 now finalizes and checks
+all arrays/source/split contracts. Dani says proceed without waiting on decoder;
+heuristic fog remains explicitly approved. Standalone BC and current-patch data
+scaling are the objective; no RL/PPO or simulator economy repair in this plan.
+Decoder v18 is a released partial player-view interface, with complete rendered
+and terrain visibility still unqualified; it is reserved for later integration.
+
+Trainer adds opt-in step evaluation/checkpoints, deterministic champion/role
+held-out sampling, a baseline evaluation, event-button+click NLL plateau stopping,
+and immediate nonfinite loss/gradient stopping. Sampled improvement checkpoints
+are retained as `best_partial.msgpack` independently of checkpoint rotation;
+full validation still runs at completed epochs. Defaults keep epoch-only behavior.
+A real short training smoke must verify checkpoint/early-stop paths before full BC.

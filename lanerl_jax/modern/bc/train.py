@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import signal
 import time
 from pathlib import Path
@@ -467,6 +468,23 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
     return jax.tree.map(lambda v: v.item() if isinstance(v, np.generic) else v, out)
 
 
+def validation_subset(games: list[Game], limit: int) -> list[Game]:
+    """Fixed held-out sample spread across champion/role groups before repeats."""
+    if not limit or len(games) <= limit:
+        return games
+    groups = {}
+    for g in sorted(games, key=lambda g: g.name):
+        groups.setdefault((g.champion, g.role), []).append(g)
+    selected = []
+    for depth in range(max(map(len, groups.values()))):
+        for key in sorted(groups):
+            if depth < len(groups[key]):
+                selected.append(groups[key][depth])
+                if len(selected) == limit:
+                    return selected
+    return selected
+
+
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("dataset", type=Path)
@@ -494,6 +512,10 @@ def build_parser():
     p.add_argument("--max-games", type=int, default=0, help="limit games per split (smoke tests)")
     p.add_argument("--cache", type=Path, default=None, help="unpack games here (one file per game) and memory-map them")
     p.add_argument("--eval-batch", type=int, default=64)
+    p.add_argument("--eval-every", type=int, default=0, help="checkpoint and sampled held-out evaluation every N steps; 0 = epoch only")
+    p.add_argument("--eval-max-games", type=int, default=512, help="fixed champion/role sample for step evaluations; 0 = all")
+    p.add_argument("--early-stop-patience", type=int, default=0, help="stop after N sampled evaluations without improvement; 0 = disabled")
+    p.add_argument("--early-stop-min-delta", type=float, default=0.01, help="minimum decrease in held-out event button NLL + click NLL")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", type=Path, default=None)
     p.add_argument("--tag", default="modern-bc")
@@ -506,7 +528,12 @@ def main(argv=None):
 
     from ..jax_cache import enable_compile_cache
     from ..rl.run_dir import RunDir
-    a = build_parser().parse_args(argv)
+    parser = build_parser()
+    a = parser.parse_args(argv)
+    if min(a.eval_every, a.eval_max_games, a.early_stop_patience, a.early_stop_min_delta) < 0:
+        parser.error("evaluation and early-stop settings must be nonnegative")
+    if a.early_stop_patience and not a.eval_every:
+        parser.error("--early-stop-patience requires --eval-every")
     stopping: list[int] = []
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1):
         signal.signal(sig, lambda signum, frame: stopping.append(signum))
@@ -576,6 +603,14 @@ def main(argv=None):
 
     best = None
     status = "finished"
+    partial_best, stale = float("inf"), 0
+    sampled_val = validation_subset(val, a.eval_max_games) if a.eval_every else []
+    if sampled_val:
+        run.save(step, 0, payload())
+        baseline = evaluate(per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
+        run.log(dict(kind="baseline_validation", step=step, games=[g.name for g in sampled_val], val=baseline))
+        partial_best = baseline["all"]["event_button_nll"] + baseline["all"]["click_nll"]
+        run.set_results(baseline_val=baseline, partial_monitor="event_button_nll+click_nll")
     for epoch in range(a.epochs):
         items = windows(train, a.window, rng)
         rng.shuffle(items)
@@ -585,15 +620,41 @@ def main(argv=None):
             if stopping:
                 break
             b = batch_of(train, items[i:i + a.batch], a.window, a.burn_in, rng, a.enemy_id_dropout, a.stat_dropout,
-                         a.hold_weight)
+                         a.hold_weight, profile=profile)
             params, opt_state, info = train_step(params, opt_state, {k: jnp.asarray(v) for k, v in b.items()})
             info = jax.device_get(info)
             for k, v in info.items():
                 sums[k] = sums.get(k, 0.0) + float(v)
             n_steps += 1
             step += 1
-        if stopping:
-            status = "preempted"
+            if not all(np.isfinite(float(v)) for v in info.values()):
+                run.save(step, epoch + 1, payload(), latest=False)
+                status = "diverged"
+                break
+            if a.eval_every and step % a.eval_every == 0:
+                saved = run.save(step, epoch + 1, payload())
+                ev = evaluate(per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
+                v = ev["all"]
+                score = v["event_button_nll"] + v["click_nll"]
+                improved = np.isfinite(score) and score < partial_best - a.early_stop_min_delta
+                stale = 0 if improved else stale + 1
+                if improved:
+                    partial_best = score
+                    shutil.copyfile(saved, run.path / "best_partial.msgpack")
+                    run.set_results(best_partial_step=step, best_partial_score=score, best_partial_val=ev)
+                run.log(dict(kind="partial_validation", epoch=epoch + 1, step=step, score=score,
+                             improved=bool(improved), stale=stale, val=ev))
+                print(f"step {step} held-out event+click NLL {score:.3f}; best {partial_best:.3f}; "
+                      f"stale {stale}; cast recall {v['recall']}", flush=True)
+                if not np.isfinite(score):
+                    status = "diverged"
+                    break
+                if a.early_stop_patience and stale >= a.early_stop_patience:
+                    status = "early_stopped"
+                    break
+        if stopping or status != "finished":
+            if stopping:
+                status = "preempted"
             break
         dt = time.perf_counter() - t1
         row = {f"train_{k}": v / max(n_steps, 1) for k, v in sums.items()}

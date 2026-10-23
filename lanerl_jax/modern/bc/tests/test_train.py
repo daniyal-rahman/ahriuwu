@@ -112,3 +112,15 @@ def test_dilate_marks_within_k():
     x = np.zeros((1, 12), bool)
     x[0, 5] = True
     assert np.flatnonzero(T._dilate(x, 2)[0]).tolist() == [3, 4, 5, 6, 7]
+
+
+def test_step_validation_sample_covers_groups_before_repeats():
+    from types import SimpleNamespace
+    games = [SimpleNamespace(name="a", champion="Garen", role="top"),
+             SimpleNamespace(name="b", champion="Garen", role="top"),
+             SimpleNamespace(name="c", champion="Lulu", role="support"),
+             SimpleNamespace(name="d", champion="Garen", role="mid")]
+    sample = T.validation_subset(games, 3)
+    assert {(g.champion, g.role) for g in sample} == {("Garen", "top"), ("Garen", "mid"), ("Lulu", "support")}
+    assert [g.name for g in sample] == [g.name for g in T.validation_subset(list(reversed(games)), 3)]
+    assert T.validation_subset(games, 0) is games
