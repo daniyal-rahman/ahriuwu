@@ -608,3 +608,12 @@ for interim decisions and records full-epoch metrics separately.16h/24GB/4CPU.
 Private independent source/data/cache; cache capacity preflight15% headroom and
 20GiB reserve, reserve guarded during build. Full training cannot start before
 both prerequisites succeed. No native-FoW wait, no RL/PPO. Actual results pending.
+
+
+GPU smoke13007 COMPLETED/0:45 tests; normal short run64 steps, four step
+evaluations, saved best sampled checkpoint, forced plateau run stopped at4steps
+after two failed improvement checks. Workflow verified, not generalization.
+Audit13005 finalized metadata:52590 train/5880 val player perspectives,
+340720945/38055900 valid labels,7309 unique26.19 matches. Full-array checks
+still running;2000 files/341s measured, time limit raised2h→4h. Full training
+13009 remains dependency-blocked until audit succeeds; no optimization has begun.

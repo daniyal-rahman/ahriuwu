@@ -108,15 +108,21 @@ Scratch cleanup verified,638GB free. This is the approved heuristic-fog dataset.
 Dani explicitly says do not wait on decoder work; continue standalone BC.
 RL/PPO and economy work are removed from the current plan.
 
-**Active: finalization/full array audit13005**, desktop CPU6GB/2cores,2h limit.
+**Active: finalization/full array audit13005**, desktop CPU6GB/2cores,4h limit.
+Initial scan reached2000 player-perspective arrays in341s; raised the time limit
+from2h to4h to cover that measured pace. Manifest finalized:52590 train/5880 val
+perspectives from7309 unique26.19 matches;340720945/38055900 valid labels.
+Full-array audit remains running, so its pass receipt is not yet present.
 Checks source/fog/converter contract, train/val base separation, all expected
 array shapes, finite-or-missing numerics and action/cell bounds. Manifest plus
 `audit-result.json` persist under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
 Log `modern-bc-v6-audit-13005.out` there. Broad training waits for this audit.
 
-**Active/queued BC validation and training:** isolated GPU smoke13007 runs
-all45 BC tests, then short real training to verify baseline/step evaluation,
-checkpoints, normal completion and forced plateau stop. Source137e30b3.
+**GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
+baseline and four within-epoch evaluations/checkpoints, normal completion at64
+steps, preserved best sampled checkpoint, and forced plateau stopping at4steps.
+These are workflow checks on one train/one held-out perspective, not policy
+quality evidence. Durable `train-smoke-result.json` passed. Source137e30b3.
 Full GPU BC13009 is queued with `afterok:13005:13007` and asserts both durable
 passed receipts before staging.24GB/4cores,16h cap,3 epochs maximum (no minimum),
 500-step checkpoint/evaluation on512 fixed champion/role-spread held-out games;
