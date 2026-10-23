@@ -114,13 +114,22 @@ array shapes, finite-or-missing numerics and action/cell bounds. Manifest plus
 `audit-result.json` persist under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
 Log `modern-bc-v6-audit-13005.out` there. Broad training waits for this audit.
 
-Implementing opt-in within-epoch BC checkpoints and fixed champion/role-spread
-held-out evaluations, plateau stopping on event-button+click NLL, and immediate
-nonfinite training/gradient stopping. No three-epoch minimum. A short isolated
-training smoke will verify the actual checkpoint/evaluation path before full BC.
-Native decoder v18 is released as partial player view; complete rendered/terrain
-FoW remains unqualified and existing production exports are unchanged. Per Dani,
-this no longer blocks the approved heuristic baseline. No training/PPO active yet.
+**Active/queued BC validation and training:** isolated GPU smoke13007 runs
+all45 BC tests, then short real training to verify baseline/step evaluation,
+checkpoints, normal completion and forced plateau stop. Source137e30b3.
+Full GPU BC13009 is queued with `afterok:13005:13007` and asserts both durable
+passed receipts before staging.24GB/4cores,16h cap,3 epochs maximum (no minimum),
+500-step checkpoint/evaluation on512 fixed champion/role-spread held-out games;
+early stop after4 checks without0.001 improvement in event-button+click NLL.
+Nonfinite training/gradients stop immediately. Best sampled checkpoint preserved
+separately, full validation at epoch boundaries. Enemy/stat dropout0; cast button
+weight5, summoners3, ward/recall/stop2. No cooldown-based timing smoothing.
+Training independently copies dataset+source to private NVMe; preflights projected
+cache with15% headroom plus20GiB reserve and checks reserve throughout cache build.
+Durable checkpoints on NFS; private staging cleaned on exit. Native decoder v18
+is partial and deferred per Dani. No RL/PPO or economy work in current scope.
+Logs `modern-bc-v6-monitor-smoke-13007.out` and `modern-bc-v6-train-13009.out`
+under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. Await automatic receipts.
 
 **Full-length12880 FAILED/1 after decoder staging verified544 files.**
 The first conversion reached provenance recording, which assumed a Git worktree;

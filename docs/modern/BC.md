@@ -593,3 +593,18 @@ and immediate nonfinite loss/gradient stopping. Sampled improvement checkpoints
 are retained as `best_partial.msgpack` independently of checkpoint rotation;
 full validation still runs at completed epochs. Defaults keep epoch-only behavior.
 A real short training smoke must verify checkpoint/early-stop paths before full BC.
+
+
+Source137e30b3: focused group-sampling regression passes. Isolated GPU13007
+runs all45 checks and two real short training runs to verify within-epoch
+checkpoints/evaluation and forced plateau stopping. Full BC13009 is queued
+with afterok dependencies on audit13005 and smoke13007, plus receipt assertions.
+Recipe:3 epochs maximum, window256/burn32/batch128,500-step evaluation on512
+fixed held-out champion/role-spread games; patience4/min_delta0.001 on event-button
+plus click NLL. Full validation remains at epoch boundaries. Cast weight5,
+summoners3, ward/recall/stop2; enemy/stat dropout0 for standalone BC, no timing
+smoothing on unknown cooldowns. Checkpoint selection uses sampled scores only
+for interim decisions and records full-epoch metrics separately.16h/24GB/4CPU.
+Private independent source/data/cache; cache capacity preflight15% headroom and
+20GiB reserve, reserve guarded during build. Full training cannot start before
+both prerequisites succeed. No native-FoW wait, no RL/PPO. Actual results pending.
