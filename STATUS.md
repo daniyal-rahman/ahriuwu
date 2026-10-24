@@ -307,6 +307,14 @@ reuse v4 observations; disable unqualified D/F/ward action outputs. No reconvers
 new inputs, simulator state or RL. This should have preceded extended head probes.
 Added explicit cast-guard bootstrap start so fresh training is not judged against
 an untrained uniform class prior; resume default remains immediate. Source1c5fab88.
+
+**2026-10-24 clean smoke13031 COMPLETED/0:**54 BC tests passed. Actual training
+completed64 steps/four interim evaluations with saved checkpoints and cast-guard
+activation; forced plateau stopped at4 steps/two checks and retained step0 best.
+D/F/ward output-mask assertions passed. Durable `v7-clean-20261024/smoke-result.json`
+is passed. Full clean13032 released and RUNNING; no optimizer metrics yet.
+Existing converted replay arrays are reused; no reconversion, simulator or RL.
+
 **GPU13031 registered:** full BC tests + real monitored-training/forced-stop smoke;
 checks best_partial baseline preservation, guard activation and unsupported output
 masking. gpup2CPUs/8GB/20min. Durable `v7-clean-20261024/smoke-result.json`.

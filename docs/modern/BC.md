@@ -981,3 +981,10 @@ all scripts/logs at `/mnt/nfs/shared/modern-bc/v7-clean-20261024`. This is train
 not a new23h conversion. No claim of quality until clean heldout results arrive.
 Interactive replay comparison published inline after desktop/mobile/theme and
 actual control-event checks; original model remains until clean validation.
+
+**2026-10-24 clean smoke13031 COMPLETED/0:**54 BC tests passed. Actual training
+completed64 steps/four interim evaluations with saved checkpoints and cast-guard
+activation; forced plateau stopped at4 steps/two checks and retained step0 best.
+D/F/ward output-mask assertions passed. Durable `v7-clean-20261024/smoke-result.json`
+is passed. Full clean13032 released and RUNNING; no optimizer metrics yet.
+Existing converted replay arrays are reused; no reconversion, simulator or RL.
