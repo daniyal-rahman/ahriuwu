@@ -732,3 +732,12 @@ buttons and observations for audit; validity/click masks exclude supervision,
 not relabel to noop. Cached observations remain reusable; manifests record
 excluded train/val target counts. No full observation reconversion required.
 Next is the identical controlled readout probe with these labels excluded.
+
+
+Corrected probe13018 registered (gpup20GB/4cores/1h), source63c8d575.
+Same256 selected perspectives, frozen best36500 backbone, two residual heads
+and independent calibration/assessment split. Loader excludes legacy unqualified
+summoner/trinket target labels; observation arrays stay unchanged. All48 BC
+checks precede the experiment, including a cached-dataset integration test for
+masking without modifying buttons/observations and a resolved-target reader
+regression. No full conversion or broad training is repeated. Results pending.

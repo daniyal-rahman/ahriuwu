@@ -178,9 +178,13 @@ so loader conservatively masks summoner_d/f/ward labels rather than inventing
 noops or silently training origin clicks. Observation/cache arrays are reused.
 Excluded-target counts are recorded in training manifests. No23h reconversion.
 
-Preparing corrected controlled readout/calibration probe on the same256 selected
-perspectives, now without legacy unqualified targets. Regression checks cover
-reader origin rejection and cached-loader masking with unchanged observations.
+**Active/queued corrected probe13018**, gpup20GB/4cores/1h, source63c8d575.
+Same256 selected perspectives and frozen36500 backbone; legacy unqualified
+summoner/trinket targets are excluded by loader. All48 BC tests precede the
+probe, including reader origin rejection and real cached-loader masking with
+unchanged observations/buttons and source-qualified target acceptance.
+Log `modern-bc-v6-corrected-readout-13018.out`; result pointer
+`readout-probe-result.json` under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
 No broad training or production readout promotion yet. No RL/native-FoW wait.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
