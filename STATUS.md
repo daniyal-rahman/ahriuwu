@@ -645,3 +645,24 @@ Original loss equivalence asserted before updates. Assessment logs expected cast
 counts, exact recall and joint targeting. Existing validation reuse, small subset,
 no fresh-test or promotion claim. CPUdanilogin2cores/6GB/90min cap, independent
 private /tmp staging and NFS outputs; GPU13034 unchanged, still staging at check.
+
+**CPU13037 COMPLETED/0,2175s (36min).** Both arms select baseline0; all50/100/150
+updates fail prespecified event-button NLL+0.01 guard, so no promotion and saved
+assessment remains baseline. Selection spell-click CE baseline7.98077: native
+50/100/150=7.82395/7.89457/7.87294; weighted=7.74550/7.76365/7.74116. Treatment
+consistently better aiming than matched control, but event NLL rises0.013–0.023
+(vs native0.012–0.021). QWER conditional NLL improves in both, movement CE within
+gates. This is not proof weighting cannot help; small-batch fresh-Adam native
+control also fails. Only58 selection/101 assessment spell clicks; R assessment5.
+Baseline assessment expected Q315 vs59 human, W103vs27/E110vs27/R19vs5: same
+class-weight calibration concern as earlier v6, despite low argmax recall.
+
+**CPU13038 registered, no optimizer:** fixed clean5500 checkpoint,64 existing
+assessment perspectives/full valid frames. Measure per-QWER average precision
+(exact and0.5s-near-press positives), expected counts and argmax recall, fixed
+inverse-button-weight correction, and oracle human-count ranking diagnostic.
+Separates ranking/discrimination from biased probabilities before further
+training changes. Existing validation reused, no fresh-test claim; human-count
+threshold not deployment policy, inverse weights cannot exactly undo held-label
+weighting.2CPUs/6GB/45min danilogin, private code/data/checkpoint copies and EXIT
+cleanup, NFS outputs. Main13034 unchanged, cache22000 at receipt check.
