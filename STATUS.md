@@ -125,7 +125,19 @@ Checkpoint `ckpt_000010000.msgpack` in
 `/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-allroles-20261023-145300-?`.
 Resume must retain the three-epoch total ceiling, not add three more epochs.
 Trainer now replays shuffle/augmentation RNG draws and skips completed batches.
-Repairing restart wrapper and staging recovery; full BC temporarily stopped.
+Resume smoke13011 is registered on gpup and verifies a legacy4-step checkpoint
+continues to the original64-step epoch ceiling, rather than68steps.
+Full retry13012 is queued afterok:13011, source104b05b8. It resumes latest owned
+NFS checkpoint (at least10000), with the same recipe/seed/three-epoch ceiling.
+Recovery independently copies terminal13009's private arrays/cache into a fresh
+job directory, removes each source file only after successful independent copy,
+and rebases cache path stamps only when size/mtime identity matches. Unknown
+cache entries rebuild; reserve20GiB maintained. No shared mutable staging.
+On requeue, wrapper reclaims only its own orphan staging, appends logs, forwards
+signals and waits for checkpoint shutdown before EXIT cleanup. Donor13009 state
+must still be FAILED before recovery; no other job/data is touched.
+Logs `modern-bc-v6-resume-smoke-13011.out` and `modern-bc-v6-resume-13012.out`
+under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. Await automatic receipts.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

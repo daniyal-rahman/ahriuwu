@@ -636,3 +636,15 @@ copy. Checkpoint10000 is safe on NFS; no optimizer divergence established.
 Trainer resume now skips previously completed batches, replaying RNG draws so
 the configured epoch ceiling remains cumulative. Wrapper recovery/resume check
 must precede retry; no reconversion is needed.
+
+
+Resume smoke13011 (GPU) verifies restoring the old4-step checkpoint completes
+at64total steps, and logs four skipped batches. Full retry13012 depends on
+its success, source104b05b8. Same training seed/recipe/3epoch total ceiling,
+latest owned NFS checkpoint selected. Recovery copies old terminal13009 private
+staging/cache into a new exclusive directory with independent files, progressively
+reclaiming copied originals to avoid doubling503.8GB. Cache relocation rewrites
+paths only with matching source size/mtime; incompatible entries rebuild.
+Wrapper appends logs across requeues, cleans its own orphan staging at startup,
+forwards termination to the child and waits before cleanup. No shared mutable
+cache or hardlink/symlink staging. Resume results remain pending.
