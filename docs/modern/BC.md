@@ -1005,3 +1005,24 @@ verified (desktop SSH check pending); sole checkpoints are durable on NFS.
 monitoring: same validation sample, step2000 cast reference, best5500 checkpoint
 and stale1 at6000, instead of resetting them. Add recovery test plus real
 resume/forced-stop smoke before releasing the full job. No new conversion/RL.
+
+**Resume13034 queued afterok:13033**, source2568861a, user-authorized. Smoke13033
+runs full BC suite and actual2→4-step resume: preserve best0 bytes, reference2,
+stale1 and stop at inherited patience2. Full continuation restores checkpoint6453,
+best5500, reference2000 and stale1; recipe and3-epoch total ceiling unchanged.
+Both registered with this thread. GPU full24GB/4CPUs/16h cap/no-requeue; immutable
+source/private deep copies, NFS checkpointing and EXIT cleanup. Desktop reachable
+again; no13032 scratch directory remains,684.7GB free. Cache must be rebuilt
+(~54min measured) and arrays staged (~46min previously); no replay reconversion.
+Rough resumed wall time2–4h if plateau soon,10–12h if reaching remaining budget,
+excluding queue/pre-emption. First resumed evaluation expected~2h after launch.
+
+Observed clean progress500→6000: event+click8.364→7.480, click distance17.96→13.31;
+accepted best5500 score7.5057. At5500 Q/W/E/R exact recall1.20/0.0108/0.911/0%;
+overall91.01% accuracy is not useful cast evidence. Next24h: continue while guarded
+validation improves, score best checkpoint's rate/timing/target behavior by
+champion/role and replay clips (~1–3h after run). Next24–48h conditional on results:
+if spells remain weak, choose one targeted timing/class-imbalance or aiming
+experiment with matched baseline, instead of more unfocused frozen-head probes.
+Calibration may repair probability rates but is not a substitute for cast intent.
+New-patch data scaling follows a defensible clean baseline; no RL or guessed CD.
