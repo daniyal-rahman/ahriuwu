@@ -1055,3 +1055,9 @@ is unmeasured. Earlier age readout failed and oracle pointer gains failed routin
 so neither is promoted or repeated blindly. Fixed-reference cast NLL guard may
 reject aggregate gains; evaluate rate/precision/tolerant recall jointly before
 interpreting early stop as architectural evidence. No active-training recipe change.
+
+**Failure audit13035 FAILED before metrics:** packed entity wrapper requires a
+time slice, not NumPy tuple indexing. Correct v2 materializes one game's dense
+rows via `entities[:]` and asserts shape before indexing; CPU13036 registered
+with the same bounded/no-update diagnostic. Original worker retained for
+evidence; active13034 recipe/checkpoints unaffected. No audit findings yet.
