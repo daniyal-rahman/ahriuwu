@@ -1061,3 +1061,28 @@ time slice, not NumPy tuple indexing. Correct v2 materializes one game's dense
 rows via `entities[:]` and asserts shape before indexing; CPU13036 registered
 with the same bounded/no-update diagnostic. Original worker retained for
 evidence; active13034 recipe/checkpoints unaffected. No audit findings yet.
+
+**CPU13036 COMPLETED/0,109.9s.**48 stratified perspectives:197587 valid train/
+103350 validation decisions,4352 QWER events total. Movement/basic-attack button
+accounts for97.964%/97.468% of weighted click supervision; QWER only2.036%/2.532%.
+Even after5x button weights, movement+noop comprise87.26%/85.35% button mass.
+Own cooldowns known at0 sampled spell events; mana known atall4352. Extra anonymous
+enemy champions visible at24.27%/18.72% of spells, and are the only visible
+enemies at7.71%/6.45%. Paired enemy absent44–45% includes farming/self casts;
+not evidence those labels are wrong. Gradient audit:8 natural/8 cast-centered
+windows, click-versus-spell-button cosines approximately-0.113..0.076; no
+consistent destructive alignment. Natural click norms1.51–2.73x button norms.
+Small diagnostic, not causal proof or full-corpus statistics.
+
+**CPU13037 registered:** paired native control versus spell-aim x5 weighting
+(~9.4% expected click mass instead of2.0%, global normalization retains mean
+click coefficient). Same clean5500 parameters, button weights, natural sampled
+windows, fresh Adam3e-5/clip0.5,batch4/window256/burn32;200 updates/arm max.
+Selection every50, patience3 including baseline.32train perspectives,16 previously
+audited validation perspectives split by replay base into selection/assessment,
+4 fixed windows/game. Select lower spell-click CE only with movement CE+0.03,
+distance+0.25, event-button NLL+0.01 and supported per-QWER NLL+0.05 gates.
+Original loss equivalence asserted before updates. Assessment logs expected cast
+counts, exact recall and joint targeting. Existing validation reuse, small subset,
+no fresh-test or promotion claim. CPUdanilogin2cores/6GB/90min cap, independent
+private /tmp staging and NFS outputs; GPU13034 unchanged, still staging at check.
