@@ -988,3 +988,14 @@ activation; forced plateau stopped at4 steps/two checks and retained step0 best.
 D/F/ward output-mask assertions passed. Durable `v7-clean-20261024/smoke-result.json`
 is passed. Full clean13032 released and RUNNING; no optimizer metrics yet.
 Existing converted replay arrays are reused; no reconversion, simulator or RL.
+
+**2026-10-24 clean13032 CANCELLED by UID1000 after3h10m45s.** Slurm records
+explicit cancellation, while trainer labels its TERM handler `preempted`; this
+does not establish scheduler pre-emption. No automatic restart. Cache build
+completed3250s/503.8GB. Training reached6453 steps and saved NFS latest plus
+`ckpt_000006453.msgpack`; sampled best5500 preserved separately (score7.5057,
+button accuracy91.01%, click distance13.22). Cast recall remains weak; no
+standalone-quality claim. Last evaluation6000 rejected Q regression despite
+improved aggregate7.480. Run `modern-bc-v7-clean-13032-20261024-072516-?` under
+`/mnt/nfs/checkpoints/lanerl-jax/modern-bc`. Scratch cleanup not independently
+verified (desktop SSH check pending); sole checkpoints are durable on NFS.
