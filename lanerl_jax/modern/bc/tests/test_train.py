@@ -184,3 +184,25 @@ def test_fresh_cast_guard_bootstraps_while_resume_guards_immediately():
     assert set(guard.check(worse, 2500)) == {'r'}
     resumed = T.CastGuard(learned, 36500, start_step=2000)
     assert set(resumed.check(worse, 37000)) == {'r'}
+
+
+def test_monitor_resume_retains_reference_best_plateau_and_ignores_future(tmp_path):
+    import json
+    import pytest
+    val = dict(all=dict(event_button_nll=2., click_nll=7., button_count_by=dict(q=200), button_nll_by=dict(q=2.)))
+    rows = [dict(kind='baseline_validation', step=0, games=['a'], val=val),
+            dict(kind='partial_validation', step=2, val=val, score=9., improved=True, stale=0, cast_guard_reference_step=2),
+            dict(kind='partial_validation', step=4, val=val, score=8., improved=True, stale=0, cast_guard_reference_step=2),
+            dict(kind='partial_validation', step=6, val=val, score=8.1, improved=False, stale=1, cast_guard_reference_step=2),
+            dict(kind='partial_validation', step=8, val=val, score=7., improved=True, stale=0, cast_guard_reference_step=2)]
+    (tmp_path/'metrics.jsonl').write_text('\n'.join(map(json.dumps, rows)))
+    state = T.monitor_at(tmp_path, 7, ['a'])
+    assert (state['best_step'], state['best_score'], state['stale'], state['reference_step']) == (4, 8., 1, 2)
+    assert state['reference'] == val['all']
+    with pytest.raises(ValueError, match='same validation'):
+        T.monitor_at(tmp_path, 7, ['b'])
+    rows = [dict(kind='baseline_validation', step=7, games=['a'], val=val),
+            dict(kind='resume_monitor', step=7, state=state), rows[-1]]
+    (tmp_path/'metrics.jsonl').write_text('\n'.join(map(json.dumps, rows)))
+    again = T.monitor_at(tmp_path, 8, ['a'])
+    assert (again['best_step'], again['best_score'], again['reference_step']) == (8, 7., 2)

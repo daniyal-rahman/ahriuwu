@@ -999,3 +999,9 @@ standalone-quality claim. Last evaluation6000 rejected Q regression despite
 improved aggregate7.480. Run `modern-bc-v7-clean-13032-20261024-072516-?` under
 `/mnt/nfs/checkpoints/lanerl-jax/modern-bc`. Scratch cleanup not independently
 verified (desktop SSH check pending); sole checkpoints are durable on NFS.
+
+**Resume authorized by Dani.** Prepare6453-step continuation with original
+3-epoch ceiling and unchanged recipe. Resume now optionally restores donor
+monitoring: same validation sample, step2000 cast reference, best5500 checkpoint
+and stale1 at6000, instead of resetting them. Add recovery test plus real
+resume/forced-stop smoke before releasing the full job. No new conversion/RL.

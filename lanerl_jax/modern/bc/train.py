@@ -514,6 +514,31 @@ class CastGuard:
         return cast_regressions(self.reference, current, self.max_increase, self.min_events)
 
 
+def monitor_at(directory, step, games):
+    """Recover monitoring at a checkpoint, ignoring any later evaluations."""
+    rows = [json.loads(line) for line in (directory / "metrics.jsonl").read_text().splitlines()]
+    baseline = next(r for r in rows if r.get("kind") == "baseline_validation")
+    if baseline["games"] != games or baseline["step"] > step:
+        raise ValueError("resume monitoring requires the same validation sample and an earlier baseline")
+    v = baseline["val"]["all"]
+    state = dict(best_step=baseline["step"], best_score=v["event_button_nll"] + v["click_nll"],
+                 best_val=baseline["val"], stale=0, reference=None, reference_step=None)
+    for row in rows:
+        if row.get("step", step + 1) > step:
+            continue
+        if row.get("kind") == "resume_monitor":
+            state = row["state"]
+        if row.get("kind") != "partial_validation":
+            continue
+        state["stale"] = row["stale"]
+        ref = row.get("cast_guard_reference_step")
+        if ref == row["step"]:
+            state.update(reference=row["val"]["all"], reference_step=ref)
+        if row["improved"]:
+            state.update(best_step=row["step"], best_score=row["score"], best_val=row["val"])
+    return state
+
+
 def validation_subset(games: list[Game], limit: int) -> list[Game]:
     """Fixed held-out sample spread across champion/role groups before repeats."""
     if not limit or len(games) <= limit:
@@ -569,6 +594,7 @@ def build_parser():
     p.add_argument("--min-cast-events", type=int, default=100, help="minimum fixed-sample support for cast regression checks")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", type=Path, default=None)
+    p.add_argument("--resume-monitor", type=Path, default=None, help="donor run directory retaining best/plateau/cast reference")
     p.add_argument("--tag", default="modern-bc")
     p.add_argument("--notes", default="")
     return p
@@ -581,6 +607,8 @@ def main(argv=None):
     from ..rl.run_dir import RunDir
     parser = build_parser()
     a = parser.parse_args(argv)
+    if a.resume_monitor is not None and (a.resume is None or not a.eval_every):
+        parser.error("--resume-monitor requires --resume and --eval-every")
     if min(a.eval_every, a.eval_max_games, a.early_stop_patience, a.early_stop_min_delta, a.max_cast_nll_regression, a.cast_guard_start_step) < 0:
         parser.error("evaluation and early-stop settings must be nonnegative")
     if not np.isfinite(a.max_cast_nll_regression):
@@ -674,6 +702,21 @@ def main(argv=None):
                         best_partial_step=step, best_partial_score=partial_best,
                         cast_guard=dict(max_nll_increase=a.max_cast_nll_regression, min_events=a.min_cast_events,
                                         start_step=a.cast_guard_start_step, reference_step=cast_guard.reference_step))
+        if a.resume_monitor is not None:
+            state = monitor_at(a.resume_monitor, step, [g.name for g in sampled_val])
+            cast_guard.reference, cast_guard.reference_step = state["reference"], state["reference_step"]
+            if step >= a.cast_guard_start_step and cast_guard.reference is None:
+                raise ValueError("donor monitoring has no mature cast reference")
+            partial_best, stale = state["best_score"], state["stale"]
+            donor = a.resume_monitor / "best_partial.msgpack"
+            donor_saved = msgpack_restore(donor.read_bytes())
+            if int(donor_saved["step"]) != state["best_step"]:
+                raise ValueError("donor best checkpoint does not match recovered monitoring")
+            shutil.copyfile(donor, run.path / "best_partial.msgpack")
+            run.log(dict(kind="resume_monitor", step=step, state=state))
+            run.set_results(best_partial_step=state["best_step"], best_partial_score=partial_best,
+                            best_partial_val=state["best_val"])
+            print(f"restored monitor: best {state['best_step']}, stale {stale}, cast reference {cast_guard.reference_step}", flush=True)
     resume_steps = step
     for epoch in range(a.epochs):
         items = windows(train, a.window, rng)
