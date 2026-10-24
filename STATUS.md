@@ -221,19 +221,25 @@ BC uses exact unit targets, so it does not rule out joint heads under native los
 No frozen readout/pointer/router promoted. End frozen-feature-only probes.
 Evidence `v6-full-20261022/joint-click-13022/results.json`.
 
-**GPU13023 registered:** end-to-end BC comparison, unchanged architecture
-continuation versus action-conditioned joint2D residual with encoder/core unfrozen.
-Same1024 champion/role-spread training perspectives and fixed batches;64 selection
-perspectives. Assessment uses remaining240 perspectives/30 replay bases excluded
-from previous head-probe assessment/calibration sets; these are not a newly decoded
-or pristine corpus-wide test set (the main model has already had full-val readout).
-Sourcebc6b8e14, workerd841bb67ce9e; gpup1GPU/4cores/24GB/1h limit.1000 updates
-maximum/arm, batch8/window256/burn32, base LR3e-5, new head1e-3, existing class
-weights/held0.3. Native unit sigma0/ground sigma1 targets. Select every200 steps by
-unweighted event-button NLL + soft click CE; patience3/min_delta0.001, baseline0
-eligible. Assert initial native-trainer loss equivalence and nonzero base gradient
-and parameter changes. Persist best trees and completed-arm evidence to NFS;
-private deep copies/EXIT cleanup. Full-corpus training and RL remain off.
+**GPU13023 FAILED after4m10s:** completed continuation control, then reporting
+failed on NumPy float32 JSON serialization before joint arm started. Initial
+native loss equivalence passed (6.255844 vs6.255849), base gradient norm5.404 and
+parameter delta0.0620 prove actual full-gradient updates. Control selection6.84000
+initial;200/400/600 scores6.85434/6.85305/6.87758, so baseline0 retained and stopped.
+Assessment of baseline:1365775 valid frames/1127853 clicks, click NLL6.16265,
+within2 24.354%, joint23.634%. Best control checkpoint persisted to NFS. Recovered
+control score/gradient/assessment evidence from actual log into
+`endtoend-control-13023-recovered.json`; no successful candidate result exists.
+
+**GPU13024 registered:** only unfinished joint end-to-end arm trains. Reuse saved
+control, assert its parameters equal initial baseline and recomputed assessment
+matches completed log. Scalar-safe JSON serializer passed local real-NumPy nested
+float32/int64/bool check; each full metric tree also serializes before optimization.
+Sourcebc6b8e14/worker5fb84526f151, gpup1GPU/4cores/24GB/1h limit. Same1024 training,
+64 selection,240 assessment perspectives/30 bases, identical batches and native
+unit0/ground1 loss.1000 updates cap, base LR3e-5/head1e-3, eval200/patience3 with
+baseline0 eligible. Private staging cleaned on EXIT; receipt-driven. No control
+retraining, full-corpus retraining, production promotion or RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

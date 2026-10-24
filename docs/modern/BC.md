@@ -839,3 +839,20 @@ initial baseline. Initial losses must match native trainer; gradient norm and
 actual base parameter changes must be nonzero. Save best parameter trees and
 partial arm results durably. Sourcebc6b8e14/workerd841bb67ce9e; gpup24GB/4cores/1h.
 No production architecture change, full-corpus retrain, simulator data, or RL.
+
+GPU13023 failed after4m10s at JSON reporting after the continuation control,
+before joint training. Native loss check6.255844 vs6.255849 passed; base gradient
+norm5.404 and parameter delta0.0620 nonzero. Control scores6.85434/6.85305/6.87758
+at200/400/600 versus6.84000 initial; early-stopped, retained baseline0. Assessment
+1365775 valid frames/1127853 clicks: NLL6.16265, near24.354%, joint23.634%.
+Checkpoint survived on NFS; `endtoend-control-13023-recovered.json` captures log
+scores/gradient/assessment and checkpoint provenance. Failure is float32 JSON
+serialization, not a numerical/training failure or candidate result.
+
+GPU13024 registered for unfinished joint arm only. Sourcebc6b8e14/worker5fb84526f151,
+same data/recipe. Recompute control assessment against saved checkpoint, assert
+parameter identity and agreement with logged metrics; do not repeat its600 updates.
+Normalize evaluation scalars to Python numbers and serialize NumPy scalars via
+`.item()`; real-NumPy nested float32/int64/bool test passes locally. Validate entire
+metric serialization before optimization. gpup24GB/4cores/1h, private staging and
+cleanup, durable best/partial outputs. No full retraining, production change or RL.
