@@ -202,16 +202,26 @@ but spell-specific train/heldout gaps are large. Sourcebc6b8e14,55s job worker.
 Evidence `v6-full-20261022/pointer-probe-13020/results.json`. This supplied oracle
 button and unit-click type, not end-to-end policy evidence. No promotion.
 
-**GPU13021 registered:** learned unit-versus-ground router with frozen base and
-13020 pointer.128 train perspectives fit only router (1000 balanced-button steps,
-fixed0.5 threshold);512 fresh assessment perspectives exclude all prior calibration
-and assessment replay bases. Uniform cap1024 valid clicks per perspective after
-burn-in, seed419, to bound memory. Compares original and hybrid screen errors for
-unit/ground and per button, with oracle versus actual predicted buttons and joint
-button/near-click accuracy. No true target type supplied to inference. Original
-screen output retained when router predicts ground or no entity is visible.
-Sourcebc6b8e14, workerb47a0f18024a, gpup1GPU/4cores/20GB/1h limit. Private copies,
-EXIT cleanup; receipt-driven. No full BC retraining or RL.
+**GPU13021 COMPLETED/0,71.6s worker:** hard unit/ground router rejected.
+On524288 sampled clicks from512 fresh heldout perspectives, actual-button hybrid
+within2 falls24.509→24.429%; joint button/near-click23.718→23.638%; screen
+Manhattan distance12.235→12.332. Unit-only near improves61.20→61.96%, but ground
+near falls21.213→21.057% (ground91.76% of clicks). Router recognizes only19.38%
+of unit clicks and misroutes2.71% ground clicks. Oracle button does not rescue it.
+Q/E small gains do not justify overall degradation. No pointer/router promotion.
+Evidence `v6-full-20261022/hybrid-pointer-13021/results.json`.
+
+**GPU13022 registered:** matched joint2D versus factorized click residual heads,
+sourcebc6b8e14/workerbab0037e5cf9, gpup1GPU/4cores/20GB/1h limit. Same frozen
+base features, action conditioning,128 train/64 selection perspectives; another512
+assessment perspectives exclude all earlier calibration/assessment replay bases.
+Train cap2048 clicks/perspective, assessment/selection1024; uniform seed419.
+Gaussian sigma1, held weight0.3, same2000-step maximum and minibatches (half natural
+frequency/half balanced buttons). Evaluate selection every500, stop after3 misses;
+include unchanged zero-residual baseline as a candidate. Evaluate oracle and actual
+buttons, all/ground/unit/event/per-button NLL, near clicks and joint accuracy.
+No target-type gate, pointer, raw replay rebuild or production architecture change.
+Private deep copies and EXIT cleanup; results after receipt. No full BC retrain/RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

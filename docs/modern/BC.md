@@ -793,3 +793,28 @@ oracle-button and actual-button routing, and joint button/near-click accuracy.
 No oracle target type in inference; empty entity sets and predicted ground clicks
 retain original screen predictions. This tests the missing routing decision before
 considering any architecture/action-contract integration or broad retraining.
+
+GPU13021 completed,71.6s worker. Hard routing failed on524288 sampled clicks/512
+fresh perspectives: actual-button within2 24.509→24.429%, joint23.718→23.638%,
+distance12.235→12.332. Unit near61.20→61.96%, ground21.213→21.057%; ground
+comprises91.76% of clicks. Unit recall19.38%, ground false-unit2.71%. Oracle
+button does not rescue overall performance. Reject frozen router/pointer hybrid.
+A correct unit-target diagnostic did not establish an end-to-end improvement.
+
+GPU13022 registered: matched factorized and joint96x54 residual click heads on
+frozen best36500 context. Both action-conditioned, same128 train/64 selection,
+identical2000-step ceiling/minibatches, Gaussian sigma1 and held weight0.3.
+Half natural-frequency and half balanced-button examples.2048 train and1024
+selection/test uniformly sampled clicks per perspective, seed419. Every500 steps
+select by held-weighted soft click CE; unchanged baseline eligible at step0,
+patience3. Another512 heldout perspectives exclude all earlier assessment and
+calibration replay bases. Reports actual/oracle button NLL, click distances and
+joint accuracy, including ground/unit/event/per-button slices. No target-type
+routing or pointer. Tests the independent-x/y bottleneck directly, without
+production model changes. Sourcebc6b8e14, workerbab0037e5cf9; gpup20GB/4cores/1h.
+
+Architecture reference consulted before the next experiment: [DeepMind's AlphaStar
+paper](https://storage.googleapis.com/deepmind-media/research/alphastar/AlphaStar_unformatted.pdf),
+extended data architecture, separates target-unit attention and spatial target
+prediction with action-conditioned heads. This supports inspecting the action
+representation; it does not establish that our joint click experiment will work.
