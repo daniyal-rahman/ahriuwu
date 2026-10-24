@@ -691,3 +691,32 @@ main13034 produce later clean parameters; repeat the same fixed ranking/rate/
 timing evaluation on the selected checkpoint before deciding whether causal
 own-action history requires a full-gradient input ablation. No deployment or
 production change promoted. Main13034 still active in cache construction at check.
+
+**2026-10-24 scope correction / expert review:** actual finalized plan uses
+30–840s (00:30–14:00) at10Hz, not full matches. Valid labels additionally require
+alive and inside the lane corridor, even with extra_champions=True.7309 matches
+provide58470 early-game player perspectives;172 champions; match-base split
+6574train/735val. Earlier "full" meant full configured8100-step window and
+corpus, not full-match or unrestricted-map coverage. Tier is constant0. This
+limits standalone full-game claims and requires future data-scope expansion.
+
+Current target-type supervision: received self/no-cursor modes mask aim loss;
+received unit targets use one-hot grid cells, other received points Gaussian
+sigma1. No explicit skillshot metadata input or targeting-mode head, no
+action-conditioned aim; shared independent button/X/Y heads. Actual185-wide
+self input has158 never-observed columns masked, leaving27 potentially observed
+(including role/IDs/tier). No kit descriptions, own qualified cooldowns or prior
+action inputs. Reviewer brief uses exact run manifest and current source, not
+PPO defaults. Within-epoch monitor's event CE retains class weights; per-class
+NLL diagnostic is unweighted. Burn-in loss mask does not detach BPTT through
+the32-step prefix. Model6,243,435 parameters, entity2x4head128/FFN256, context256,
+MLP4x1024→512, residual LayerNorm-input GRU512.
+
+**Resume13034 CANCELLED by UID1000 after1h57m50s.** Completed staging/cache,
+restored best5500/stale1/reference2000, then validated6500 score7.46719 and
+accepted it. E recall1.99%,Q1.10%,W0.194%,R0% at6500. Saved step7000 checkpoint
+before next evaluation; no completed7000 metrics. Slurm batch endedSIGKILL,
+manifest has no terminal status; do not infer graceful completion or cleanup.
+Best6500 and latest7000 checkpoint payloads readable on NFS. No auto-restart.
+Scratch cleanup unverified. Target-supervision explanation passes728dark/360light
+previews and all3 target-mode checks; published inline. No training changes.
