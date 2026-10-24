@@ -294,10 +294,21 @@ any further architecture change, not standalone rollout success evidence.
 **GPU13029 FAILED** during first clip extraction: packed entity loader accepts
 slices, not scalar indexes. No training or completed artifact. Fixed to one-row
 slice and added actual packed-loader shape check before inference.
-**GPU13030 registered:** source5450052a/workerce8a2b20dcd3, gpup1GPU/4cores/8GB,
-20min limit. Output `replay-behavior-13030/scenes.json`, private copies/EXIT cleanup.
-After receipt, inspect scene data and build human/model visual comparison. No
-full-corpus training, production changes or RL.
+**GPU13030 COMPLETED/0:**8 deterministic replay clips exported622451 bytes.
+Interactive comparison `replay-behavior-13030/replay-comparison.html` checked at
+728px dark/360px light; real scene selector, calibration selector and time scrubber
+checks pass without browser errors. All8 center presses choose Move by raw argmax;
+Garen R/Jax Q click targets are near human target, Ezreal Q/R and Lux Q are far.
+Illustrations only, not a fresh generalization test or closed-loop evaluation.
+
+Next decisive run: fresh clean BC baseline on existing58470 perspectives, rather
+than more readouts of the pre-target-repair checkpoint. Conservative target masks
+reuse v4 observations; disable unqualified D/F/ward action outputs. No reconversion,
+new inputs, simulator state or RL. This should have preceded extended head probes.
+Added explicit cast-guard bootstrap start so fresh training is not judged against
+an untrained uniform class prior; resume default remains immediate. Tests/smoke
+pending, planned full run depends on successful smoke. Scratch684.7GB free on
+inspection, enough for independent44.2GB source +~503.8GB cache +20GiB reserve.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

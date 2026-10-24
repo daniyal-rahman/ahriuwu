@@ -172,3 +172,15 @@ def test_cast_guard_requires_matching_support_and_finite_nll():
     failures = T.cast_regressions(before, after)
     assert failures['q']['reason'] == 'support_changed'
     assert failures['e']['reason'] == 'button_nll'
+
+
+def test_fresh_cast_guard_bootstraps_while_resume_guards_immediately():
+    uniform = dict(button_count_by=dict(r=200), button_nll_by=dict(r=2.))
+    learned = dict(button_count_by=dict(r=200), button_nll_by=dict(r=4.))
+    worse = dict(button_count_by=dict(r=200), button_nll_by=dict(r=4.1))
+    guard = T.CastGuard(uniform, 0, start_step=2000)
+    assert guard.check(learned, 500) == {} and guard.reference_step is None
+    assert guard.check(learned, 2000) == {} and guard.reference_step == 2000
+    assert set(guard.check(worse, 2500)) == {'r'}
+    resumed = T.CastGuard(learned, 36500, start_step=2000)
+    assert set(resumed.check(worse, 37000)) == {'r'}

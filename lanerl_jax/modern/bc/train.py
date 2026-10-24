@@ -499,6 +499,21 @@ def cast_regressions(baseline, current, max_increase=0.05, min_events=100):
     return failures
 
 
+class CastGuard:
+    """Do not compare a fresh model against its untrained uniform class prior."""
+    def __init__(self, baseline, step, start_step=0, max_increase=0.05, min_events=100):
+        self.reference = baseline if step >= start_step else None
+        self.reference_step = step if self.reference is not None else None
+        self.start_step, self.max_increase, self.min_events = start_step, max_increase, min_events
+
+    def check(self, current, step):
+        if self.reference is None:
+            if step < self.start_step:
+                return {}
+            self.reference, self.reference_step = current, step
+        return cast_regressions(self.reference, current, self.max_increase, self.min_events)
+
+
 def validation_subset(games: list[Game], limit: int) -> list[Game]:
     """Fixed held-out sample spread across champion/role groups before repeats."""
     if not limit or len(games) <= limit:
@@ -549,6 +564,8 @@ def build_parser():
     p.add_argument("--early-stop-min-delta", type=float, default=0.01, help="minimum decrease in held-out event button NLL + click NLL")
     p.add_argument("--max-cast-nll-regression", type=float, default=0.05,
                    help="maximum per-QWER NLL increase from sampled baseline; used with --eval-every")
+    p.add_argument("--cast-guard-start-step", type=int, default=0,
+                   help="bootstrap fresh training before fixing the cast reference; resumes can use 0")
     p.add_argument("--min-cast-events", type=int, default=100, help="minimum fixed-sample support for cast regression checks")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", type=Path, default=None)
@@ -564,7 +581,7 @@ def main(argv=None):
     from ..rl.run_dir import RunDir
     parser = build_parser()
     a = parser.parse_args(argv)
-    if min(a.eval_every, a.eval_max_games, a.early_stop_patience, a.early_stop_min_delta, a.max_cast_nll_regression) < 0:
+    if min(a.eval_every, a.eval_max_games, a.early_stop_patience, a.early_stop_min_delta, a.max_cast_nll_regression, a.cast_guard_start_step) < 0:
         parser.error("evaluation and early-stop settings must be nonnegative")
     if not np.isfinite(a.max_cast_nll_regression):
         parser.error("--max-cast-nll-regression must be finite")
@@ -651,9 +668,12 @@ def main(argv=None):
         baseline = evaluate(per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
         run.log(dict(kind="baseline_validation", step=step, games=[g.name for g in sampled_val], val=baseline))
         partial_best = baseline["all"]["event_button_nll"] + baseline["all"]["click_nll"]
+        cast_guard = CastGuard(baseline["all"], step, a.cast_guard_start_step,
+                               a.max_cast_nll_regression, a.min_cast_events)
         run.set_results(baseline_val=baseline, partial_monitor="event_button_nll+click_nll",
                         best_partial_step=step, best_partial_score=partial_best,
-                        cast_guard=dict(max_nll_increase=a.max_cast_nll_regression, min_events=a.min_cast_events))
+                        cast_guard=dict(max_nll_increase=a.max_cast_nll_regression, min_events=a.min_cast_events,
+                                        start_step=a.cast_guard_start_step, reference_step=cast_guard.reference_step))
     resume_steps = step
     for epoch in range(a.epochs):
         items = windows(train, a.window, rng)
@@ -689,7 +709,7 @@ def main(argv=None):
                 ev = evaluate(per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
                 v = ev["all"]
                 score = v["event_button_nll"] + v["click_nll"]
-                cast_failures = cast_regressions(baseline["all"], v, a.max_cast_nll_regression, a.min_cast_events)
+                cast_failures = cast_guard.check(v, step)
                 improved = not cast_failures and np.isfinite(score) and score < partial_best - a.early_stop_min_delta
                 stale = 0 if improved else stale + 1
                 if improved:
@@ -697,7 +717,8 @@ def main(argv=None):
                     shutil.copyfile(saved, run.path / "best_partial.msgpack")
                     run.set_results(best_partial_step=step, best_partial_score=score, best_partial_val=ev)
                 run.log(dict(kind="partial_validation", epoch=epoch + 1, step=step, score=score,
-                             improved=bool(improved), stale=stale, cast_regressions=cast_failures, val=ev))
+                             improved=bool(improved), stale=stale, cast_regressions=cast_failures,
+                             cast_guard_reference_step=cast_guard.reference_step, val=ev))
                 print(f"step {step} held-out event+click NLL {score:.3f}; best {partial_best:.3f}; "
                       f"stale {stale}; cast recall {v['recall']}; rejected casts {list(cast_failures)}", flush=True)
                 if not np.isfinite(score):
@@ -732,8 +753,7 @@ def main(argv=None):
         if sampled_val:
             guard_ev = ev if sampled_val is val else evaluate(
                 per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
-            cast_failures = cast_regressions(baseline["all"], guard_ev["all"],
-                                             a.max_cast_nll_regression, a.min_cast_events)
+            cast_failures = cast_guard.check(guard_ev["all"], step)
             run.log(dict(kind="epoch_cast_guard", step=step, cast_regressions=cast_failures))
         if not cast_failures and (best is None or score < best):
             best = score

@@ -950,3 +950,19 @@ GPU13029 failed from scalar indexing of packed entity wrapper; fixed slice read
 and actual loader shape check. GPU13030 registered, source5450052a/workerce8a2b20dcd3,
 gpup8GB/4cores/20min, NFS `replay-behavior-13030/scenes.json`. Visual comparison
 follows receipt. No simulator, full retrain, production policy change or RL.
+
+GPU13030 completed:8 clips/622451 bytes. `replay-behavior-13030/replay-comparison.html`
+passes desktop-dark/mobile-light previews and actual scene/calibration/time-input
+checks. At center presses all8 raw argmax buttons are Move; Garen R/Jax Q targets
+are near, Ezreal Q/R/Lux Q far. Deterministic illustrations, no standalone or
+fresh-test claim. Fixed replay states, heuristic vision and canonical camera.
+
+Clean retrain preparation: the current36500 checkpoint predates target-origin
+repair. Most head probes reused that checkpoint; a clean baseline should precede
+further architecture experiments. Fresh training reuses finalized v4 arrays with
+conservative slot4/5/12 target masks and disables those unsupported output buttons.
+No expensive reconversion. Add `--cast-guard-start-step` (default0, resume checks
+immediate) to bootstrap fresh class probabilities before fixing a reference;
+otherwise a learned rare-class posterior can fail against uniform initialization.
+Planned fresh reference step2000; preserve existing within-epoch early stopping
+and baseline checkpoint. Tests and real training smoke gate the full job.
