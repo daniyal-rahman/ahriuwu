@@ -114,10 +114,18 @@ finite-or-missing and action/cell checks.473607000 total decisions;
 340720945 train/38055900 held-out valid labels. Compressed NPZ44.24GB;
 audit5629s (~94min). Durable `audit-result.json` passed.
 
-**Full BC13009 RUNNING on desktop gpup**, prerequisites13005+13007 succeeded.
-Initial stage is capacity checking, independent NVMe data staging and cache
-preparation; no optimizer-step output yet at the receipt inspection. Checkpoints
-and500-step held-out metrics will follow. No RL/PPO.
+**BC13009 FAILED after automatic requeue, checkpoint preserved.** First
+attempt built503814199620 bytes of cache and trained10000 steps; sampled held-out
+event+click NLL7.398, button accuracy91.23%, click distance12.71cells, but cast
+recall remains weak (Q3.45%,E2.15%,W0.57%,R0.09%). No useful-policy claim.
+Slurm reports Restarts=1. The restarted wrapper allocated fresh staging while
+its first attempt's orphaned private503.8GB cache remained; capacity guard stopped
+it before duplication. Old private stage exists and no process uses it.
+Checkpoint `ckpt_000010000.msgpack` in
+`/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-allroles-20261023-145300-?`.
+Resume must retain the three-epoch total ceiling, not add three more epochs.
+Trainer now replays shuffle/augmentation RNG draws and skips completed batches.
+Repairing restart wrapper and staging recovery; full BC temporarily stopped.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

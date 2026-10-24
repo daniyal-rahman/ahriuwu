@@ -611,12 +611,22 @@ def main(argv=None):
         run.log(dict(kind="baseline_validation", step=step, games=[g.name for g in sampled_val], val=baseline))
         partial_best = baseline["all"]["event_button_nll"] + baseline["all"]["click_nll"]
         run.set_results(baseline_val=baseline, partial_monitor="event_button_nll+click_nll")
+    resume_steps = step
     for epoch in range(a.epochs):
         items = windows(train, a.window, rng)
         rng.shuffle(items)
+        skipped = min(resume_steps, (len(items) + a.batch - 1) // a.batch)
+        resume_steps -= skipped
+        if skipped:
+            # Replay augmentation draws without loading batches, retaining the original shuffle stream.
+            draws = min(skipped * a.batch, len(items)) * ((a.enemy_id_dropout > 0) + (a.stat_dropout > 0))
+            rng.random(draws)
+            run.log(dict(kind="resume_cursor", epoch=epoch + 1, skipped_batches=skipped, step=step))
+        if skipped * a.batch >= len(items):
+            continue
         t1 = time.perf_counter()
         sums, n_steps = {}, 0
-        for i in range(0, len(items), a.batch):
+        for i in range(skipped * a.batch, len(items), a.batch):
             if stopping:
                 break
             b = batch_of(train, items[i:i + a.batch], a.window, a.burn_in, rng, a.enemy_id_dropout, a.stat_dropout,

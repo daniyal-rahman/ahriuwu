@@ -625,3 +625,14 @@ and action/cell bounds.473607000 total decisions,340720945 train/38055900
 held-out valid labels; NPZ storage44237490316 bytes. `audit-result.json` passed.
 GPU13009 released after both prerequisites and is running; initial capacity/data
 staging/cache phase has no optimizer output yet. Full BC results remain pending.
+
+
+13009 trained10000 steps before preemption/requeue. Durable sampled metrics:
+event-button+click NLL7.398, button accuracy91.23%, click distance12.71;
+Q/E/W/R recall3.45%/2.15%/0.57%/0.09%. Overall improvement is not adequate cast
+quality. The automatic restart failed its capacity guard because first-attempt
+private staging/cache (503.8GB) survived while the wrapper attempted a second
+copy. Checkpoint10000 is safe on NFS; no optimizer divergence established.
+Trainer resume now skips previously completed batches, replaying RNG draws so
+the configured epoch ceiling remains cumulative. Wrapper recovery/resume check
+must precede retry; no reconversion is needed.
