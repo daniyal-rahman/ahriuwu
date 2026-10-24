@@ -48,7 +48,7 @@ from ..rl.policy import LanePolicy, make_policy_config
 from ..train import DEFAULT_BUTTONS_OFF
 from .convert import _self_columns
 from .targets import gaussian_target
-from .sources import SOURCE_CONTRACT, require_replay_only
+from .sources import SOURCE_CONTRACT, TARGET_CONTRACT, require_replay_only
 
 __all__ = ["Game", "load_games", "windows", "make_loss", "evaluate", "main"]
 
@@ -99,6 +99,7 @@ class Game(NamedTuple):
     observed_global: np.ndarray | None = None
     champion: str = "unknown"
     role: str = "unknown"
+    excluded_targets: int = 0
 
 
 #: Buttons whose press is spread in time by ``--cast-time-sigma``, and the self column that says it is ready.
@@ -221,6 +222,14 @@ def _raise_open_files():
         resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 
 
+def target_supervision_mask(button, metadata):
+    """Older arrays cannot distinguish slot4/5/12 origin fallbacks from qualified targets."""
+    if metadata.get("label_target_contract") == TARGET_CONTRACT:
+        return np.ones(np.shape(button), bool)
+    unknown = [MODERN_BUTTON_INDEX[n] for n in ("summoner_d", "summoner_f", "ward")]
+    return ~np.isin(button, unknown)
+
+
 def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path | None = None) -> list[Game]:
     require_replay_only("BC training data load", dataset)
     manifest_path = dataset / "manifest.json"
@@ -243,15 +252,18 @@ def load_games(dataset: Path, split: str, limit: int | None = None, cache: Path 
     for g, d in zip(picked, arrays):
         meta = json.loads((dataset / "games" / f"{g['game']}.json").read_text())
         available = meta["availability"]
+        target_ok = target_supervision_mask(d["button"], meta)
+        valid = np.asarray(d["label_valid"]) & target_ok
         out.append(Game(g["game"], split, g["opponent_class"], g.get("opponent_kit") is not None,
                         d["entities"] if cache else d["entities"].astype(np.float16), d["entity_pad_mask"], d["self_vec"],
                         d["global_vec"], d["button"].astype(np.int32, copy=False),
                         d["screen_x"].astype(np.int32, copy=False), d["screen_y"].astype(np.int32, copy=False),
-                        np.asarray(d["label_valid"]), d["click_valid"] & d["label_valid"], d["click_on_unit"],
+                        valid, d["click_valid"] & valid, d["click_on_unit"],
                         np.asarray(d["held"]) if "held" in d else np.zeros(len(d["button"]), bool),
                         observed_self=np.asarray(available["self_fraction"]) > 0,
                         observed_global=np.asarray(available["global_fraction"]) > 0,
-                        champion=meta["champion"], role=meta["role"]))
+                        champion=meta["champion"], role=meta["role"],
+                        excluded_targets=int((np.asarray(d["label_valid"]) & ~target_ok).sum())))
     return out
 
 
@@ -586,7 +598,9 @@ def main(argv=None):
     run = RunDir(a.out, a.tag, {
         "train": {"policy": pcfg._asdict()}, "bc": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(a).items()},
         "dataset": {"path": str(a.dataset), "train_games": len(train), "val_games": len(val),
-                    "train_decisions": n_train},
+                    "train_decisions": n_train, "label_target_contract": TARGET_CONTRACT,
+                    "excluded_train_targets": sum(g.excluded_targets for g in train),
+                    "excluded_val_targets": sum(g.excluded_targets for g in val)},
         "buttons_off": buttons_off, "button_weights": bw.tolist(), "n_params": n_params,
         "observation": f"{profile} (converted replays)", "action": "modern-world-v2 (button, sx, sy)"},
         notes=a.notes)

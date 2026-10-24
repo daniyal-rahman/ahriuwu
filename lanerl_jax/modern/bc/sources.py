@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 SOURCE_CONTRACT = "replay-fields-circles-missing-v1"
+TARGET_CONTRACT = "received-targets-no-d0-v2"
 
 
 class ReplayOnlyUnavailable(ValueError):

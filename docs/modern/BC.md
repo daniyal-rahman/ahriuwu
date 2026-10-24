@@ -715,3 +715,20 @@ CPU13017 audits raw slot4/5/12 targets/vectors against own position and converte
 cell distributions on26 perspectives.13016 failed on wrong ROLE_LANE import,
 fixed to bc.convert before submitting13017. No new broad training or production
 head/calibration integration until target-source results establish what is real.
+
+
+Target audit13017 COMPLETED/0:26 perspectives/228 slot4/5/12 casts,
+224 selected0xd0 vectors,217 within50units of caster; converted clicks cluster
+near screen center. All228 lacked resolved points.0x2c often differs but is not
+qualified here. Thus summoner/ward readout gains were learning bad caster-origin
+labels and cannot be promoted as aiming improvements.
+
+Reader removes slot4+0xd0 fallback. New conversions explicitly record
+`label_target_contract=received-targets-no-d0-v2`; resolved/unit targets remain
+usable through existing representability checks. Existing v4 arrays cannot
+separate those from fallback targets, so the loader conservatively excludes
+summoner_d/summoner_f/ward labels in unmarked games. They retain their original
+buttons and observations for audit; validity/click masks exclude supervision,
+not relabel to noop. Cached observations remain reusable; manifests record
+excluded train/val target counts. No full observation reconversion required.
+Next is the identical controlled readout probe with these labels excluded.

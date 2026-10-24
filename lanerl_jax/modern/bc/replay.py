@@ -454,13 +454,11 @@ AIM_FALLBACK = True
 
 
 def _cast_point(d) -> Optional[Tuple[float, float]]:
-    """A cast's target point: the decoder's resolved point; for summoners, items and the trinket (slots 4+),
-    whose records carry no resolved target, the record's cursor vector (``0xd0``). An unresolved ability cast
-    (slots 0-3, e.g. a champion whose catalog the batch lacked) has no point: ``0xd0`` is then the caster's
-    own position, not an aim point (decoder thread, 2026-10-18). An ability whose asset cast mode the decoder
-    does not know (``targeting_mode`` None: Syndra Q, Viktor E, Zeri W/E, Kayle Q, Varus E, ...) is masked
-    there, but its received endpoint ``0x2c`` is what the decoder resolves known point casts to: equal to the
-    resolved point on all 122,857 casts that have both (240-game audit, 2026-10-20). That is used instead."""
+    """Resolved point, or the received ability endpoint under the documented QWER rule.
+
+    Slot4+ records without resolved targets remain unknown: 0xd0 tracks the caster,
+    not the aim point (26-perspective source audit13017; BC.md).
+    """
     p = d.get("target_point_world_xz")
     if p is not None:
         return (float(p[0]), float(p[1]))
@@ -469,9 +467,7 @@ def _cast_point(d) -> Optional[Tuple[float, float]]:
         if AIM_FALLBACK and d.get("targeting_mode") is None and w is not None and len(w) == 3:
             return (float(w[0]), float(w[2]))
         return None
-    w = d.get("wire_vectors_xyz") or {}
-    v = w.get("0xd0")
-    return (float(v[0]), float(v[2])) if v is not None and len(v) == 3 else None
+    return None
 
 
 def canonical_summoners(ids) -> Tuple[Tuple[int, int], Dict[int, int]]:

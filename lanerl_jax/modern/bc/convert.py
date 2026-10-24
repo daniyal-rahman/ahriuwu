@@ -26,7 +26,7 @@ from ..actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS
 from ..train import LANE_HALF_WIDTH
 from . import fog
 from .labels import Labels, label_actions, cast_rules
-from .sources import SOURCE_CONTRACT, require_replay_only
+from .sources import SOURCE_CONTRACT, TARGET_CONTRACT, require_replay_only
 from . import observation as RO
 from .replay import (BLUE, STAT_SCALE, ReplayGame, decision_times, lane_distance,
                      read_game)
@@ -217,7 +217,7 @@ def convert_game(game_dir: Path, window=LANE_WINDOW_S, champion: str = "Garen", 
     target_seen = np.asarray([a is not None and a.target is not None and
                             any(g.units[int(u)].id == a.target for u in slots[k] if u >= 0)
                             for k, a in enumerate(actions)])
-    meta = dict(source_contract=SOURCE_CONTRACT,
+    meta = dict(source_contract=SOURCE_CONTRACT, label_target_contract=TARGET_CONTRACT,
         provenance=dict(g.provenance, converter_commit=_converter_commit(), obs_profile=profile,
                         action_profile="modern-world-v2", fog=fog.provenance(),
                         geometry=dict(source=RO.geometry()["source"], sha256=RO.geometry()["source_sha256"])),

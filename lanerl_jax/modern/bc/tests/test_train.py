@@ -124,3 +124,35 @@ def test_step_validation_sample_covers_groups_before_repeats():
     assert {(g.champion, g.role) for g in sample} == {("Garen", "top"), ("Garen", "mid"), ("Lulu", "support")}
     assert [g.name for g in sample] == [g.name for g in T.validation_subset(list(reversed(games)), 3)]
     assert T.validation_subset(games, 0) is games
+
+
+def test_cached_legacy_dataset_masks_unqualified_targets_without_reconversion(tmp_path):
+    import json
+    from lanerl_jax.modern.bc.sources import SOURCE_CONTRACT, TARGET_CONTRACT
+    from lanerl_jax.modern import obs as OB
+    buttons = np.array([B["move"], B["q"], B["summoner_d"], B["summoner_f"], B["ward"]], np.int32)
+    root = tmp_path
+    (root / "games").mkdir()
+    row = dict(game="a", split="train", opponent_class="melee")
+    (root / "plan.json").write_text(json.dumps(dict(source_contract=SOURCE_CONTRACT, profile=OB.REPLAY_PROFILE, games=[row])))
+    (root / "manifest.json").write_text(json.dumps(dict(source_contract=SOURCE_CONTRACT, profiles=dict(obs=OB.REPLAY_PROFILE), missing=[])))
+    meta = dict(source_contract=SOURCE_CONTRACT, provenance=dict(obs_profile=OB.REPLAY_PROFILE),
+                availability=dict(self_fraction=[1.] * OB.self_dim(OB.REPLAY_PROFILE), global_fraction=[1.] * 6),
+                champion="Garen", role="top")
+    path = root / "games/a.json"
+    path.write_text(json.dumps(meta))
+    sv = np.zeros((5, OB.self_dim(OB.REPLAY_PROFILE)), np.float32)
+    np.savez(root / "games/a.npz", entities=np.zeros((5, 32, 20), np.float32),
+             entity_pad_mask=np.ones((5, 32), bool), self_vec=sv, global_vec=np.zeros((5, 6), np.float32),
+             button=buttons, screen_x=np.zeros(5, np.int32), screen_y=np.zeros(5, np.int32),
+             label_valid=np.ones(5, bool), click_valid=np.ones(5, bool), click_on_unit=np.zeros(5, bool), held=np.zeros(5, bool))
+    game = T.load_games(root, "train", cache=root / "cache")[0]
+    np.testing.assert_array_equal(game.valid, [True, True, False, False, False])
+    np.testing.assert_array_equal(game.click, game.valid)
+    np.testing.assert_array_equal(game.button, buttons)
+    np.testing.assert_array_equal(game.self_vec, sv)
+    assert game.excluded_targets == 3
+    # A newly converted dataset with resolved targets is not blanket-excluded.
+    meta["label_target_contract"] = TARGET_CONTRACT
+    path.write_text(json.dumps(meta))
+    assert T.load_games(root, "train", cache=root / "cache")[0].valid.all()

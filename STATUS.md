@@ -166,13 +166,22 @@ Summoner/ward near-target rates reach100% on small supports65/97/130, suspicious
 suggesting caster-centered labels rather than general aiming ability.
 No production conditional-head/calibration promotion or full retrain yet.
 
-**Active/queued CPU target-source audit13017**,8GB/2cores/30min,26 held-out
-perspectives. Compares raw slot4/5/12 resolved points/wire vectors against caster
-position and converted target-cell distributions. Inspect source qualification
-before accepting apparent summoner/ward aiming gains.13016 failed before audit
-on incorrect ROLE_LANE import; corrected to bc.convert,13017 replaces it.
-Outputs `target-audit-result.json`, log `modern-bc-v6-target-audit-13017.out`
-under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. No RL/native-FoW wait.
+**Target audit13017 COMPLETED/0**,26 perspectives,228 raw slot4/5/12 casts.
+224 used0xd0 points:217 within50units of caster, with converted summoner/ward
+clicks clustered near center. No resolved target points in these slots.0x2c
+usually differs substantially but is not promoted as a qualified replacement.
+The apparent100% near-target readout gain is invalid as evidence of aiming.
+Removed slot4+0xd0 fallback in replay reader. New conversions carry
+`label_target_contract=received-targets-no-d0-v2`; qualified unit/resolved points
+remain permitted, unresolved targets excluded. Existing v4 arrays lack the marker,
+so loader conservatively masks summoner_d/f/ward labels rather than inventing
+noops or silently training origin clicks. Observation/cache arrays are reused.
+Excluded-target counts are recorded in training manifests. No23h reconversion.
+
+Preparing corrected controlled readout/calibration probe on the same256 selected
+perspectives, now without legacy unqualified targets. Regression checks cover
+reader origin rejection and cached-loader masking with unchanged observations.
+No broad training or production readout promotion yet. No RL/native-FoW wait.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

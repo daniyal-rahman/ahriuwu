@@ -61,3 +61,13 @@ def test_leading_unknown_positions_are_not_backfilled():
     filled = C._fill(a)
     assert np.isnan(filled[0]).all()
     np.testing.assert_array_equal(filled[1:], [[1., 2.], [1., 2.]])
+
+
+def test_slot4plus_origin_vector_is_not_a_cast_target():
+    from lanerl_jax.modern.bc.replay import _cast_point
+    for slot in (4, 5, 12):
+        d = dict(slot=slot, wire_vectors_xyz={"0xd0": [100., 0., 200.], "0x2c": [500., 0., 600.]})
+        assert _cast_point(d) is None  # neither vector is qualified as this slot's aim
+        assert _cast_point(dict(d, target_point_world_xz=[700., 800.])) == (700., 800.)
+    assert _cast_point(dict(slot=0, targeting_mode=None,
+                           wire_vectors_xyz={"0x2c": [500., 0., 600.]})) == (500., 600.)
