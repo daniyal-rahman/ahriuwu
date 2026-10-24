@@ -913,3 +913,20 @@ initial bias, Adam3e-4,2000-step cap; selection event NLL every250 with cast gua
 and patience4. Heldout shuffled-age falsification. No new architecture until gains
 beat both controls without cast regression. gpup20GB/4cores/1h, private copies,
 EXIT cleanup. Production observation widths/checkpoint remain unchanged.
+
+GPU13027 COMPLETED/0,82s. Split99 fit/29 selection/64 assessment. All bias/context/
+history heads select step0, stopping at1000 after every trained checkpoint worsens
+selection event NLL and QWER NLL limits. Assessment NLL0.300799 is only inverse
+class-weight baseline; no learned history improvement. Shuffling is uninformative
+when selected offsets remain zero. Training optimized natural all-frame CE while
+selection optimized event-only CE, limiting the experiment's interpretation.
+
+GPU13028 registered, source5450052a/workerea5ba252f569: paired low-capacity bias
+versus additive per-class received-age-bin curves.20 bias +6x12 offsets, unknown
+bin and edges0.5/1/2/4/8/16/32/64/128/256 seconds; no cooldown estimates. Same
+99/29/64 and natural-frequency batches, but training/selection now both use
+class-unweighted CE with held0.3; age offsets L2 coefficient0.001.2000-step cap,
+selection250/patience4 with cast guard and unchanged baseline eligible. Report
+age-bin human and original/inverse-weight expected QWER counts to inspect raw
+signal, plus shuffled heldout ages. Existing base model and production input
+profile unchanged. gpup20GB/4cores/1h, private stage/EXIT cleanup, no broad retrain/RL.
