@@ -870,3 +870,23 @@ hard accuracy rates absolute1e-4 and mean distance0.01 cell. Persist all prior/c
 metric deltas to `control-reproduction.json` before asserting, and require exact
 repeat of fixed-batch outputs in this run. No repeated control optimization.
 Same data/recipe/early-stop/checkpoints as13024; gpup24GB/4cores/1h.
+
+GPU13025 COMPLETED/0,316s. Native loss and full-gradient checks pass. Best joint
+step800, selection6.84000→6.74844. Actual-button heldout click NLL6.16265→6.07386,
+joint near23.636→23.916%; Q/W/E button recall7.568/2.624/3.657→5.692/1.858/2.026%.
+Per-class NLL Q2.119→2.196/W2.653→2.753/E2.605→2.902. Reject promotion despite
+aggregate gain. All selection checkpoints worsen E NLL>0.05 versus initial.
+
+Cast guard being added to sampled selection: unweighted per-QWER NLL at fixed
+support, minimum100 events, maximum0.05 increase from baseline. Violations block
+best replacement and count toward existing patience. Epoch winners also require
+same sampled guard; retain baseline best_partial at step0. Guard unavailable when
+within-epoch evaluation is disabled. Tests pending.
+
+All192 pointer-subset metadata files show no available own QWERDF cooldowns.
+Next small input diagnostic records elapsed time since received own casts from raw
+replays, preserving canonical summoners and original lag. Unknown before first
+receipt; never infers readiness, duration, kit constants or future information.
+This source-only helper/sidecar does not alter v4 width/production inputs. Audit
+will measure history outside256-decision recurrent windows before another model
+experiment; no broad reconversion or simulator data.

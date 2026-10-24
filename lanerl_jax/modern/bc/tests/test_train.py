@@ -156,3 +156,19 @@ def test_cached_legacy_dataset_masks_unqualified_targets_without_reconversion(tm
     meta["label_target_contract"] = TARGET_CONTRACT
     path.write_text(json.dumps(meta))
     assert T.load_games(root, "train", cache=root / "cache")[0].valid.all()
+
+
+def test_cast_guard_rejects_aggregate_gain_with_spell_regression():
+    before = dict(button_count_by=dict(q=200, w=100, r=12), button_nll_by=dict(q=2., w=3., r=4.))
+    after = dict(button_count_by=before['button_count_by'], button_nll_by=dict(q=2.08, w=2.9, r=8.))
+    assert set(T.cast_regressions(before, after)) == {'q'}
+    assert T.cast_regressions(before, before) == {}
+    assert T.cast_regressions(before, after, max_increase=.1) == {}
+
+
+def test_cast_guard_requires_matching_support_and_finite_nll():
+    before = dict(button_count_by=dict(q=200, e=150), button_nll_by=dict(q=2., e=3.))
+    after = dict(button_count_by=dict(q=199, e=150), button_nll_by=dict(q=1., e=float('nan')))
+    failures = T.cast_regressions(before, after)
+    assert failures['q']['reason'] == 'support_changed'
+    assert failures['e']['reason'] == 'button_nll'

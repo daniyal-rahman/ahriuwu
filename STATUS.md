@@ -238,14 +238,27 @@ rate delta0.000014186 (0.00142 percentage points). The joint arm remains unrun.
 Exact reason for the argmax difference is not established; near-tied numerical
 predictions are plausible, not proven. Do not count this as candidate evidence.
 
-**GPU13025 registered:** same unfinished joint arm, sourcebc6b8e14/worker000bd4769814,
-gpup1GPU/4cores/24GB/1h. Saved control parameter tree/dtypes/values and frame/click
-counts remain exact; loss metrics retain rtol/atol1e-5. Hard accuracy rates allow
-absolute1e-4 (0.01 percentage points), distance0.01 cell. Full metric deltas persist
-in `control-reproduction.json` before checks; repeated fixed-batch outputs must
-match exactly within this run. Existing control is not retrained. Same1024/64/240
-perspectives,1000-update cap, native unit0/ground1 loss and early stopping. JSON
-fix remains in place. No full-corpus run, production promotion or RL.
+**GPU13025 COMPLETED/0,316s worker:** full-gradient joint model chooses step800.
+Selection6.84000→6.74844; actual-button assessment click NLL6.16265→6.07386,
+joint near-click23.636→23.916%, button accuracy91.490→91.651%. But Q/W/E recall
+7.568/2.624/3.657→5.692/1.858/2.026%; per-class NLL also worsens. No promotion.
+Every sampled selection checkpoint has E NLL degradation>0.05 despite aggregate
+improvement, so aggregate-only selection was insufficient. Evidence
+`v6-full-20261022/endtoend-click-13025/results.json`; initial native losses,
+nonzero full-base gradients/updates and control reproduction passed.
+
+Implementing fixed-sample cast guard: default per-QWER NLL regression limit0.05,
+minimum100 events, blocks best checkpoint replacement and consumes early-stop
+patience. Retain initial baseline as best_partial even when no candidate passes;
+epoch selection uses same guard. Tests and real-result regression replay pending.
+
+Input audit: all192 pointer-subset perspectives have zero availability in QWERDF
+cooldown columns. GRU training windows reset at256 decisions (25.6s). Preparing
+received-own-cast age sidecars on128 train/64 assessment perspectives. Exact replay
+receipt elapsed seconds, unknown before first receipt, canonical summoner mapping,
+original observation lag. These are not cooldown duration/readiness and do not
+change production observations. Causality/mapping tests and CPU source audit next.
+No GPU training, full-corpus retraining or RL queued at this point.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

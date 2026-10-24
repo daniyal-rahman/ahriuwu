@@ -466,6 +466,8 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                          clicks=int(a["n_c"]), click_nll=a["ce_c"] / max(a["n_c"], 1),
                          click_exact=a["exact"] / max(a["n_c"], 1), click_dist=a["dist"] / max(a["n_c"], 1),
                          recall=recall, precision=precision, share=share,
+                         button_count_by={MODERN_BUTTONS[k]: int(a["n_by"][k]) for k in range(nb)
+                                          if a["n_by"][k] > 0},
                          joint_button_click_exact_by={MODERN_BUTTONS[k]: float(a["joint_by"][k] / a["click_by"][k])
                                                       for k in range(nb) if a["click_by"][k] > 0},
                          button_nll_by={MODERN_BUTTONS[k]: float(a["ce_by"][k] / a["n_by"][k]) for k in range(nb)
@@ -478,6 +480,23 @@ def evaluate(per_decision, params, games: list[Game], window: int, burn_in: int,
                          held_clicks=int(a["n_hc"]), held_click_nll=a["ce_hc"] / max(a["n_hc"], 1),
                          held_click_dist=a["dist_hc"] / max(a["n_hc"], 1))
     return jax.tree.map(lambda v: v.item() if isinstance(v, np.generic) else v, out)
+
+
+def cast_regressions(baseline, current, max_increase=0.05, min_events=100):
+    """Compare unweighted QWER NLL on the same fixed validation decisions."""
+    failures = {}
+    for button in ("q", "w", "e", "r"):
+        count = baseline.get("button_count_by", {}).get(button, 0)
+        if count < min_events:
+            continue
+        reference = baseline["button_nll_by"][button]
+        value = current.get("button_nll_by", {}).get(button, float("nan"))
+        if current.get("button_count_by", {}).get(button) != count:
+            failures[button] = dict(reason="support_changed", baseline_count=count)
+        elif not np.isfinite(reference) or not np.isfinite(value) or value > reference + max_increase:
+            failures[button] = dict(reason="button_nll", baseline=float(reference), current=float(value),
+                                    count=count)
+    return failures
 
 
 def validation_subset(games: list[Game], limit: int) -> list[Game]:
@@ -528,6 +547,9 @@ def build_parser():
     p.add_argument("--eval-max-games", type=int, default=512, help="fixed champion/role sample for step evaluations; 0 = all")
     p.add_argument("--early-stop-patience", type=int, default=0, help="stop after N sampled evaluations without improvement; 0 = disabled")
     p.add_argument("--early-stop-min-delta", type=float, default=0.01, help="minimum decrease in held-out event button NLL + click NLL")
+    p.add_argument("--max-cast-nll-regression", type=float, default=0.05,
+                   help="maximum per-QWER NLL increase from sampled baseline; used with --eval-every")
+    p.add_argument("--min-cast-events", type=int, default=100, help="minimum fixed-sample support for cast regression checks")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", type=Path, default=None)
     p.add_argument("--tag", default="modern-bc")
@@ -542,8 +564,12 @@ def main(argv=None):
     from ..rl.run_dir import RunDir
     parser = build_parser()
     a = parser.parse_args(argv)
-    if min(a.eval_every, a.eval_max_games, a.early_stop_patience, a.early_stop_min_delta) < 0:
+    if min(a.eval_every, a.eval_max_games, a.early_stop_patience, a.early_stop_min_delta, a.max_cast_nll_regression) < 0:
         parser.error("evaluation and early-stop settings must be nonnegative")
+    if not np.isfinite(a.max_cast_nll_regression):
+        parser.error("--max-cast-nll-regression must be finite")
+    if a.min_cast_events < 1:
+        parser.error("--min-cast-events must be positive")
     if a.early_stop_patience and not a.eval_every:
         parser.error("--early-stop-patience requires --eval-every")
     stopping: list[int] = []
@@ -620,11 +646,14 @@ def main(argv=None):
     partial_best, stale = float("inf"), 0
     sampled_val = validation_subset(val, a.eval_max_games) if a.eval_every else []
     if sampled_val:
-        run.save(step, 0, payload())
+        initial = run.save(step, 0, payload())
+        shutil.copyfile(initial, run.path / "best_partial.msgpack")
         baseline = evaluate(per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
         run.log(dict(kind="baseline_validation", step=step, games=[g.name for g in sampled_val], val=baseline))
         partial_best = baseline["all"]["event_button_nll"] + baseline["all"]["click_nll"]
-        run.set_results(baseline_val=baseline, partial_monitor="event_button_nll+click_nll")
+        run.set_results(baseline_val=baseline, partial_monitor="event_button_nll+click_nll",
+                        best_partial_step=step, best_partial_score=partial_best,
+                        cast_guard=dict(max_nll_increase=a.max_cast_nll_regression, min_events=a.min_cast_events))
     resume_steps = step
     for epoch in range(a.epochs):
         items = windows(train, a.window, rng)
@@ -660,16 +689,17 @@ def main(argv=None):
                 ev = evaluate(per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
                 v = ev["all"]
                 score = v["event_button_nll"] + v["click_nll"]
-                improved = np.isfinite(score) and score < partial_best - a.early_stop_min_delta
+                cast_failures = cast_regressions(baseline["all"], v, a.max_cast_nll_regression, a.min_cast_events)
+                improved = not cast_failures and np.isfinite(score) and score < partial_best - a.early_stop_min_delta
                 stale = 0 if improved else stale + 1
                 if improved:
                     partial_best = score
                     shutil.copyfile(saved, run.path / "best_partial.msgpack")
                     run.set_results(best_partial_step=step, best_partial_score=score, best_partial_val=ev)
                 run.log(dict(kind="partial_validation", epoch=epoch + 1, step=step, score=score,
-                             improved=bool(improved), stale=stale, val=ev))
+                             improved=bool(improved), stale=stale, cast_regressions=cast_failures, val=ev))
                 print(f"step {step} held-out event+click NLL {score:.3f}; best {partial_best:.3f}; "
-                      f"stale {stale}; cast recall {v['recall']}", flush=True)
+                      f"stale {stale}; cast recall {v['recall']}; rejected casts {list(cast_failures)}", flush=True)
                 if not np.isfinite(score):
                     status = "diverged"
                     break
@@ -698,7 +728,14 @@ def main(argv=None):
             run.close()
             return
         score = v.get("button_nll", row["train_button_nll"])
-        if best is None or score < best:
+        cast_failures = {}
+        if sampled_val:
+            guard_ev = ev if sampled_val is val else evaluate(
+                per_decision, params, sampled_val, a.window, a.burn_in, a.eval_batch)
+            cast_failures = cast_regressions(baseline["all"], guard_ev["all"],
+                                             a.max_cast_nll_regression, a.min_cast_events)
+            run.log(dict(kind="epoch_cast_guard", step=step, cast_regressions=cast_failures))
+        if not cast_failures and (best is None or score < best):
             best = score
             run.save(step, epoch + 1, payload())
             run.set_results(best_epoch=epoch + 1, best_val_button_nll=best, val=ev)
