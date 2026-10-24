@@ -818,3 +818,24 @@ paper](https://storage.googleapis.com/deepmind-media/research/alphastar/AlphaSta
 extended data architecture, separates target-unit attention and spatial target
 prediction with action-conditioned heads. This supports inspecting the action
 representation; it does not establish that our joint click experiment will work.
+
+GPU13022 completed,99.5s worker: both readouts select unchanged baseline at step0
+and stop at1500. Initial soft CE6.56737; best trained factorized6.58335, joint6.56862.
+Joint exact selection NLL falls6.17864→6.15698, but fails prespecified soft CE.
+Consequently524288 assessment clicks reproduce baseline NLL6.17073/near24.174%/
+joint23.348%. The frozen probe used sigma1 also for unit clicks, while production
+uses sigma0 there; result is limited to its recipe. No architecture-level claim
+that joint heads cannot help. Frozen-feature probes end without promotion.
+
+GPU13023 registered: bounded full-gradient BC continuation control versus joint
+residual head + full base fine-tuning.1024 training perspectives stratified over
+champion/role;64 fixed selection; remaining240 assessment perspectives/30 bases
+outside preceding head-probe assessment/calibration sets. Main model has already
+had full-val readout, so this is validation, not pristine test evidence. Native
+unit sigma0/ground sigma1, existing class weights, held0.3; matched batch8/window256/
+burn32 and1000-step cap, base Adam3e-5/new head Adam1e-3, clip0.5. Selection every200
+by unweighted event-button NLL + soft click CE; patience3/min_delta0.001 including
+initial baseline. Initial losses must match native trainer; gradient norm and
+actual base parameter changes must be nonzero. Save best parameter trees and
+partial arm results durably. Sourcebc6b8e14/workerd841bb67ce9e; gpup24GB/4cores/1h.
+No production architecture change, full-corpus retrain, simulator data, or RL.

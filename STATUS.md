@@ -211,17 +211,29 @@ of unit clicks and misroutes2.71% ground clicks. Oracle button does not rescue i
 Q/E small gains do not justify overall degradation. No pointer/router promotion.
 Evidence `v6-full-20261022/hybrid-pointer-13021/results.json`.
 
-**GPU13022 registered:** matched joint2D versus factorized click residual heads,
-sourcebc6b8e14/workerbab0037e5cf9, gpup1GPU/4cores/20GB/1h limit. Same frozen
-base features, action conditioning,128 train/64 selection perspectives; another512
-assessment perspectives exclude all earlier calibration/assessment replay bases.
-Train cap2048 clicks/perspective, assessment/selection1024; uniform seed419.
-Gaussian sigma1, held weight0.3, same2000-step maximum and minibatches (half natural
-frequency/half balanced buttons). Evaluate selection every500, stop after3 misses;
-include unchanged zero-residual baseline as a candidate. Evaluate oracle and actual
-buttons, all/ground/unit/event/per-button NLL, near clicks and joint accuracy.
-No target-type gate, pointer, raw replay rebuild or production architecture change.
-Private deep copies and EXIT cleanup; results after receipt. No full BC retrain/RL.
+**GPU13022 COMPLETED/0,99.5s worker:** neither frozen residual head beats
+unchanged baseline under selection. Factorized soft CE6.56737→6.58335 at500;
+joint6.56737→6.56862 at1000 (best trained soft CE, still worse). Both select step0
+and stop at1500, so assessment remains baseline: NLL6.17073, within2 24.174%,
+joint23.348% across524288 clicks. Joint exact NLL improved on selection but not
+the prespecified smoothed criterion. This probe smoothed unit clicks too; native
+BC uses exact unit targets, so it does not rule out joint heads under native loss.
+No frozen readout/pointer/router promoted. End frozen-feature-only probes.
+Evidence `v6-full-20261022/joint-click-13022/results.json`.
+
+**GPU13023 registered:** end-to-end BC comparison, unchanged architecture
+continuation versus action-conditioned joint2D residual with encoder/core unfrozen.
+Same1024 champion/role-spread training perspectives and fixed batches;64 selection
+perspectives. Assessment uses remaining240 perspectives/30 replay bases excluded
+from previous head-probe assessment/calibration sets; these are not a newly decoded
+or pristine corpus-wide test set (the main model has already had full-val readout).
+Sourcebc6b8e14, workerd841bb67ce9e; gpup1GPU/4cores/24GB/1h limit.1000 updates
+maximum/arm, batch8/window256/burn32, base LR3e-5, new head1e-3, existing class
+weights/held0.3. Native unit sigma0/ground sigma1 targets. Select every200 steps by
+unweighted event-button NLL + soft click CE; patience3/min_delta0.001, baseline0
+eligible. Assert initial native-trainer loss equivalence and nonzero base gradient
+and parameter changes. Persist best trees and completed-arm evidence to NFS;
+private deep copies/EXIT cleanup. Full-corpus training and RL remain off.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot
