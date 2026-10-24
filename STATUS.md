@@ -306,9 +306,21 @@ than more readouts of the pre-target-repair checkpoint. Conservative target mask
 reuse v4 observations; disable unqualified D/F/ward action outputs. No reconversion,
 new inputs, simulator state or RL. This should have preceded extended head probes.
 Added explicit cast-guard bootstrap start so fresh training is not judged against
-an untrained uniform class prior; resume default remains immediate. Tests/smoke
-pending, planned full run depends on successful smoke. Scratch684.7GB free on
-inspection, enough for independent44.2GB source +~503.8GB cache +20GiB reserve.
+an untrained uniform class prior; resume default remains immediate. Source1c5fab88.
+**GPU13031 registered:** full BC tests + real monitored-training/forced-stop smoke;
+checks best_partial baseline preservation, guard activation and unsupported output
+masking. gpup2CPUs/8GB/20min. Durable `v7-clean-20261024/smoke-result.json`.
+**GPU13032 submitted afterok:13031:** fresh clean v7 on58470 player perspectives
+from7309 patch26.19 matches (52590train/5880validation). Same185/32x20/6 inputs,
+no reconversion/history/architecture additions. Unsupported D/F/ward outputs off;
+legacy target masks active. Batch128/window256/burn32, maximum3 epochs, eval500
+on512 fixed validation perspectives, patience4/min_delta0.001, cast guard start2000
+with max0.05 NLL increase/min100 events. gpup1GPU/4CPUs/24GB/16h limit; no requeue,
+TERM forwarded so NFS checkpoints persist before cleanup. Scratch684.7GB free on
+inspection, enough for private44.2GB source +~503.8GB cache +20GiB reserve.
+Logs/source/scripts in `/mnt/nfs/shared/modern-bc/v7-clean-20261024`; full job starts
+only if smoke succeeds. Early stop rather than mandatory epochs. No simulator/RL.
+Replay comparison published inline after desktop/mobile and interaction checks.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

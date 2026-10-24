@@ -966,3 +966,18 @@ immediate) to bootstrap fresh class probabilities before fixing a reference;
 otherwise a learned rare-class posterior can fail against uniform initialization.
 Planned fresh reference step2000; preserve existing within-epoch early stopping
 and baseline checkpoint. Tests and real training smoke gate the full job.
+
+Clean run queued, source1c5fab88. GPU13031 gates full BC tests plus real monitoring/
+forced-stop smoke: verify initial best_partial preservation, guard activation and
+D/F/ward output masks. GPU13032 has afterok:13031 dependency plus durable passed
+smoke check before staging. Dataset remains58470 perspectives/7309 matches,26.19;
+same finalized v4 inputs, corrected legacy target masks, no reconversion. Fresh
+model with unsupported D/F/ward outputs disabled, no inherited poisoned parameters.
+Same batch128/window256/burn32/class weights/no dropout;3-epoch ceiling,500-step
+512-perspective validation, patience4/min_delta0.001. Cast guard reference begins
+at2000 with0.05/min100 constraints. Full job gpup24GB/4cores/16h cap, --no-requeue;
+forward TERM, save NFS checkpoints and clean private staging. Source snapshot and
+all scripts/logs at `/mnt/nfs/shared/modern-bc/v7-clean-20261024`. This is training,
+not a new23h conversion. No claim of quality until clean heldout results arrive.
+Interactive replay comparison published inline after desktop/mobile/theme and
+actual control-event checks; original model remains until clean validation.
