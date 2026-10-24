@@ -192,15 +192,26 @@ unit clicks of85,872 eligible (58,908 train/26,887 assessment);77 targets absent
 from lagged visible rows excluded.192 perspectives took952s plus tests/staging.
 Evidence: `v6-full-20261022/pointer-targets-13019/results.json`.
 
-**GPU13020 registered:** frozen unit-pointer comparison on those128 train/64
-assessment perspectives. Sourcebc6b8e14; immutable worker79ecc87a4643, gpup1GPU,
-4 CPUs/20GB,1h limit. Compare nearest/first-visible, snapping original screen
-prediction to visible rows, entity-only pointer, and pointer with frozen GRU
-context. Both learned heads receive oracle button and unit-click type, train1000
-balanced-button minibatches; no production policy change. Reports per-button,
-held/event unit accuracy and projected click errors, including oracle identity
-projection as a lag/quantization ceiling. Private deep-copied inputs/code,
-EXIT cleanup. Receipt will trigger result inspection. No full BC retraining/RL.
+**GPU13020 COMPLETED/0:** frozen contextual pointer improves heldout exact
+unit selection66.75% (screen snapping)→73.67%,23724 scored unit clicks;
+new event orders60.70→70.78% (7066). Entity-only pointer65.14%, showing benefit
+from frozen recurrent context. Screen within2 cells68.46→74.59%; mean Manhattan
+screen distance5.08→3.72. Q/W/E within2 rise39.5/51.9/49.9→62.1/68.3/63.5%;
+R worsens67.7→38.7% on31 examples. Context pointer train76.0% vs73.7% assessment,
+but spell-specific train/heldout gaps are large. Sourcebc6b8e14,55s job worker.
+Evidence `v6-full-20261022/pointer-probe-13020/results.json`. This supplied oracle
+button and unit-click type, not end-to-end policy evidence. No promotion.
+
+**GPU13021 registered:** learned unit-versus-ground router with frozen base and
+13020 pointer.128 train perspectives fit only router (1000 balanced-button steps,
+fixed0.5 threshold);512 fresh assessment perspectives exclude all prior calibration
+and assessment replay bases. Uniform cap1024 valid clicks per perspective after
+burn-in, seed419, to bound memory. Compares original and hybrid screen errors for
+unit/ground and per button, with oracle versus actual predicted buttons and joint
+button/near-click accuracy. No true target type supplied to inference. Original
+screen output retained when router predicts ground or no entity is visible.
+Sourcebc6b8e14, workerb47a0f18024a, gpup1GPU/4cores/20GB/1h limit. Private copies,
+EXIT cleanup; receipt-driven. No full BC retraining or RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

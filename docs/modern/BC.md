@@ -775,3 +775,21 @@ accuracy, top3/NLL, projected screen errors, held/event and per-button counts;
 oracle target-row projection exposes lag/quantization limits. Oracle button and
 unit-click type are supplied, so this is not end-to-end BC evidence. Only small
 heads train, not the base checkpoint; no production action contract change.
+
+GPU13020 completed in55.2s worker time. Context pointer exact unit accuracy73.67%
+versus66.75% screen-snap,65.14% entity-only and26.69% nearest-visible across23724
+heldout clicks; event-only70.78 versus60.70% screen-snap (7066). Within2 cells
+74.59 versus68.46%; mean screen distance3.72 versus5.08. Q/W/E near rates improve,
+R drops67.7→38.7% on31 cases. Train accuracy76.0%; spell-specific overfit remains.
+Oracle target identity projects within2 in97.53%, so lag is not the main error.
+No production promotion: oracle action button and unit-click type were supplied.
+
+GPU13021 registered: sourcebc6b8e14/workerb47a0f18024a,20GB/4cores/1h. Frozen
+base and context pointer; learn unit/ground routing on128 training perspectives,
+1000 balanced-button steps, fixed0.5 cutoff.512 fresh assessment perspectives,
+excluding prior calibration/assessment replay bases, uniform1024-click cap per
+perspective, seed419. Reports ground-click damage and unit gains, per-button,
+oracle-button and actual-button routing, and joint button/near-click accuracy.
+No oracle target type in inference; empty entity sets and predicted ground clicks
+retain original screen predictions. This tests the missing routing decision before
+considering any architecture/action-contract integration or broad retraining.
