@@ -57,3 +57,24 @@ def test_contract_rejects_old_profile_even_with_a_copied_stamp():
     with pytest.raises(ReplayOnlyUnavailable):
         require_replay_only("old", dict(source_contract=SOURCE_CONTRACT, profile="modern-world-v3"))
     require_replay_only("new", dict(source_contract=SOURCE_CONTRACT, profile=OB.REPLAY_PROFILE))
+
+
+def test_feature_readout_preserves_policy_outputs():
+    from lanerl_jax.modern.rl.policy import LanePolicy, make_policy_config
+    from lanerl_jax.modern import obs as OB
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+
+    cfg = make_policy_config(OB.REPLAY_PROFILE, core="gru", d_model=8, n_heads=2,
+                             n_layers=1, ffn_dim=16, ctx_dim=8, core_dim=16,
+                             mlp_hidden=16, mlp_layers=1)
+    policy = LanePolicy(cfg)
+    args = (jnp.zeros((32, 20)), jnp.zeros(32, bool), jnp.zeros(cfg.self_dim),
+            jnp.zeros(6), policy.initial_carry(()))
+    params = policy.init(jax.random.key(0), *args)
+    normal, carry = policy.apply(params, *args)
+    readout, readout_carry, h = policy.apply(params, *args, return_features=True)
+    assert h.shape == (cfg.core_dim,)
+    for a, b in zip(jax.tree.leaves((normal, carry)), jax.tree.leaves((readout, readout_carry))):
+        np.testing.assert_array_equal(a, b)

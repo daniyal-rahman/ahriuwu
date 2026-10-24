@@ -97,7 +97,7 @@ class LanePolicy(nn.Module):
     button_off: tuple = ()
 
     @nn.compact
-    def __call__(self, entities, pad_mask, self_vec, global_vec, carry=None):
+    def __call__(self, entities, pad_mask, self_vec, global_vec, carry=None, *, return_features=False):
         c = self.cfg
         got = (tuple(entities.shape[-2:]), tuple(self_vec.shape[-1:]), tuple(global_vec.shape[-1:]))
         if got != ((c.n_slots, c.entity_dim), (c.self_dim,), (c.global_dim,)):
@@ -158,6 +158,8 @@ class LanePolicy(nn.Module):
                               screen_y=nn.Dense(c.n_screen_y, **HEAD)(h),
                               value=nn.Dense(1, name="value_head", **VALUE)(
                                   jax.lax.stop_gradient(h) if c.detach_critic else h)[..., 0])
+        if return_features:
+            return logits, new_carry, h
         return (logits, new_carry) if c.core == "gru" else logits
 
     def initial_carry(self, batch_shape=()):

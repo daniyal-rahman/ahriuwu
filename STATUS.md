@@ -144,14 +144,22 @@ Run `/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-resume-13013-2026102
 `best_partial.msgpack` is preserved independently of rolling checkpoints.
 Private scratch cleanup verified;638GB free NVMe, no orphan13013 directory.
 
-**Active/queued best-checkpoint evaluation13014**, gpup20GB/4cores/1h.
-Evaluates36500 on all5880 held-out player perspectives, reports champion/role and
-button/target metrics plus expected sampled action rates, probability assigned to
-true events and expected joint button/click probability within2cells per axis.
-This distinguishes argmax rarity from probability calibration/targeting failures
-before another training recipe or model change. Independent held-out-only staging
-and cache; no full training or RL active. Output `best-checkpoint-heldout.json`,
-log `modern-bc-v6-best-eval-13014.out` under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
+**Best checkpoint evaluation13014 COMPLETED/0**, all5880 held-out
+perspectives,33233804 scored decisions. Button accuracy91.34% vs82.22% majority;
+click exact5.88%,distance12.37. Q/W/E/R argmax recall10.83%/2.05%/3.95%/0.57%.
+Expected sampled Q/W/E/R rates4.19/2.04/2.20/0.355% vs human0.679/0.311/0.320/0.0565%:
+~6–7x over-casting, not simply absent cast probability. Mean probability assigned
+to true Q/W/E/R labels19.55/10.07/12.18/6.10%; expected joint button+click within
+2cells peraxis0.87/0.33/0.67/0.19%. Cast weighting5 and held-move weighting0.3
+produce uncalibrated probabilities; increasing cast weights is not the next fix.
+Shared click head is dominated by movement; investigate conditioning aim on action.
+Scratch cleanup verified,638GB free. Native FoW/RL remain deferred.
+
+Preparing a controlled frozen-policy readout experiment: shared versus
+button-conditioned residual click heads with identical training samples, plus
+weighted-button probability correction/calibration on separate held-out replay
+bases. Policy optionally exposes final features; default outputs are unchanged.
+This is a small diagnostic before any new broad training or action-contract change.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

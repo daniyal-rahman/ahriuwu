@@ -675,3 +675,16 @@ threshold precision/recall, and expected independent categorical button+click
 sampling within2cells of each axis. This diagnoses weak strict argmax recall
 versus weak assigned cast probabilities and targeting before another long run.
 Current decoder/native FoW remains deferred per Dani; no RL/PPO. Results pending.
+
+
+13014 COMPLETED/0, best36500 on5880 held-out perspectives/33233804 scored
+frames: accuracy91.34% vs82.22% majority, click exact5.88%/distance12.37.
+Q/W/E/R argmax recall10.83/2.05/3.95/0.57%, but expected sampled shares are
+4.19/2.04/2.20/0.355% vs labels0.679/0.311/0.320/0.0565% (~6–7x over-casting).
+Mean true-label probability19.55/10.07/12.18/6.10%; expected joint button+click
+within2cells peraxis0.87/0.33/0.67/0.19%. Low argmax recall is not evidence of
+low total sampled cast rate. More cast weighting would worsen calibration.
+The current click distribution is independent of selected button, mixing movement
+and all spell aims. Next is a small frozen-trunk shared-vs-action-conditioned
+readout ablation and button calibration using separate validation bases for fit
+and assessment. No production action contract change or long retraining yet.
