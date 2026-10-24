@@ -133,13 +133,25 @@ from danilogin sacct; runtime verifies that receipt, donor ownership and absence
 from live `squeue`, avoiding the compute-node accounting service. This exact check
 passed on desktop. No trainer/source/data changes since resume smoke.
 
-**Active/queued retry13013**, registered gpup24GB/4cores/16h, source104b05b8,
-resumes latest owned NFS checkpoint>=10000. Independent cache-copy recovery,
-progressive source reclamation and source-size/mtime cache stamp validation.
-Append logs, own-orphan cleanup and signal forwarding/wait remain enabled.
-Old cache/checkpoint intact when13013 submitted. Log:
-`/mnt/nfs/shared/modern-bc/v6-full-20261022/modern-bc-v6-resume-13013.out`.
-Await automatic receipt; no RL or dataset reconversion.
+**2026-10-24 BC13013 COMPLETED/0, early-stopped at38500 total steps.**
+Best sampled checkpoint36500, event+click NLL7.1787; four subsequent checks
+failed minimum improvement. Best sampled button accuracy91.32% vs82.15% majority,
+click exact6.00%, distance12.10cells. Q/W/E/R argmax recall7.54%/1.43%/4.92%/0.40%;
+joint button+click exact Q0.17%,E0.52%,W0.02%,R0%. Not yet strong standalone BC.
+Full epoch2 held-out accuracy91.17% vs82.22%, event NLL0.9158, click NLL6.3211,
+click exact5.14%, distance12.56. Final best36500 still needs full held-out scoring.
+Run `/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-resume-13013-20261023-194821-?`;
+`best_partial.msgpack` is preserved independently of rolling checkpoints.
+Private scratch cleanup verified;638GB free NVMe, no orphan13013 directory.
+
+**Active/queued best-checkpoint evaluation13014**, gpup20GB/4cores/1h.
+Evaluates36500 on all5880 held-out player perspectives, reports champion/role and
+button/target metrics plus expected sampled action rates, probability assigned to
+true events and expected joint button/click probability within2cells per axis.
+This distinguishes argmax rarity from probability calibration/targeting failures
+before another training recipe or model change. Independent held-out-only staging
+and cache; no full training or RL active. Output `best-checkpoint-heldout.json`,
+log `modern-bc-v6-best-eval-13014.out` under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

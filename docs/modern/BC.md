@@ -658,3 +658,20 @@ plus live scheduler absence and private donor ownership checks. The exact check
 passed on desktop before submitting13013 (gpup24GB/4cores/16h). Source104b05b8
 and the training recipe remain unchanged; checkpoint10000 and original cache
 were intact at submission. Retry uses append logs and existing recovery/cleanup.
+
+
+13013 COMPLETED/0, early stop38500total steps; best sampled36500 retained
+in `best_partial.msgpack`. Sampled event+click NLL7.1787, accuracy91.32%
+(majority82.15%), click exact6.00%, distance12.10. Q/W/E/R argmax recall
+7.54%/1.43%/4.92%/0.40%, joint exact Q0.17%/W0.02%/E0.52%/R0%.
+Full epoch2 held-out accuracy91.17% (majority82.22%), event NLL0.9158,
+click NLL6.3211, exact5.14%, distance12.56. The pipeline and broad learning work,
+but this is not adequate standalone action/target quality. No improvement claim
+based solely on overall accuracy. Scratch cleanup verified (638GB free).
+
+GPU13014 evaluates best36500 across all5880 held-out perspectives and adds
+probability calibration/expected sampled rates, true-event probabilities,
+threshold precision/recall, and expected independent categorical button+click
+sampling within2cells of each axis. This diagnoses weak strict argmax recall
+versus weak assigned cast probabilities and targeting before another long run.
+Current decoder/native FoW remains deferred per Dani; no RL/PPO. Results pending.
