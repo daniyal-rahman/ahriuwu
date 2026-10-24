@@ -648,3 +648,13 @@ paths only with matching source size/mtime; incompatible entries rebuild.
 Wrapper appends logs across requeues, cleans its own orphan staging at startup,
 forwards termination to the child and waits before cleanup. No shared mutable
 cache or hardlink/symlink staging. Resume results remain pending.
+
+
+13011 COMPLETED/0:45 tests; old4step checkpoint resumes to64total rather
+than68steps, verifying cursor/budget behavior.13012 failed before donor recovery
+because desktop sacct could not connect to localhost6819. No data/checkpoint
+changes. Recovery now uses a terminal-state receipt recorded by danilogin sacct,
+plus live scheduler absence and private donor ownership checks. The exact check
+passed on desktop before submitting13013 (gpup24GB/4cores/16h). Source104b05b8
+and the training recipe remain unchanged; checkpoint10000 and original cache
+were intact at submission. Retry uses append logs and existing recovery/cleanup.

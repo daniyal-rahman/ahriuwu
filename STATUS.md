@@ -125,19 +125,21 @@ Checkpoint `ckpt_000010000.msgpack` in
 `/mnt/nfs/checkpoints/lanerl-jax/modern-bc/modern-bc-v6-allroles-20261023-145300-?`.
 Resume must retain the three-epoch total ceiling, not add three more epochs.
 Trainer now replays shuffle/augmentation RNG draws and skips completed batches.
-Resume smoke13011 is registered on gpup and verifies a legacy4-step checkpoint
-continues to the original64-step epoch ceiling, rather than68steps.
-Full retry13012 is queued afterok:13011, source104b05b8. It resumes latest owned
-NFS checkpoint (at least10000), with the same recipe/seed/three-epoch ceiling.
-Recovery independently copies terminal13009's private arrays/cache into a fresh
-job directory, removes each source file only after successful independent copy,
-and rebases cache path stamps only when size/mtime identity matches. Unknown
-cache entries rebuild; reserve20GiB maintained. No shared mutable staging.
-On requeue, wrapper reclaims only its own orphan staging, appends logs, forwards
-signals and waits for checkpoint shutdown before EXIT cleanup. Donor13009 state
-must still be FAILED before recovery; no other job/data is touched.
-Logs `modern-bc-v6-resume-smoke-13011.out` and `modern-bc-v6-resume-13012.out`
-under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. Await automatic receipts.
+Resume smoke13011 COMPLETED/0:45 checks; old4step checkpoint resumed to
+original64-step ceiling with four completed batches skipped. Resume budget path
+verified.13012 failed before touching donor data because desktop `sacct` used
+an unreachable localhost accounting service. Terminal13009 state is now recorded
+from danilogin sacct; runtime verifies that receipt, donor ownership and absence
+from live `squeue`, avoiding the compute-node accounting service. This exact check
+passed on desktop. No trainer/source/data changes since resume smoke.
+
+**Active/queued retry13013**, registered gpup24GB/4cores/16h, source104b05b8,
+resumes latest owned NFS checkpoint>=10000. Independent cache-copy recovery,
+progressive source reclamation and source-size/mtime cache stamp validation.
+Append logs, own-orphan cleanup and signal forwarding/wait remain enabled.
+Old cache/checkpoint intact when13013 submitted. Log:
+`/mnt/nfs/shared/modern-bc/v6-full-20261022/modern-bc-v6-resume-13013.out`.
+Await automatic receipt; no RL or dataset reconversion.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64
