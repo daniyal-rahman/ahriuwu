@@ -258,13 +258,26 @@ received-own-cast age sidecars on128 train/64 assessment perspectives. Exact rep
 receipt elapsed seconds, unknown before first receipt, canonical summoner mapping,
 original observation lag. These are not cooldown duration/readiness and do not
 change production observations. Causality/mapping tests and CPU source audit next.
-**CPU13026 registered:** source5450052a/worker98bf4406aa4e, desktop2CPUs/8GB/1h.
-Runs full BC test suite, replays guard against real13025 selection and assessment
-results (must reject every candidate selection step and heldout Q/W/E), verifies
-544 decoder snapshot hashes, then extracts causal own-cast age sidecars on192
-perspectives. Reports known history and age>25.6s support; production inputs stay
-unchanged. NFS results `cast-history-13026/results.json`; private staging/EXIT
-cleanup. No GPU job, full-corpus retraining or RL for this task.
+**CPU13026 COMPLETED/0:**53 BC tests pass; real13025 regression replay rejects
+all sampled candidate selection checkpoints and heldout Q/W/E.544 decoder hashes
+verified.192 age sidecars completed in771s, preserving received timestamps,
+canonical summoners, NaN before first receipt and exact stored observation lag.
+Heldout410529 supervised frames: known Q/W/E/R/D/F histories374832/331986/341601/
+167489/261368/306740. Of known histories,25.7/44.0/40.6/74.5/93.3/90.9% extend
+beyond25.6s. This proves extra history exists, not that it improves prediction.
+Evidence `v6-full-20261022/cast-history-13026/results.json`.
+
+**GPU13027 registered:** matched bias-only, existing-context and context+own-cast
+age button readouts over frozen best36500.128 original training perspectives split
+by replay-base hash into fit/selection; original64 assessment perspectives (already
+used by earlier probes, not pristine test). Same natural-frequency batches,
+initial inverse-class-weight bias, lr3e-4,2000-step cap, eval250/patience4; event NLL
+selection with new cast guard. Age encoding log1p(seconds)/log1p(300) plus known
+mask, distinct from cooldown/readiness. Context control has identical architecture
+but zero age inputs; bias control isolates calibration. Heldout shuffled-age
+falsification checks whether any gain depends on actual histories. Source5450052a,
+worker3e43a24fe04d, gpup1GPU/4cores/20GB/1h. Private copies/EXIT cleanup. No base
+fine-tuning, production input changes, full-corpus retraining or RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

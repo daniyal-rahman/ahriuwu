@@ -897,3 +897,19 @@ sidecars. Reports per-slot known and outside25.6s recurrent-window support; cano
 D/F identity, NaN before first receipt, exact stored observation lag. Sidecars and
 source audit only, with no production observation/cache mutation. NFS outputs
 `cast-history-13026/results.json`; staging cleaned on EXIT. No GPU training running.
+
+CPU13026 COMPLETED/0:53 BC tests pass, real13025 cast-guard replay rejects every
+selection candidate plus assessment Q/W/E regressions.544 decoder hashes pass;
+192 received-age sidecars take771s. Heldout known QWERDF histories374832/331986/
+341601/167489/261368/306740 over410529 valid frames. Beyond25.6s among known:
+25.7/44.0/40.6/74.5/93.3/90.9%. Added history is available, predictive value untested.
+
+GPU13027 registered, source5450052a/worker3e43a24fe04d. Three paired frozen-base
+button readouts: bias calibration, learned existing context, and identical context
+readout with causal cast ages (log1p seconds/log1p300 + known bits).128 training
+perspectives split by replay base into fit/selection;64 assessment perspectives
+previously used by head probes. Same natural-frequency examples, inverse-weight
+initial bias, Adam3e-4,2000-step cap; selection event NLL every250 with cast guard
+and patience4. Heldout shuffled-age falsification. No new architecture until gains
+beat both controls without cast regression. gpup20GB/4cores/1h, private copies,
+EXIT cleanup. Production observation widths/checkpoint remain unchanged.
