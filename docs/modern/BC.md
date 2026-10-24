@@ -856,3 +856,17 @@ Normalize evaluation scalars to Python numbers and serialize NumPy scalars via
 `.item()`; real-NumPy nested float32/int64/bool test passes locally. Validate entire
 metric serialization before optimization. gpup24GB/4cores/1h, private staging and
 cleanup, durable best/partial outputs. No full retraining, production change or RL.
+
+GPU13024 stopped after1m09s, still before joint training. Parameter identity and
+continuous loss checks passed; within2 count differed by16/1127853 (274675 versus
+274691), rate delta0.000014186 beyond the original strict metric tolerance.
+The exact cause of hard argmax drift is not established. This is neither a
+candidate gain nor training failure. Reproducibility guard needs metric-specific
+limits rather than one tolerance for losses and discrete output rates.
+
+GPU13025 registered: same unfinished joint arm/sourcebc6b8e14, worker000bd4769814.
+Exact parameter-tree/dtype/value and observation counts; losses rtol/atol1e-5;
+hard accuracy rates absolute1e-4 and mean distance0.01 cell. Persist all prior/current
+metric deltas to `control-reproduction.json` before asserting, and require exact
+repeat of fixed-batch outputs in this run. No repeated control optimization.
+Same data/recipe/early-stop/checkpoints as13024; gpup24GB/4cores/1h.

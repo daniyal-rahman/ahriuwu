@@ -231,15 +231,21 @@ within2 24.354%, joint23.634%. Best control checkpoint persisted to NFS. Recover
 control score/gradient/assessment evidence from actual log into
 `endtoend-control-13023-recovered.json`; no successful candidate result exists.
 
-**GPU13024 registered:** only unfinished joint end-to-end arm trains. Reuse saved
-control, assert its parameters equal initial baseline and recomputed assessment
-matches completed log. Scalar-safe JSON serializer passed local real-NumPy nested
-float32/int64/bool check; each full metric tree also serializes before optimization.
-Sourcebc6b8e14/worker5fb84526f151, gpup1GPU/4cores/24GB/1h limit. Same1024 training,
-64 selection,240 assessment perspectives/30 bases, identical batches and native
-unit0/ground1 loss.1000 updates cap, base LR3e-5/head1e-3, eval200/patience3 with
-baseline0 eligible. Private staging cleaned on EXIT; receipt-driven. No control
-retraining, full-corpus retraining, production promotion or RL.
+**GPU13024 FAILED after1m09s before candidate training:** saved parameter
+identity and continuous loss reproduction checks passed, but hard within2-rate
+assertion was too tight:274675→274691 successes of1127853 clicks, absolute
+rate delta0.000014186 (0.00142 percentage points). The joint arm remains unrun.
+Exact reason for the argmax difference is not established; near-tied numerical
+predictions are plausible, not proven. Do not count this as candidate evidence.
+
+**GPU13025 registered:** same unfinished joint arm, sourcebc6b8e14/worker000bd4769814,
+gpup1GPU/4cores/24GB/1h. Saved control parameter tree/dtypes/values and frame/click
+counts remain exact; loss metrics retain rtol/atol1e-5. Hard accuracy rates allow
+absolute1e-4 (0.01 percentage points), distance0.01 cell. Full metric deltas persist
+in `control-reproduction.json` before checks; repeated fixed-batch outputs must
+match exactly within this run. Existing control is not retrained. Same1024/64/240
+perspectives,1000-update cap, native unit0/ground1 loss and early stopping. JSON
+fix remains in place. No full-corpus run, production promotion or RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot
