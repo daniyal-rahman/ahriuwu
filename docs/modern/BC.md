@@ -1034,3 +1034,24 @@ released and RUNNING (input staging, no resumed optimizer metrics yet). Startup
 Slurm cwd warning uses /tmp fallback because /srv alias is absent on desktop;
 both scripts explicitly cd into private extracted code before execution, and
 the actual smoke passed. Future submissions should specify --chdir=/mnt/nfs/projects/ahriuwu-modern-bc.
+
+**Predictive failure audit13035 registered**, responding to Dani's request to
+work ahead while13034 trains. CPU partition explicitly danilogin2CPUs/6GB/45min,
+no GPU contention and no optimizer or simulator execution. Source2568861a plus
+`failure-audit-TEMP.py` frozen at submission; private /tmp code/data/checkpoint
+copies removed on EXIT, NFS results.48 deterministic champion/role-spread
+perspectives (32train16val): valid/event/held and weighted button/click mass,
+spell-context primary/anonymous enemy visibility, known mana/rank/CD coverage.
+Accepted clean5500 checkpoint:8 natural+8 cast-centered256step training windows
+measure trunk gradient norms/cosines for button/click/spell-button/spell-click
+native loss contributions. Diagnostic strata only, no heldout quality claim.
+Results gate task-balancing/sampling experiment versus input coverage work.
+
+Code confirms no previous-action input, GRU reset each25.6s and missing qualified
+own cooldowns; anonymous extra champions lack identity embeddings. Shared
+factorized screen head is independent of chosen button. These predict repeat-cast
+timing, teamfight specificity and multi-target aiming limits; their actual impact
+is unmeasured. Earlier age readout failed and oracle pointer gains failed routing,
+so neither is promoted or repeated blindly. Fixed-reference cast NLL guard may
+reject aggregate gains; evaluate rate/precision/tolerant recall jointly before
+interpreting early stop as architectural evidence. No active-training recipe change.
