@@ -753,3 +753,11 @@ not nearest-coordinate matching, provide supervision. Existing Labels gains an
 optional target_id output only; original button/click calculations are unchanged.
 Only the same small subset is reconstructed, with observation equality checks;
 no full corpus rebuild or production action-contract change yet.
+
+CPU13019 registered for exact target-ID reconstruction on192 perspectives
+(128 train/64 assessment, sourcebc6b8e14,2 CPUs/8GB/1h). Requires all BC tests,
+frozen decoder SHA256 checks, original entity/padding equality at stored lag, and
+unchanged guarded button/click labels. Sidecars retain actual target ID, visible
+row and eligibility; report coverage lost when targets leave the lagged view.
+No policy promotion or full-corpus rebuild. Learned pointer comparison follows
+the reconstruction receipt.

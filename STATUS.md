@@ -185,8 +185,14 @@ argmax cast recall still nearzero. Conditional readout not promoted: Q distance
 W/R NLL worsens; movement slightly worsens. Frozen global features plus action
 conditioning alone are not an adequate aiming fix. No new full run.
 
-Preparing direct unit-target selection probe on the same128 train/64 assessment
-perspectives. Labels now expose actual replay target IDs for explicit and held
+**CPU job13019 registered:** exact target-ID reconstruction on the same128 train/64 assessment
+perspectives (desktop,2 CPUs,8GB,1h limit; sourcebc6b8e14). BC regression suite
+runs first. Output `pointer-targets-13019/results.json` only after all192 pass;
+log `/mnt/nfs/shared/modern-bc/v6-full-20261022/modern-bc-v6-pointer-targets-13019.out`.
+This job prepares verified pointer labels; the learned pointer comparison follows
+a successful receipt. No GPU or broad training job launched.
+
+Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot
 identity only on this small subset, require observation arrays match existing
 cached inputs, and map actual target IDs into the lagged visible slots. No nearest-

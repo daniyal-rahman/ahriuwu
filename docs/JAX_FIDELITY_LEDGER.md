@@ -757,3 +757,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | Target-guarded probe13018 | Source63c8d575 removes origin fallback and masks ambiguous historical targets at load time;48 tests precede same256-perspective controlled experiment. | Observations/cache reusable, no23h rebuild. New aiming/calibration results pending; historical summoner/ward gains are discarded. |
 
 | Corrected13018 / next pointer diagnostic |48 checks pass; calibration improves, but conditioned frozen readout has mixed aiming metrics and is not promoted. | Preserve real target IDs (including held attacks), reconstruct lagged slot identity on small subset with observation parity checks, test entity pointer vs baseline. No guessed target supervision/full conversion/RL. |
+
+| BC-V6-POINTER-TARGETS | 2026-10-24 | CPU13019 registered, sourcebc6b8e14: reconstruct exact received unit IDs and lagged entity-row mapping for128 train/64 assessment perspectives. Requires BC suite, decoder hashes, matching existing observation arrays and guarded action labels. Coverage report and sidecars precede learned pointer probe; no GPU/full retraining launched. |
