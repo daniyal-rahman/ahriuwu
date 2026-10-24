@@ -97,6 +97,7 @@ class Labels(NamedTuple):
     held: np.ndarray          # (T,) bool: filled from the order active at the time, not an event
     n_superseded: int
     n_repeat_attacks: int
+    target_id: np.ndarray | None = None  # actual replay unit id; -1 for ground/no target
 
 
 def lane_to_screen(ds, dn):
@@ -151,6 +152,7 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
     on_unit = np.zeros(n, bool)
     clamped = np.zeros(n, bool)
     source = np.full(n, -1, np.int64)
+    target_id = np.full(n, -1, np.int64)
 
     attack_times = np.asarray([a.t for a in actions if a.kind == "attack"])
     kinds: Dict[int, str] = {}
@@ -176,10 +178,11 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
                 continue
         chosen[k] = i
 
-    def click(k, x, y, unit: bool):
+    def click(k, x, y, unit: bool, target=None):
         d = np.array([x, y]) - me_xy[k]
         col, row, c = screen_cell(float(d @ axis), float(d @ normal))
         sx[k], sy[k], clamped[k], click_valid[k], on_unit[k] = col, row, c, True, unit
+        target_id[k] = int(target) if unit and target is not None else -1
 
     def unit_point(k, target):
         xy = unit_xy.get(target)
@@ -206,7 +209,7 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
             if a.target == attacking:
                 n_repeat += 1
                 continue
-            click(k, *p, unit=True)
+            click(k, *p, unit=True, target=a.target)
             button[k] = b["move"]
             attacking = a.target
         elif a.slot in CAST_BUTTON:
@@ -215,13 +218,13 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
             if a.slot in rules.self_cast or (a.slot < 4 and a.mode == "self"):
                 pass                                   # no cursor; the click loss is masked
             elif a.target is not None and a.target in enemies and unit_point(k, a.target) is not None:
-                click(k, *unit_point(k, a.target), unit=True)
+                click(k, *unit_point(k, a.target), unit=True, target=a.target)
             elif MODE_SELF_CASTS and me is not None and a.target == me and a.slot < 4:
                 pass                                   # cast on itself: no cursor
             elif ALLY_TARGET_CLICKS and a.target is not None and a.slot < 4 and unit_point(k, a.target) is not None:
-                click(k, *unit_point(k, a.target), unit=True)      # an allied target
+                click(k, *unit_point(k, a.target), unit=True, target=a.target)      # an allied target
             elif a.target is not None and unit_point(k, a.target) is not None and a.slot in (4, 5):
-                click(k, *unit_point(k, a.target), unit=True)      # summoners may target any unit
+                click(k, *unit_point(k, a.target), unit=True, target=a.target)      # summoners may target any unit
             elif a.slot in rules.unit_target or a.mode == "unit":
                 representable[k] = False               # a unit-targeted cast without a known target
                 button[k] = b["noop"]
@@ -260,9 +263,9 @@ def label_actions(t: np.ndarray, actions: List[Action], me_xy: np.ndarray, unit_
                 if p is None or math.dist(p, me_xy[k]) > _HOLD_ATTACK_RANGE:
                     active = None
                     continue
-                click(k, *p, unit=True)
+                click(k, *p, unit=True, target=active[1])
             button[k] = b["move"]
             held[k] = True
     uses = np.asarray(screen_usage(button), np.float32)
     return Labels(button, sx, sy, uses, click_valid & representable, on_unit, representable, clamped, source,
-                  held, n_superseded, n_repeat)
+                  held, n_superseded, n_repeat, target_id)

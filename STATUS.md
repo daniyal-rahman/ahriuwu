@@ -178,14 +178,20 @@ so loader conservatively masks summoner_d/f/ward labels rather than inventing
 noops or silently training origin clicks. Observation/cache arrays are reused.
 Excluded-target counts are recorded in training manifests. No23h reconversion.
 
-**Active/queued corrected probe13018**, gpup20GB/4cores/1h, source63c8d575.
-Same256 selected perspectives and frozen36500 backbone; legacy unqualified
-summoner/trinket targets are excluded by loader. All48 BC tests precede the
-probe, including reader origin rejection and real cached-loader masking with
-unchanged observations/buttons and source-qualified target acceptance.
-Log `modern-bc-v6-corrected-readout-13018.out`; result pointer
-`readout-probe-result.json` under `/mnt/nfs/shared/modern-bc/v6-full-20261022`.
-No broad training or production readout promotion yet. No RL/native-FoW wait.
+**Corrected probe13018 COMPLETED/0,48 tests.** Bad legacy targets excluded.
+Calibration assessment NLL0.3698→0.2859, Q sampled4.19→0.672% (human0.696%);
+argmax cast recall still nearzero. Conditional readout not promoted: Q distance
+22.89→16.06 but within2 only7.47→9.76%; E within2 worsens19.25→16.61%,
+W/R NLL worsens; movement slightly worsens. Frozen global features plus action
+conditioning alone are not an adequate aiming fix. No new full run.
+
+Preparing direct unit-target selection probe on the same128 train/64 assessment
+perspectives. Labels now expose actual replay target IDs for explicit and held
+unit clicks without changing existing numeric/button labels. Reconstruct slot
+identity only on this small subset, require observation arrays match existing
+cached inputs, and map actual target IDs into the lagged visible slots. No nearest-
+coordinate guess supplies supervision. Learn a pointer over entity rows against
+baselines before considering any production action representation change.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

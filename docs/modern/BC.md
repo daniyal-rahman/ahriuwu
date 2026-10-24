@@ -741,3 +741,15 @@ summoner/trinket target labels; observation arrays stay unchanged. All48 BC
 checks precede the experiment, including a cached-dataset integration test for
 masking without modifying buttons/observations and a resolved-target reader
 regression. No full conversion or broad training is repeated. Results pending.
+
+
+Corrected13018 COMPLETED/0,48 checks. Calibration on separate assessment bases
+NLL0.3698→0.2859; Q sampled4.19→0.672% (human0.696%). Conditional readout still
+mixed: Q distance22.89→16.06/within2 7.47→9.76%; E within2 19.25→16.61%,
+W/R NLL worse; no promotion. Next diagnostic retains actual replay target-unit
+IDs, maps them to lagged visible observation slots, and tests a direct entity
+pointer. This preserves identity lost by screen-grid regression; source IDs,
+not nearest-coordinate matching, provide supervision. Existing Labels gains an
+optional target_id output only; original button/click calculations are unchanged.
+Only the same small subset is reconstructed, with observation equality checks;
+no full corpus rebuild or production action-contract change yet.

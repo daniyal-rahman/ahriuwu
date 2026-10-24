@@ -56,6 +56,9 @@ def test_move_attack_repeat_and_cast_rules():
     assert not lab.representable[14] and lab.button[14] == B["noop"]
     assert lab.button[16] == B["summoner_d"] and lab.click_valid[16] and not lab.click_on_unit[16]
     assert np.array_equal(lab.uses_screen, np.asarray(screen_usage(lab.button), np.float32))
+    assert lab.target_id[3] == lab.target_id[7] == minion
+    assert lab.target_id[12] == champ
+    assert lab.target_id[0] == lab.target_id[10] == lab.target_id[16] == -1
     # The click on the minion lands right of centre and slightly up the lane (ds > 0, dn > 0).
     assert lab.screen_x[3] > N_SCREEN_X // 2 and lab.screen_y[3] < N_SCREEN_Y // 2
 
@@ -99,6 +102,8 @@ def test_held_labels_follow_the_active_order():
     assert lab.held[1:5].all() and (lab.button[1:5] == B["move"]).all() and not lab.click_on_unit[1:5].any()
     assert lab.click_valid[1:5].all() and lab.screen_x[2] < lab.screen_x[1]       # the destination comes closer
     assert not lab.held[5] and lab.held[6:10].all() and lab.click_on_unit[6:10].all()
+    assert (lab.target_id[5:10] == minion).all()
+    assert lab.target_id[10] == champ
     assert lab.button[10] == B["r"] and not lab.held[10] and not lab.held[11:].any()
     assert (lab.button[11:] == B["noop"]).all()
     # Standing still ends a held move; without `hold` nothing is filled.
