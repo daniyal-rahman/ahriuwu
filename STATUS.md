@@ -185,12 +185,22 @@ argmax cast recall still nearzero. Conditional readout not promoted: Q distance
 W/R NLL worsens; movement slightly worsens. Frozen global features plus action
 conditioning alone are not an adequate aiming fix. No new full run.
 
-**CPU job13019 registered:** exact target-ID reconstruction on the same128 train/64 assessment
-perspectives (desktop,2 CPUs,8GB,1h limit; sourcebc6b8e14). BC regression suite
-runs first. Output `pointer-targets-13019/results.json` only after all192 pass;
-log `/mnt/nfs/shared/modern-bc/v6-full-20261022/modern-bc-v6-pointer-targets-13019.out`.
-This job prepares verified pointer labels; the learned pointer comparison follows
-a successful receipt. No GPU or broad training job launched.
+**CPU13019 COMPLETED/0:**48 BC tests and544 decoder SHA256 checks passed.
+All192 perspectives reproduce the original lagged entity/padding arrays and
+accepted button/click labels. Exact received target IDs mapped to85,795 visible
+unit clicks of85,872 eligible (58,908 train/26,887 assessment);77 targets absent
+from lagged visible rows excluded.192 perspectives took952s plus tests/staging.
+Evidence: `v6-full-20261022/pointer-targets-13019/results.json`.
+
+**GPU13020 registered:** frozen unit-pointer comparison on those128 train/64
+assessment perspectives. Sourcebc6b8e14; immutable worker79ecc87a4643, gpup1GPU,
+4 CPUs/20GB,1h limit. Compare nearest/first-visible, snapping original screen
+prediction to visible rows, entity-only pointer, and pointer with frozen GRU
+context. Both learned heads receive oracle button and unit-click type, train1000
+balanced-button minibatches; no production policy change. Reports per-button,
+held/event unit accuracy and projected click errors, including oracle identity
+projection as a lag/quantization ceiling. Private deep-copied inputs/code,
+EXIT cleanup. Receipt will trigger result inspection. No full BC retraining/RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

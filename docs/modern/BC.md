@@ -761,3 +761,17 @@ unchanged guarded button/click labels. Sidecars retain actual target ID, visible
 row and eligibility; report coverage lost when targets leave the lagged view.
 No policy promotion or full-corpus rebuild. Learned pointer comparison follows
 the reconstruction receipt.
+
+CPU13019 completed:48 tests,544 decoder hashes, all192 perspectives pass exact
+input and guarded-label reproduction.85,795/85,872 eligible unit targets map into
+lagged visible rows;77 excluded, no inferred target IDs.58,908 train/26,887 heldout
+labels before recurrent burn-in. Reconstruction took952 seconds after tests.
+
+GPU13020 registered (gpup,4 CPUs/20GB,1h limit, sourcebc6b8e14, immutable probe
+worker79ecc87a4643). Frozen best36500 context, same128train/64assessment bases;
+entity-only and contextual pointer heads,1000 balanced-button batches each.
+Compare with nearest/first-visible and screen-snap baselines. Reports unit ID
+accuracy, top3/NLL, projected screen errors, held/event and per-button counts;
+oracle target-row projection exposes lag/quantization limits. Oracle button and
+unit-click type are supplied, so this is not end-to-end BC evidence. Only small
+heads train, not the base checkpoint; no production action contract change.
