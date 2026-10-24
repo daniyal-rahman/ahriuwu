@@ -155,18 +155,24 @@ produce uncalibrated probabilities; increasing cast weights is not the next fix.
 Shared click head is dominated by movement; investigate conditioning aim on action.
 Scratch cleanup verified,638GB free. Native FoW/RL remain deferred.
 
-**Active/queued controlled readout probe13015**, gpup20GB/4cores/1h,
-sourcef126f4e5. Runs46 BC tests including bit-exact default-output/feature-readout
-comparison. Frozen best36500 features; shared vs button-conditioned residual
-click heads get identical1000 balanced-button minibatches on128 training
-perspectives. Calibration64 and assessment64 perspectives use disjoint validation
-replay bases. Compares original/shared/conditioned pointing by action; conditional
-aiming uses the known action label, so it is not end-to-end policy success.
-Separately tests inverse class-weight correction and fitted temperature/bias on
-calibration bases, assessing rates and NLL only on other bases. No broad model
-retraining or production action-contract change yet. Log
-`modern-bc-v6-readout-probe-13015.out`; result pointer `readout-probe-result.json`
-under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. Await automatic receipt.
+**Readout probe13015 COMPLETED/0,46 tests passed.** Independent64-perspective
+assessment: fitted button calibration lowers NLL0.3731→0.2912, accuracy91.38→92.08%;
+Q sampled share4.19%→0.686% vs0.696% human. W/E/R rates also much closer, while
+argmax cast recall drops nearzero. Calibration repairs rate distortion, not
+missing cast intent. Fit used64 different validation replay perspectives/bases.
+Frozen action-conditioned aiming improves Q distance22.89→15.98cells and
+E17.17→14.20, but Q within2cells7.43→10.59%, E19.16→17.06%; W/R NLL worsens.
+Summoner/ward near-target rates reach100% on small supports65/97/130, suspiciously
+suggesting caster-centered labels rather than general aiming ability.
+No production conditional-head/calibration promotion or full retrain yet.
+
+**Active/queued CPU target-source audit13017**,8GB/2cores/30min,26 held-out
+perspectives. Compares raw slot4/5/12 resolved points/wire vectors against caster
+position and converted target-cell distributions. Inspect source qualification
+before accepting apparent summoner/ward aiming gains.13016 failed before audit
+on incorrect ROLE_LANE import; corrected to bc.convert,13017 replaces it.
+Outputs `target-audit-result.json`, log `modern-bc-v6-target-audit-13017.out`
+under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. No RL/native-FoW wait.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64

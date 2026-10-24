@@ -701,3 +701,17 @@ Calibration compares original logits, inverse class weights and fitted
 bias/temperature, assessed on other replay bases. No production action contract
 or full training changes yet. Note13014's NLLs are unweighted; training-monitor
 event NLL includes class weights and is not directly comparable in magnitude.
+
+
+Probe13015 COMPLETED/0,46 tests. On64 assessment perspectives separate from
+64 calibration-fit perspectives/bases, fitted logit bias/temperature lowers
+unweighted NLL0.3731→0.2912, accuracy91.38→92.08%, Q sampling4.19%→0.686%
+(human0.696%); other cast rates closer too. Argmax cast recall remains nearzero:
+rate calibration does not recover intent. Frozen action-conditioned aiming is
+mixed: Q/E distance22.89→15.98 /17.17→14.20; within2cells Q7.43→10.59%,
+E19.16→17.06%; W/R NLL worsen. Summoner/ward100% within2 on65/97/130 labels
+may reflect caster-centered target labels, not improved general aiming.
+CPU13017 audits raw slot4/5/12 targets/vectors against own position and converted
+cell distributions on26 perspectives.13016 failed on wrong ROLE_LANE import,
+fixed to bc.convert before submitting13017. No new broad training or production
+head/calibration integration until target-source results establish what is real.
