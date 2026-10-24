@@ -688,3 +688,16 @@ The current click distribution is independent of selected button, mixing movemen
 and all spell aims. Next is a small frozen-trunk shared-vs-action-conditioned
 readout ablation and button calibration using separate validation bases for fit
 and assessment. No production action contract change or long retraining yet.
+
+
+Controlled GPU probe13015 registered (20GB/4cores/1h), sourcef126f4e5.
+All46 BC checks precede extraction; the new check requires optional feature
+readout to preserve normal outputs bit-for-bit. Best36500 backbone frozen;
+shared and action-conditioned residual aiming heads receive identical1000
+balanced-button minibatches from128 train perspectives.64 calibration and64
+assessment perspectives have disjoint validation replay bases. Pointing results
+are conditional on the known action label, not end-to-end action success.
+Calibration compares original logits, inverse class weights and fitted
+bias/temperature, assessed on other replay bases. No production action contract
+or full training changes yet. Note13014's NLLs are unweighted; training-monitor
+event NLL includes class weights and is not directly comparable in magnitude.

@@ -155,11 +155,18 @@ produce uncalibrated probabilities; increasing cast weights is not the next fix.
 Shared click head is dominated by movement; investigate conditioning aim on action.
 Scratch cleanup verified,638GB free. Native FoW/RL remain deferred.
 
-Preparing a controlled frozen-policy readout experiment: shared versus
-button-conditioned residual click heads with identical training samples, plus
-weighted-button probability correction/calibration on separate held-out replay
-bases. Policy optionally exposes final features; default outputs are unchanged.
-This is a small diagnostic before any new broad training or action-contract change.
+**Active/queued controlled readout probe13015**, gpup20GB/4cores/1h,
+sourcef126f4e5. Runs46 BC tests including bit-exact default-output/feature-readout
+comparison. Frozen best36500 features; shared vs button-conditioned residual
+click heads get identical1000 balanced-button minibatches on128 training
+perspectives. Calibration64 and assessment64 perspectives use disjoint validation
+replay bases. Compares original/shared/conditioned pointing by action; conditional
+aiming uses the known action label, so it is not end-to-end policy success.
+Separately tests inverse class-weight correction and fitted temperature/bias on
+calibration bases, assessing rates and NLL only on other bases. No broad model
+retraining or production action-contract change yet. Log
+`modern-bc-v6-readout-probe-13015.out`; result pointer `readout-probe-result.json`
+under `/mnt/nfs/shared/modern-bc/v6-full-20261022`. Await automatic receipt.
 
 **GPU smoke13007 COMPLETED/0:**45 BC tests passed; actual training verified
 baseline and four within-epoch evaluations/checkpoints, normal completion at64
