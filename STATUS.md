@@ -276,15 +276,28 @@ weights stayed zero; falsification is uninformative. No predictive age benefit
 shown. Probe optimized natural all-frame loss but selected event-only loss; this
 objective mismatch limits interpretation. No input/model promotion.
 
-**GPU13028 registered:** smaller bias versus received-age-bin logit calibrator,
-source5450052a/workerea5ba252f569; gpup1GPU/4cores/20GB/1h. Same99/29/64 split and
-batches; both training and selection use class-unweighted CE with held0.3, as a
-matched objective.98-parameter age model (bias20 +6x12 unknown/time bins), zero
-initial offsets, L2 coefficient0.001. Age boundaries0.5/1/2/4/8/16/32/64/128/256s,
-received history only, never readiness. Same2000 steps/eval250/patience4 and spell
-guard. Report empirical human versus original/inverse-weight expected QWER cast
-counts by age bin, plus shuffled-age check. Directly tests the small history signal
-without a dense readout; no base tuning, production input change, broad retrain/RL.
+**GPU13028 COMPLETED/0,65.8s:** age-bin calibrator selects1000; bias selects0.
+Assessment weighted button NLL0.403222→0.402078; unweighted0.300801→0.298085,
+but event NLL0.502648→0.503030 and R NLL4.7248→4.7759 exceeds guard0.05 on
+heldout data. Shuffled ages retain most gain (weighted0.402559); age-specific
+benefit only~0.00048 weighted NLL. No production age input/calibrator promotion.
+Current BC remains best36500; standalone-quality goal still unmet. Stop age-head
+experiments. Decoder read-only recheck: unchanged043b9a83/v18; production exports
+unchanged, partial timer estimates do not supply newly qualified readiness data.
+
+Replay-only behavior audit: deterministic first qualified Q/R or Q/E events after
+180s from SHA-sorted heldout Garen/Jax/Ezreal/Lux perspectives,8 clips of8.1s.
+Fixed replay observations with original model predictions, click heatmaps and
+optional previously fitted calibration. Predictions do not change replay states;
+no simulator or training. Produces actual observation/prediction evidence before
+any further architecture change, not standalone rollout success evidence.
+**GPU13029 FAILED** during first clip extraction: packed entity loader accepts
+slices, not scalar indexes. No training or completed artifact. Fixed to one-row
+slice and added actual packed-loader shape check before inference.
+**GPU13030 registered:** source5450052a/workerce8a2b20dcd3, gpup1GPU/4cores/8GB,
+20min limit. Output `replay-behavior-13030/scenes.json`, private copies/EXIT cleanup.
+After receipt, inspect scene data and build human/model visual comparison. No
+full-corpus training, production changes or RL.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

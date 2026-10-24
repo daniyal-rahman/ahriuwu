@@ -930,3 +930,23 @@ selection250/patience4 with cast guard and unchanged baseline eligible. Report
 age-bin human and original/inverse-weight expected QWER counts to inspect raw
 signal, plus shuffled heldout ages. Existing base model and production input
 profile unchanged. gpup20GB/4cores/1h, private stage/EXIT cleanup, no broad retrain/RL.
+
+GPU13028 COMPLETED/0,65.8s. Selected history1000/bias0. Assessment weighted CE
+0.403222→0.402078, all-frame NLL0.300801→0.298085; event NLL worsens0.502648→
+0.503030. R class NLL4.7248→4.7759 violates0.05 heldout regression limit.
+Shuffled ages weighted CE0.402559, retaining most of the overall gain; direct
+age-specific gain~0.00048. No production promotion or larger age-model run.
+Read-only decoder recheck remains043b9a83/v18 with unchanged production exports
+and partial display estimates; no new qualified readiness source imported.
+
+Next evidence is a replay observation/prediction audit, not another training run.
+Eight deterministic8.1s clips: Garen Q/R, Jax Q/E, Ezreal Q/R, Lux Q/E, from first
+SHA-sorted heldout perspective having valid non-held events after180s outside
+burn-in. Include all local frames, entity rows and human/model targets/buttons,
+relative click heatmap, raw and previously fitted calibrated probabilities.
+Fixed replay state is never advanced by predictions; heuristic fog/canonical
+camera remain explicit. No error-based clip selection or closed-loop success claim.
+GPU13029 failed from scalar indexing of packed entity wrapper; fixed slice read
+and actual loader shape check. GPU13030 registered, source5450052a/workerce8a2b20dcd3,
+gpup8GB/4cores/20min, NFS `replay-behavior-13030/scenes.json`. Visual comparison
+follows receipt. No simulator, full retrain, production policy change or RL.
