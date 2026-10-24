@@ -779,3 +779,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 
 | BC-V6-ENDTOEND-RESULT | 2026-10-24 | GPU13025 COMPLETED/0,316s, native-loss/full-gradient checks pass. Step800 joint click NLL6.16265→6.07386, joint near23.636→23.916%, but Q/W/E recall and NLL regress. No promotion. Every selection checkpoint has E NLL increase>0.05; add per-cast guard to prevent aggregate masking. |
 | BC-V6-HISTORY-PREP | 2026-10-24 |192 metadata audit: own QWERDF cooldown availability all zero. Preparing exact received-cast elapsed seconds sidecars with canonical slots/lag, distinct from cooldown/readiness, plus causal tests. No production width change; CPU validation/source audit pending. |
+
+| BC-V6-CAST-GUARD-HISTORY | 2026-10-24 | CPU13026 registered, source5450052a/worker98bf4406aa4e. Full BC tests + actual13025 cast-regression rejection,544 decoder hashes and192-perspective received-own-cast age source audit. Age is exact elapsed receipt time, not cooldown/readiness; lag preserved, NaN before first receipt.2CPUs/8GB/1h; no production observation change or GPU training. |

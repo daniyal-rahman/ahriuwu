@@ -258,7 +258,13 @@ received-own-cast age sidecars on128 train/64 assessment perspectives. Exact rep
 receipt elapsed seconds, unknown before first receipt, canonical summoner mapping,
 original observation lag. These are not cooldown duration/readiness and do not
 change production observations. Causality/mapping tests and CPU source audit next.
-No GPU training, full-corpus retraining or RL queued at this point.
+**CPU13026 registered:** source5450052a/worker98bf4406aa4e, desktop2CPUs/8GB/1h.
+Runs full BC test suite, replays guard against real13025 selection and assessment
+results (must reject every candidate selection step and heldout Q/W/E), verifies
+544 decoder snapshot hashes, then extracts causal own-cast age sidecars on192
+perspectives. Reports known history and age>25.6s support; production inputs stay
+unchanged. NFS results `cast-history-13026/results.json`; private staging/EXIT
+cleanup. No GPU job, full-corpus retraining or RL for this task.
 
 Direct unit-target selection probe: Labels now expose actual replay target IDs for explicit and held
 unit clicks without changing existing numeric/button labels. Reconstruct slot

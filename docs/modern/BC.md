@@ -890,3 +890,10 @@ receipt; never infers readiness, duration, kit constants or future information.
 This source-only helper/sidecar does not alter v4 width/production inputs. Audit
 will measure history outside256-decision recurrent windows before another model
 experiment; no broad reconversion or simulator data.
+
+CPU13026 registered (source5450052a/worker98bf4406aa4e,2CPUs/8GB/1h): full BC tests,
+real13025 regression-gate replay,544 decoder hashes,192-perspective own-cast age
+sidecars. Reports per-slot known and outside25.6s recurrent-window support; canonical
+D/F identity, NaN before first receipt, exact stored observation lag. Sidecars and
+source audit only, with no production observation/cache mutation. NFS outputs
+`cast-history-13026/results.json`; staging cleaned on EXIT. No GPU training running.
