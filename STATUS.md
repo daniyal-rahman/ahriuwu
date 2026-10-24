@@ -585,3 +585,11 @@ if spells remain weak, choose one targeted timing/class-imbalance or aiming
 experiment with matched baseline, instead of more unfocused frozen-head probes.
 Calibration may repair probability rates but is not a substitute for cast intent.
 New-patch data scaling follows a defensible clean baseline; no RL or guessed CD.
+
+**2026-10-24 resume smoke13033 COMPLETED/0:**55 tests passed. Actual2→4-step
+resume preserved best0 checkpoint bytes, stale1 and cast reference2, then stopped
+at inherited patience2. Durable `resume-smoke-result.json` passed. Full13034
+released and RUNNING (input staging, no resumed optimizer metrics yet). Startup
+Slurm cwd warning uses /tmp fallback because /srv alias is absent on desktop;
+both scripts explicitly cd into private extracted code before execution, and
+the actual smoke passed. Future submissions should specify --chdir=/mnt/nfs/projects/ahriuwu-modern-bc.
