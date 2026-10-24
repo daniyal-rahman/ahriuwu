@@ -1107,3 +1107,28 @@ training changes. Existing validation reused, no fresh-test claim; human-count
 threshold not deployment policy, inverse weights cannot exactly undo held-label
 weighting.2CPUs/6GB/45min danilogin, private code/data/checkpoint copies and EXIT
 cleanup, NFS outputs. Main13034 unchanged, cache22000 at receipt check.
+
+**CPU13038 COMPLETED/0,675.5s:**64 existing heldout perspectives,358473 valid
+decisions at clean5500. Q/W/E/R exact AP3.732/1.845/3.062/0.780% versus class
+prevalence0.696/0.312/0.372/0.0787%; signal above prior, weak exact localization.
+Within0.5s-near labels AP29.23/16.03/25.09/8.20% versus near prevalence
+7.12/3.23/3.80/0.803%. These are frame rankings, not event-match recall or a
+deployable policy. At oracle human-count budget exact precision7.69/5.36/6.75/
+0.71%. No inference that unmatched frames are necessarily invalid human choices.
+
+Raw expected counts Q/W/E/R14454/5863/7376/1325 versus2496/1120/1334/282human.
+Fixed inverse-button-weight correction gives3591/1394/1830/321, but exact AP
+3.782/1.815/2.986/0.780% barely changes and argmax cast recall goeszero. Counts
+correction is not timing recovery; held-label weights prevent exact analytic
+calibration. Casting-context probabilities are elevated around human casts,
+but calibration alone cannot recover a strong policy at this checkpoint.
+
+Earlier history readout already had a64-wide nonlinear context+age head, so do
+not claim it lacked interactions or blindly rerun the same approach. It used the
+old pre-target-repair checkpoint and mismatched all-frame training/event selection;
+negative result is limited, but no history improvement is established. Do not
+launch another broad retrain or frozen head on this early checkpoint now. Let
+main13034 produce later clean parameters; repeat the same fixed ranking/rate/
+timing evaluation on the selected checkpoint before deciding whether causal
+own-action history requires a full-gradient input ablation. No deployment or
+production change promoted. Main13034 still active in cache construction at check.
