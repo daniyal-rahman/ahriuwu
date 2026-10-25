@@ -936,3 +936,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-NEXT-EVENT-TESTS-PASS | 2026-10-25 |13124 actual log95passed/40.26s;temporal target masks,causal marginal probability,teacher independence and conditional-delay gradient checks pass.13125 dependency cleared,no learned-quality claim/new jobs/promotion. |
 
 | BC-V2-NEXT-EVENT-RESULT-AND-CALIBRATION | 2026-10-25 |13125 passed4k/71val/6.989Mparams:rawcastmean.170 versus.190ref,nearAPworse,exactAPallcastsbetter(E.027→.054). Delaylossactive1.571;labels/smoothing differ,not established winner.13127/13128/13129 immediate-probability calibration chain registered,source3f25ce66;no baseline switch/promotion. |
+
+| BC-V2-NEXT-EVENT-CALIBRATION-FIT | 2026-10-25 |13127/13128 passed51cal/4k/horizon20,checkpoint9f53e19b…/manifest consistent. Immediate-rate-fitted T1/.7/.5 castF1.16848/.20172/.21086,T.5 frozen. Selection-only,13129 pending,no switch/new jobs/promotion. |

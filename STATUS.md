@@ -1572,3 +1572,10 @@ supervision. Summary next-event20-summary-13125.json.
 probabilities,not next-type logits;sameT/rate protocol,fingerprintgate,no val
 fitting. GPU1h/CPU20min/GPU1h,privatecopies/reserve,NFS,no-requeue/append.
 Awaitcallbacks,no baseline switch/policy promotion.
+
+**Next-event calibration13127/13128 COMPLETED/0.** Verified51unique
+cal IDs,step4000/horizon20,checkpoint9f53e19b… and actualmanifest hashes
+consistent. Rate-fitted T1/.7/.5 immediate-distribution calibration castF1
+.16848/.20172/.21086 over3draws;T.5 frozen. Belowreference selection.27364,
+but wait13129 frozen71val before final experiment verdict. No val fitting,
+new jobs,baseline switch or policy promotion on these receipts.
