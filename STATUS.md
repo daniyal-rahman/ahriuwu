@@ -734,3 +734,15 @@ no assumed fixed Ahri R/no blanket refractory; issued versus confirmed history;
 separate calibration; no repeated final-test tuning; real-client adapter unbuilt.
 New event/metadata foundation modules and tests are committed as unvalidated
 scaffolding, not a trained v2 model. Unrelated AGENTS/CLAUDE edits remain untouched.
+
+**V2 validation13041 registered**, source118edf40, worker e32a0efa90fc. Full BC
+suite plus24 deterministic Ahri-mid/Garen-top raw perspectives (6train/6val each):
+544 frozen decoder hashes, original observation/lag parity, per-spell target
+coverage/origin points/intervals and raw bin collisions. Consistent read-only
+SQLite snapshots inventory B and propose whole-match target reservations without
+reading performance labels for selection. No bulk decode or training. CPU desktop
+2cores/8GB/1h cap; fresh private scratch/code/catalog/data copies,30GiB initial
+reserve,20GiB per-game reserve, EXIT cleanup; results on NFS under
+`/mnt/nfs/shared/modern-bc/v2-20261024`. This is a sampled source gate, not all13
+complete audit requirements. SSH desktop check timed out; Slurm accepted the job,
+so no claim about old13034 staging cleanup or this job's runtime progress yet.
