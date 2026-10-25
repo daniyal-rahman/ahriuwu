@@ -39,6 +39,7 @@ class EventPolicyConfig(NamedTuple):
     conditional_aim: bool = True
     history: bool = True
     own_cast_history: bool = True
+    previous_event_history: bool = True
     opponent_relative_angle: bool = False
 
 
@@ -109,6 +110,9 @@ class EventPolicy(nn.Module):
             self_vec = self_vec.at[..., 24:].set(jnp.nan)
         if not c.own_cast_history:
             self_vec = self_vec.at[..., 24:28].set(jnp.nan)
+        if not c.previous_event_history:
+            entities = entities.at[..., 24:].set(jnp.nan)
+            self_vec = self_vec.at[..., 28:].set(jnp.nan)
         em = ~jnp.isfinite(entities)
         values = jnp.where(em, 0., entities)
         tokens = self.entity(values) + self.entity_missing(em.astype(jnp.float32))

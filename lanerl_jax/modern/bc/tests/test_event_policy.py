@@ -72,3 +72,34 @@ def test_missing_opponent_relative_angle_equals_global_head_without_new_paramete
     np.testing.assert_allclose(jax.nn.softmax(a.angle), jax.nn.softmax(b.angle), atol=1e-6)
     np.testing.assert_array_equal(a.button, b.button)
     np.testing.assert_array_equal(a.grid, b.grid)
+
+
+def test_previous_event_ablation_preserves_own_and_enemy_cast_history():
+    c = EventPolicyConfig(d_model=16, n_heads=2, n_layers=1, ffn_dim=32, ctx_dim=16,
+                          mlp_hidden=32, mlp_layers=1, core_dim=16, target_dim=16, pointer_dim=8,
+                          previous_event_history=False)
+    policy = EventPolicy(c)
+    args = [jnp.zeros((32, c.entity_dim)), jnp.arange(32) > 2, jnp.zeros(c.self_dim),
+            jnp.zeros(c.global_dim), jnp.zeros(32, jnp.int32), jnp.asarray(1), jnp.asarray(2),
+            jnp.zeros((4, c.metadata_dim)), jnp.zeros((4, c.metadata_dim)), jnp.asarray(0),
+            policy.initial_carry()]
+    params = policy.init(jax.random.key(3), *args)
+    before, state = policy.apply(params, *args)
+    args[0] = args[0].at[..., 24:].set(.9)
+    args[2] = args[2].at[28:].set(.9)
+    after, state_after = policy.apply(params, *args)
+    np.testing.assert_array_equal(before.button, after.button)
+    np.testing.assert_array_equal(state, state_after)
+    enabled = EventPolicy(c._replace(previous_event_history=True))
+    changed, _ = enabled.apply(params, *args)
+    args[0] = args[0].at[..., 24:].set(0.)
+    args[2] = args[2].at[28:].set(0.)
+    original, _ = enabled.apply(params, *args)
+    assert not np.allclose(original.button, changed.button)
+    args[2] = args[2].at[24:28].set(.9)
+    own, _ = policy.apply(params, *args)
+    assert not np.allclose(before.button, own.button)
+    args[2] = args[2].at[24:28].set(0.)
+    args[0] = args[0].at[..., 20:24].set(.9)
+    enemy, _ = policy.apply(params, *args)
+    assert not np.allclose(before.button, enemy.button)

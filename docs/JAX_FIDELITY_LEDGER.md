@@ -900,3 +900,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-8000-TRAIN-GAP | 2026-10-25 |13108 passed51cal+71train assessments,8k checkpoint e969520f…. Raw castmeanF1 train.246/val.215,gap.031 versus4k.010;Q/E/R ranking gaps grow. Train subset first71sorted,not full train/causal estimate. Held-out gains persist but emerging generalization gap argues against blind extension. Await13109/13110,no new jobs/promotion. |
 
 | BC-V2-8000-CALIBRATION-FIT | 2026-10-25 |13109 passed51cal,fingerprintse969520f… consistent. T1/.7/.5 castF1.22149/.25642/.26778,T.5 selected. Selection score slightly below4k.27364,not held-out winner evidence.13110 frozenval pending;no new training/promotion. |
+
+| BC-V2-8000-CALIBRATED-PLATEAU | 2026-10-25 |13110 passed71val:mean castF1.264 versus4k.276;E/attack improve,R regresses. Keep4k reference,stop duration extension. Added previous-event-only toggle preserving cast ages/default behavior/parameter shapes,regression unrun. Audit replay history dependence before next architecture change;not leakage/closed-loop proof. |

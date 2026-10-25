@@ -1381,3 +1381,16 @@ T1/.7/.5 calibration mean castF1 .22149/.25642/.26778 over3draws;T.5 frozen.
 Best calibration score below4k .27364,although rawT1 is higher;selection-set
 difference alone does not establish a checkpoint winner. Await frozen71-val
 13110;no more duration/new jobs/policy promotion on this receipt.
+
+**Calibrated8k13110 COMPLETED/0**,71val at8000. Calibrated4k→8k
+Q/W/E/RF1 .3456/.2885/.2318/.2368→.3348/.2849/.2535/.1813;mean
+.27568→.26364. AttackF1 .4811→.5040,move.8349→.8335;aim6.45/10.65deg.
+RatesQ/W/E/R.999/.888/.956/.883. Do not extend duration; retain4k as offline
+reference candidate,not promoted standalone policy. Summary calibrated8000-summary-13110.json.
+**Previous-event-only ablation implemented**,default on/old checkpoints default
+on,identical parameter shapes. Flag masks self28:40 previous command group and
+entity24 previous-target match;retains self24:28 own cast ages and entity20:24
+observed enemy ages. Regression checks masked-feature invariance and retained
+cast-history sensitivity. Tests unrun; next CPU gate then matched4k train and
+frozen-reference feature-removal assessment. Motivation is replay human-history
+dependence/deploy distribution shift,not proof of leakage or a closed-loop test.
