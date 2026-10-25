@@ -1688,3 +1688,13 @@ buttonaccuracy67.01→72.07%;trainingdiagnostics only,no targetquality or transf
 claim. No validation requested or written. Afterok13142 Ahri fine-tune gate
 cleared;13141matchedcontrol alreadyregistered. Await both finalAhri readouts,
 no new jobs or policy promotion.
+
+**Ahri staged-control13141 COMPLETED/0**,phase2 4000updates/1910.93s,
+470train/71val. Actual config verifieslr1e-4/weights-only Ahri1000 donor/fresh
+optimizer provenance. RawQ/W/E/RF1 .2390/.1816/.1102/.1442,mean.16873
+versus original4k3e-4schedule.18966;Q/Eaim7.41/11.43deg,move17within2
+16.53%,pointer73.02%. Staging/lowerLR has no automatic benefit;this is the
+matchedrecipecontrol for13142,not an equal-budget comparison to4k reference.
+Summary ahri-staged-control-summary-13141.json. Awaitmixed fine-tune13142
+before transfer conclusions or selecting calibration followups;no new jobs/
+policy promotion on this receipt.
