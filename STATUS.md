@@ -1188,3 +1188,19 @@ Relative coordinates outperform angle+3x on E (14.27 versus22.37deg), similar Q
 Summary relative-angle-summary-13090.json. All model prerequisites for paired
 report13091 now completed; await its intervals before deciding combinations.
 Calibration13093–13095 remains registered; no duplicate jobs on this receipt.
+
+**Paired report13091 COMPLETED/0**,71 held-out matches,500 paired bootstrap
+draws per arm versus angle reference. Smooth2 sampled F1 deltas Q+.0396
+[.0289,.0495],W+.0167[.0098,.0246],E+.0241[.0129,.0359],R includes0;
+attack-.0071[-.0109,-.0032]. Relative-angle Q/E mean per-match median error
+deltas -3.44[-4.28,-2.59]deg/-13.09[-16.07,-10.15]deg, but movement within2
+-.00681[-.00836,-.00527]. Aim3 Q/E improvements also exclude0; smooth1
+castF1 intervals all include0. These intervals cover match variation conditional
+on ONE training/sampling seed, not seed robustness or multiple-testing control.
+Reports: shared v2-20261024/ablation-reports-13091.
+**Combined relative-angle+smooth2 job13096 registered**, tested source8c668da2,
+same1000updates/b64/seed0/window256/burn32/470train/71val as isolated arms;
+cast aim weight1, own history on. Tests whether timing/aim gains coexist and
+measures movement/attack tradeoffs; no new code, labels or calibration fitting.
+Private deep-copy staging,20GiB reserve,NFS outputs,no-requeue/append,1h limit.
+Await13096 and calibration13093–13095 callbacks; no policy promotion.
