@@ -1467,3 +1467,11 @@ chosen checkpoint or deploy-ready policy.
 51cal collect/fit/frozen71val score fordropout donor13114. Normal history at
 calibration/eval;no reuse ofreference biases. GPU1h/CPU20min/GPU1h,private
 deepcopies/reserve,NFS,no-requeue/append. Awaitcallbacks;no promotion.
+
+**Dropout calibration13116/13117 COMPLETED/0.** Actual metadata verifies
+51uniquecal,step4000,dropout.3 training contract,checkpoint79971010… and
+actual dataset manifest fingerprints match. Rate-fitted T1/.7/.5 mean castF1
+.18850/.23364/.25621 across3draws;T.5 frozen. Calibration score below
+reference4k .27364,selection-set only;normal-performance cost versus missing-
+history benefit remains a tradeoff,not an established winner. Await13118
+frozen71val;no new jobs or policy promotion on these receipts.
