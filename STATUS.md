@@ -1160,3 +1160,9 @@ rate matching; unsupported calibration classes disabled (stop has no labels).
 No future lookahead, refractory or engine masks. Private immutable staging,
 20GiB reserve,no-requeue/append; logs/results NFS. Calibration not completed yet,
 B untouched. Await13087/13090/13091 plus13092–13095; no policy promotion.
+
+**Calibration regression gate13092 COMPLETED/0:** actual NFS log confirms
+84 tests passed in39.12s. This clears the afterok gate for51-perspective
+calibration collection13093; fitting13094 and frozen71-val assessment13095
+remain dependent on upstream success. No calibration-fit or calibrated-policy
+quality result yet. Await registered callbacks; no duplicate jobs or promotion.
