@@ -1603,3 +1603,19 @@ reserve,NFS,no-requeue/append. Tests/quality pending;awaitcallbacks,no promotion
 including GRU-reset boundary and unchanged emitterPRNG sequence regression.
 Afterok13131 evaluation gate cleared;memory-effect quality result pending.
 Awaitregistered callback,no new jobs or policy promotion.
+
+**Memoryreset25613131 COMPLETED/0**,71val/frozen4k/T1/sample0.
+Fullstate→reset rawQ/W/E/RF1 .2829/.2044/.1281/.1432→.2820/.2037/
+.1329/.1455,mean.18966→.19102;nearAP/aim/pointer/movement almost unchanged.
+Periodicreset is not a large aggregate timing fix. Summary memory-reset256-summary-13131.json.
+**13133 CPU boundaryreport registered**,sourcee0322297 plus immutableworker,
+compares same cached full/reset predictions on first50 supervisedrows(phase32:82)
+andlaterrows(82:256),masking burn32 at everywindow forboth. Compare reset/full
+within groups,not raw early/later F1 across different event distributions.
+**Garen timing-control13132 registered**,sourcee0322297,185train/25cal/26val,
+1600/b64/seed0/window256/burn32,smooth2,standardframewise,aux/dropoutoff,
+noAhriangle/relativehead. OneGPUjob train→own25cal fit→frozen26val,artifacts
+v2-garen-timing-control-13132. SelfcastQWE/unitR simpler-kit diagnostic,not
+equal-data Ahri comparison or fullquality gate (Garen count below300).
+CPU20min/GPU1h,privatecopies/reserve,NFS,no-requeue/append;awaitcallbacks,
+no policy promotion.

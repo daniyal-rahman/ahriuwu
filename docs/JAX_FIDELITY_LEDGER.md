@@ -944,3 +944,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-MEMORY-RESET-QUEUED | 2026-10-25 |13130 fullsuite→13131 frozen4k GRUreset256 registered,sourcee0322297,same71val/T1/sample0,PRNG/historyinputs preserved. Compare savedfullstate13103,not statecarry training. Tests/quality pending,private staging/NFS/no-requeue,no promotion. |
 
 | BC-V2-MEMORY-RESET-TESTS-PASS | 2026-10-25 |13130 actual log96passed/40.28s,resetboundary/RNGstream regressionpasses.13131 dependencycleared,no memory-quality claim/new jobs/promotion. |
+
+| BC-V2-MEMORY-RESULT-AND-SIMPLER-KIT-CONTROL | 2026-10-25 |13131 passed71val:full/reset castmean.18966/.19102,othermetricsalmostsame.13133 early/later boundarypaired diagnostic queued.13132 Garen185/25/26 train1600→owncal→val queued,sourcee0322297;selfcast-kit timing diagnostic,not equaldata/qualitypromotion. No sim/B/RL. |
