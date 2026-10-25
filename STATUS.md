@@ -1903,3 +1903,12 @@ by ID; no automatic retry of that snapshot. Replacement checks use a fresh
 immutable attempt directory. Worktree disposition classifies5dirty archived,
 18clean archived,8dirty nonarchived,6app-bound unmerged,2app-bound fully contained
 and2canonical/independent clean checkouts; preserve app bindings and unique work.
+
+
+Integration replacement gates registered:CPU13145(full120tests/24reconversions/
+profile),GPU13146afterok13145(32step learner/resume/evaluation and controls),
+frozen524c508c under integration-20261025/attempt-2.11targeted fixture regressions
+passed6.24s. Landingmodern/bc pending actual gates; recheck targethead and preserve
+AGENTS/CLAUDE edits. No main PR/push claimed. Worktree/snapshot disposition is
+recorded in the running review document; no dirty/app-bound tree or immutable
+evidence removed. Attempt1/13143failure and cancelled13144preserved; no autoretry.

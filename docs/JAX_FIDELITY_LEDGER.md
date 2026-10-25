@@ -64,6 +64,29 @@ them blindly would leave stale app workspace bindings. No deletion/prune or
 history rewrite; preserve branches and unique changes. Cross-domain main
 consolidation needs its own review, not a blanket rebase.
 
+## Landing gate and snapshot disposition
+
+Combined code committed as merge2e7d575f, preserving current BCparentf10e4f42.
+Fixture-only correction524c508c passes11targeted tests6.24s. Registered CPU13145
+runs all120tests plus24real reconversions and profile; GPU13146afterok13145 runs
+32step control/resume/evaluation, exact serialization, bounded continuation,
+independent random-label and history diagnostics. Immutable inputs:
+`/mnt/nfs/shared/modern-bc/integration-20261025/attempt-2/` with source archive,
+SHA256, source-manifest and scripts. Attempt1/failed13143remain preserved;
+cancelled13144must not be restarted. Production landing is **pending** these
+checks. Recheck modern/bc head before fast-forward; merge/revalidate intervening
+changes rather than reset/cherry-pick away newer code. Preserve AGENTS/CLAUDE
+user edits. No remote publication or main integration claimed yet.
+
+Historical snapshots/data/checkpoints are retained and identified by contract,
+source commit and content hashes. They are never copied over a mutable current
+checkout or relabelled compatible. Existing v1/v2datasets must be reconstructed
+under v3, not have their manifests edited to pass loaders. Explicit weight-only
+initialization retains donor provenance and starts a fresh optimizer; it does not
+constitute a v3resume or promote donor quality. No bulk data rebuild launched
+solely for cleanup. All future validation jobs stage independent copies from the
+named immutable source. No active Slurm job or another agent's worktree changed.
+
 ## Historical checkpoint before integration
 
 - Production review baseline: `modern/bc` resolved to **f10e4f4274bbbdbe3d7a2d7057e7a7fdcb639604**.
