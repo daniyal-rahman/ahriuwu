@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from .event_batches import event_batch, event_windows, load_event_games
+from .event_batches import event_batch, event_windows, load_event_games, ahri_angle_targets
 from .event_eval import evaluate_games
 from .event_loss import INPUTS, make_event_loss
 from .event_policy import EventPolicy, EventPolicyConfig
@@ -38,6 +38,8 @@ def main():
     p.add_argument('--warmup', type=int, default=100)
     p.add_argument('--save-every', type=int, default=250)
     p.add_argument('--conditional-aim', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--ahri-angle', action='store_true')
+    p.add_argument('--cast-aim-weight', type=float, default=1.)
     p.add_argument('--history', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--evaluate', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--eval-limit', type=int, default=0)
@@ -45,6 +47,8 @@ def main():
     a = p.parse_args()
     if a.steps < 2 or min(a.batch_size, a.save_every, a.window) <= 0 or not 0 <= a.burn < a.window:
         p.error('invalid update/window/batch budget')
+    if not np.isfinite(a.cast_aim_weight) or a.cast_aim_weight <= 0:
+        p.error('cast aim weight must be finite and positive')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('training requires a Slurm GPU allocation')
     a.output.mkdir(parents=True, exist_ok=False)
@@ -56,11 +60,14 @@ def main():
     # Sampling is stateless by global update, so resume repeats no completed draw.
     contract = dict(config=cfg._asdict(), steps=a.steps, batch_size=a.batch_size, window=a.window,
                     burn=a.burn, seed=a.seed, lr=a.lr, warmup=a.warmup, dataset_sha256=manifest_hash,
-                    champion=a.champion, smoothing=[1.], co_move_weight=0., auxiliary_weight=0.)
+                    champion=a.champion, smoothing=[1.], co_move_weight=0., auxiliary_weight=0.,
+                    ahri_angle=a.ahri_angle, cast_aim_weight=a.cast_aim_weight)
     contract_json = json.dumps(contract, sort_keys=True)
     (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     started = time.monotonic()
     games = load_event_games(a.dataset, split='train', champion=a.champion)
+    if a.ahri_angle:
+        ahri_angle_targets(games)
     if not games:
         raise ValueError('no training perspectives')
     windows = event_windows(games, a.window)
@@ -94,7 +101,7 @@ def main():
         params = serialization.from_state_dict(params, saved['params'])
         state = serialization.from_state_dict(state, saved['opt_state'])
         step = int(saved['step'])
-    loss = make_event_loss(policy)
+    loss = make_event_loss(policy, cast_aim_weight=a.cast_aim_weight)
 
     @jax.jit
     def update(params, state, batch):
@@ -134,6 +141,8 @@ def main():
     if a.evaluate and not stopping:
         del games, batch
         games = load_event_games(a.dataset, split='val', champion=a.champion)
+        if a.ahri_angle:
+            ahri_angle_targets(games)
         games = sorted(games, key=lambda g: g['row']['base'])
         if a.eval_limit:
             games = games[:a.eval_limit]

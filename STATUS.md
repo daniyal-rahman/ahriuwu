@@ -943,3 +943,18 @@ angle/head/history changes. Report aggregator implemented for summed event count
 per-button joint/conditional target success and match-bootstrap paired intervals;
 macro frame AP and mean per-match median point errors explicitly named, not pooled
 AP or pooled medians. Aggregator syntax checked; real broad validation unrun.
+
+**Ahri baseline13074 COMPLETED/0**,1000 updates/661.46s training,6.903Mparams,
+b64 median0.3818s/update. Full71val/451441valid frames: greedy emits0attacks and
+0QWER/recalls; expected QWER counts0.942/1.047/0.955/0.926x human. Exact-frame
+macro AP Q/W/E/R0.06355/0.03521/0.02073/0.02579. Teacher Q/E within2cells only
+1.57/1.41%,mean per-match median25.43/24.69cells; attack pointer68.68%.
+Movement teacher within2 9.93%,mean per-match median10.89cells. Not useful policy
+quality and no promotion. Raw greedy diagnostic is not intended sampled-emitter
+quality.13075 matched unconditional remains registered; await its result.
+Implemented isolated Q/E angle-label and3x cast-aim ablation flags, preserving
+original aim-valid support for parameterization comparison (no clipped-label
+recovery yet). Added sampled emitter with RNG carried across chunks and targets
+conditioned on sampled buttons, plus checkpoint assessor/prediction export.
+Tests added for weighting isolation, label/input preservation and sampled-target/
+chunk invariance. Not Slurm validated yet; no new ablation training launched.

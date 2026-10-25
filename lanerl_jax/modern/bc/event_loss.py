@@ -32,7 +32,7 @@ def grid_ce(logits, x, y, sigma=1., nx=96, ny=54):
     return -jnp.einsum('...y,...x,...yx->...', qy, qx, lp)
 
 
-def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.):
+def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1., cast_aim_weight=1.):
     forward = make_event_forward(policy)
 
     def ce(logits, index):
@@ -54,14 +54,20 @@ def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.)
         w = batch['weight']
         target_w = w * batch['aim_valid'] * (batch['aim_mode'] != 0)
         denom = jnp.maximum(w.sum(), 1.)
-        total = (w * button).sum() / denom + (target_w * aim).sum() / denom
+        cast = (batch['button'] >= B['q']) & (batch['button'] <= B['r'])
+        aim_scale = jnp.where(cast, cast_aim_weight, 1.)
+        weighted_aim = target_w * aim_scale * aim
+        total = (w * button).sum() / denom + weighted_aim.sum() / denom
         info = dict(button_nll=(w * button).sum() / denom,
                     aim_nll=(target_w * aim).sum() / jnp.maximum(target_w.sum(), 1.),
                     button_accuracy=(w * (lg.button.argmax(-1) == batch['button'])).sum() / denom)
         for name, mode in [('unit', UNIT_TARGET), ('point', POINT_TARGET), ('angle', ANGLE_TARGET)]:
             mask = target_w * (batch['aim_mode'] == mode)
-            info[name + '_loss_mass'] = (mask * aim).sum() / denom
+            info[name + '_loss_mass'] = (mask * aim_scale * aim).sum() / denom
             info[name + '_count'] = mask.sum()
+        info['cast_aim_count'] = (target_w * cast).sum()
+        info['cast_aim_loss_mass'] = (weighted_aim * cast).sum() / denom
+        info['noncast_aim_loss_mass'] = (weighted_aim * ~cast).sum() / denom
         if co_move_weight:
             cast = (batch['button'] >= B['q']) & (batch['button'] <= B['r'])
             cw = w * cast

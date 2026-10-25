@@ -72,3 +72,18 @@ def event_batch(games, items, window=256, burn=32):
         batch['weight'][i, :length] = arrays['valid'][start:end]
         batch['weight'][i, :burn] = 0.
     return batch
+
+
+def ahri_angle_targets(games):
+    """Q/E direction ablation on exactly the existing valid point labels."""
+    from .event_labels import POINT_TARGET, ANGLE_TARGET
+    from .events import BUTTON_INDEX as B
+    for game in games:
+        if game['row']['champion'] != 'Ahri':
+            continue
+        arrays = game['arrays']
+        selected = (arrays['valid'] & arrays['aim_valid'] &
+                    (arrays['aim_mode'] == POINT_TARGET) &
+                    np.isin(arrays['button'], [B['q'], B['e']]) & np.isfinite(arrays['angle']))
+        arrays['aim_mode'][selected] = ANGLE_TARGET
+    return games
