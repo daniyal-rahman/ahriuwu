@@ -795,3 +795,10 @@ for missing-anchor handling, file identity, padding/burn-in/incomplete manifests
 AP ties and matching across invalid gaps. Real model evaluation remains unrun.
 Await registered13043 conversion and afterok13044 gradient receipts; no broader
 v2 training or quality result yet. Unrelated AGENTS/CLAUDE edits untouched.
+
+**V2 conversion13043 COMPLETED/0:**70 tests passed33.61s; all24 source-audited
+perspectives converted in119.44s,158037 valid frames, completed manifest on NFS
+at `v2-20261024/dataset-smoke-13043`. Missing-anchor regression passes. Dependent
+GPU13044 is registered; await its actual result. Target-only sharded converter
+implemented, reserving match-wide A-training calibration before full828-example
+Ahri-mid/Garen-top conversion. B remains untouched.
