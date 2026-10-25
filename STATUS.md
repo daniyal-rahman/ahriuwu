@@ -976,3 +976,17 @@ All no-requeue/append, logs/checkpoints NFS; runtime training measured11min for
 first baseline including startup, plus evaluation/queue. Paired13075 remains
 registered, no result inspected yet. Baseline summary saved to
 `v2-20261024/baseline-summary-13074.json`; await registered callbacks.
+
+**Matched unconditional13075 COMPLETED/0**,same71val match IDs as13074.
+Conditional versus unconditional teacher Q within2 1.570%vs1.265%, E1.410%vs1.128%,
+movement9.932%vs9.449%; attack pointer68.678%vs68.956%. Macro exact-frame Q AP
+6.355%vs6.583%, E2.073%vs2.189%; greedy QWER zero in both. These are small,
+mixed changes and neither policy is useful; no conditional-head quality promotion.
+Summary `v2-20261024/conditioning-summary-13075.json`.
+**Ablation/emitter tests13076 COMPLETED/0:**78 passed35.66s, including isolated
+cast-aim weighting, angle-label/input support, sampled target follows emitted
+button, and PRNG continuity across chunks.13077/13078/13079 dependencies cleared.
+**CPU paired report13080 registered**, source73fe070d,500 match-bootstrap draws,
+conditional-minus-unconditional intervals on same71matches, private snapshots/
+NFS output. This assesses uncertainty, not a new training run. Await registered
+13077 emitter,13078 angle,13079 cast-weight and13080 reports; calibration/B unused.
