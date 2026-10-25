@@ -1019,3 +1019,13 @@ counts asserted equal; output timing-null-13081.json on NFS. This compares tempo
 alignment to a frequency/context baseline, not action-target quality, independent
 training seeds or closed-loop competence. Private copied predictions/code and
 20GiB reserve; no new model training. Await13081 and aim ablations13078/13079.
+
+**Timing null13081 COMPLETED/0**,32 permutations preserve each button's count
+within every valid segment. Observed versus null-median F1: movement0.8064vs0.7456,
+attack0.3653vs0.2429,Q0.1498vs0.0670,W0.1068vs0.0675,E0.0532vs0.0272,
+R0.0957vs0.0359,recall0.1140vs0.0154. Learned timing signal exists beyond
+segment frequency, but absolute spell F1 remains weak; most dense movement
+matching score survives shuffling. Null intervals describe this permutation
+control, not match-bootstrap/training-seed uncertainty. One sampled emitter seed;
+no action-target, availability or closed-loop quality inference. No promotion.
+Await registered angle13078 and cast-aim13079 results; no new jobs on this receipt.
