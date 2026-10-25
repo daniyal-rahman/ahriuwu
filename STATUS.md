@@ -1628,3 +1628,21 @@ startup rows without burn-in. No hidden large supervised-boundary penalty in
 this check;deprioritize statecarry training as immediate timing fix. Report
 memory-boundary-13133.json. Garencontrol13132 remainsregistered;awaitcallback,
 no new jobs or policy promotion.
+
+**Garen control13132 COMPLETED/0**,1600updates/904.94s,185train/25cal/26val,
+5735windows. Calibrated Q/W/E/RF1 .1743/.1055/.2696/.0750,macro.15610
+(raw.09762). Eventcounts872/251/937/40;Rpointer92.5%,attackpointer76.33%,
+attackF1.3604,movewithin2 18.78%. Simpler-kit timing remains weak;different
+champion/data/sample and sparseR forbid directcausal comparison toAhri.
+Summary garen-timing-control-summary-13132.json. No policy promotion.
+**Transfer-pilot conversion13134(array4,max2)→13137finalizer registered**,
+sourcee0322297,frozenplan f2c00b915126.512trainperspectives,64eachViktor/Syndra/
+Lux/Orianna/Xerath/Annie/Lissandra/Veigar mid;deterministichashselection. All
+originalAvalidation andglobalcalhashmatches excluded,assertnooverlapwith
+targetcal/valbases;B untouched. Reuses frozen544decoder/staticcatalogs/v6
+observationparity,privateper-job+per-gamecopies;1h/shard,8GB/2CPU,max2;final
+CPU10min/2GB. Outputs transfer-pilot-events-f2c00b915126,sourceplan stored
+onNFS. Metadata remains qualifiedrawmode/cooldown references,not completed
+fullabilityannotations. Pilot limitsconversion/memorybeforeallchamp expansion.
+All-champion training/warmstart path still unimplemented;conversion is not
+pretraining. Await conversion gates;then build pretrain→Ahri recipe comparison.

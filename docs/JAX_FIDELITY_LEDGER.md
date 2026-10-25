@@ -948,3 +948,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-MEMORY-RESULT-AND-SIMPLER-KIT-CONTROL | 2026-10-25 |13131 passed71val:full/reset castmean.18966/.19102,othermetricsalmostsame.13133 early/later boundarypaired diagnostic queued.13132 Garen185/25/26 train1600→owncal→val queued,sourcee0322297;selfcast-kit timing diagnostic,not equaldata/qualitypromotion. No sim/B/RL. |
 
 | BC-V2-MEMORY-BOUNDARY-RESULT | 2026-10-25 |13133 passed:phase32:82 full/reset castF1.19345/.19475,later.18572/.18580,APnearlysame. Burn32 excluded both,not startup test;no large supervised-boundary deficit,so statecarry lowpriority. Await13132 Garen,no new jobs/promotion. |
+
+| BC-V2-GAREN-RESULT-AND-TRANSFER-PILOT | 2026-10-25 |13132 passed185/25/26:calQ/W/E/RF1.174/.105/.270/.075,R40events/pointer92.5%;timingweakdespitesimplekit,notequaldataAhri comparison.13134 array4max2→13137 convert/finalize512other-midtrainperspectives registered,planf2c00b915126/sourcee0322297,allAeval/cal matches excluded,Buntouched. Conversion only,mixedtraining/warmstart notimplemented,no promotion. |
