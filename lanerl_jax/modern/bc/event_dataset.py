@@ -53,6 +53,28 @@ def spell_metadata(name, ranks, catalog_dir):
     return result, modes, digest
 
 
+def co_movement_targets(actions, times, labels, anchors, axis, normal):
+    source = np.full(len(times), -1, np.int32)
+    for i, a in enumerate(actions):
+        k = int(np.floor((a.t - times[0]) / .1 + 1e-9))
+        if a.kind == 'path' and a.n_waypoints > 1 and 0 <= k < len(times) and B['q'] <= labels.button[k] <= B['r']:
+            source[k] = i
+    valid = np.zeros(len(times), bool)
+    x, y = np.zeros((2, len(times)), np.int32)
+    delta_t = np.full(len(times), np.nan, np.float32)
+    for k in np.flatnonzero(source >= 0):
+        a = actions[source[k]]
+        delta_t[k] = a.t - actions[labels.source[k]].t
+        if not labels.valid[k] or not np.isfinite(anchors[k]).all():
+            continue
+        if a.point is None or not np.isfinite(a.point).all():
+            continue
+        delta = np.asarray(a.point) - anchors[k]
+        x[k], y[k], clipped = screen_cell(float(delta @ axis), float(delta @ normal))
+        valid[k] = not clipped
+    return source, valid, x, y, delta_t
+
+
 def convert_events(g, row, original_npz, catalog_dir):
     me, opponent = g.index(g.me), g.index(g.opponent)
     team, lane = g.units[me].team, C.ROLE_LANE[row['role']]
@@ -92,22 +114,8 @@ def convert_events(g, row, original_npz, catalog_dir):
     button_modes = np.array([0, POINT_TARGET, 1, *modes, 0, 0], np.int8)
     # Retain every received sub-frame event for collision/reissue experiments.
     raw_events = [dict(a._asdict()) for a in g.actions]
-    co_source = np.full(len(g.t), -1, np.int32)
-    for i, a in enumerate(g.actions):
-        k = int(np.floor((a.t - g.t[0]) / .1 + 1e-9))
-        if a.kind == 'path' and a.n_waypoints > 1 and 0 <= k < len(g.t) and B['q'] <= labels.button[k] <= B['r']:
-            co_source[k] = i
-    co_valid = np.zeros(len(g.t), bool)
-    co_x, co_y = np.zeros((2, len(g.t)), np.int32)
-    co_delta = np.full(len(g.t), np.nan, np.float32)
-    for k in np.flatnonzero(co_source >= 0):
-        a = g.actions[co_source[k]]
-        if a.point is None or not np.isfinite(a.point).all():
-            continue
-        delta = np.asarray(a.point) - own_xy[oi[k]]
-        co_x[k], co_y[k], clipped = screen_cell(float(delta @ frame.axis), float(delta @ frame.normal))
-        co_valid[k] = labels.valid[k] and not clipped
-        co_delta[k] = a.t - g.actions[labels.source[k]].t
+    co_source, co_valid, co_x, co_y, co_delta = co_movement_targets(
+        g.actions, g.t, labels, own_xy[oi], np.asarray(frame.axis), np.asarray(frame.normal))
     arrays = dict(t=g.t, obs_index=oi, entities=entity_features.astype(np.float16), pad=pad[oi],
                   self=compact_self.astype(np.float32), global_=global_features.astype(np.float32),
                   entity_ids=entity_ids.astype(np.int16), unit_ids=unit_ids, own_id=np.int16(CT.index_of(row['champion'])),

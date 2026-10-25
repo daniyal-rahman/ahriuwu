@@ -764,3 +764,11 @@ history, visible-caster memory and compact inputs; button-conditioned pointer/
 joint-grid policy with co-movement/aux outputs, baseline unweighted losses.
 None is wired into a completed v2 training run. Next gate is full tests plus
 24-perspective sidecar construction and actual GPU loss/update smoke.
+
+
+**V2 conversion13042 FAILED after69 tests passed.** First perspective saved;
+second encountered a missing delayed player position in cast-adjacent movement
+projection. Partial directory has no completed manifest and cannot be loaded.
+Fix preserves raw source/order timing and masks unknown/out-of-scope movement aim.
+Regression test added; recurrent fixture batch loader implemented. No v2 training
+has run. Retry uses a fresh source snapshot and output directory.
