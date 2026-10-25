@@ -1299,3 +1299,14 @@ within-run trajectory; not exact continuation or duration-only contrast to old
 No enlarged data/B/RL; no promotion. Both GPU1h limits, private copies/reserve,
 NFS outputs,no-requeue/append; registered callbacks pending. Existing measured
 ~.38s/update implies ~25min updates plus startup/staging; assessment ETA unmeasured.
+
+**Duration learner13102 COMPLETED/0**,4000updates/470train,1893.34s
+(31.56min including startup),medianupdate.3844s. NFS checkpoints1000/2000/
+3000/4000 each82848996bytes verified present; frozen config seed0,smooth2,
+relative angle,b64,4000-step schedule. Last100-update averages at1000→4000:
+buttonNLL .65668→.61082,buttonaccuracy71.38→72.98%,aimNLL6.3996→6.0028,
+loss2.2609→2.1098,finite gradients. These are training minibatch diagnostics,
+not evidence of generalization or improved cast timing. No inline validation
+was requested. Registered13103 dependency cleared for fixed1000/2000/4000
+train71/val71 assessment; await callback before choosing further training or
+changing event formulation. No new jobs/policy promotion on this receipt.
