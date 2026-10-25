@@ -968,3 +968,11 @@ and profiles window coverage. Output `fixture-qualified/` and
 `validate-qualified-13068.out` under review-fixes-20261024. Await callback;
 no v3production integration or training-quality claim. Original event-fix
 validation13059..13061 remains independently frozen and has not been cancelled.
+
+
+13062 completion receipt confirms COMPLETED/0;24-perspective source counts
+re-read from durable output and match the recorded findings.13068 failed before
+tests: CPU placement lacked `/scratch` (mktemp failure). Replacement13071 is
+registered with explicit `--nodelist=desktop`, same immutable1ee090a0source,
+limits and validation script; no test failure or code change inferred. Await
+13071 callback; do not resubmit13068 again.
