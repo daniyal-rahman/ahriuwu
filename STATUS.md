@@ -837,6 +837,37 @@ Active registered work: target conversion13045/finalizer13047, learner/resume/
 eval smoke13049 and strict memorization13050. Await receipts; no broad Ahri
 training or accepted quality result yet. Existing unrelated edits untouched.
 
+**Target conversion13045 COMPLETED/0 all4shards; finalizer13047 COMPLETED/0.**
+828 NPZ/metadata/raw-event sets,5420481 valid frames; shard durations1188–1205s.
+Completed versioned manifest at `v2-20261024/target-events-5956656a`; compressed
+NPZ total0.593GB. Full74-test suite passed in shard0. No source/lag parity or
+shape/mask failures. Ahri3778050 valid frames, Garen1642431; all prior split
+counts preserved. Derived summary `v2-20261024/target-summary-13045.json`.
+Ahri Q21801 events/18573 valid aim/3219 clipped; E6899/5832/1059;
+R3220/2726/469. Raw directions retained for later angle ablation, no reconversion
+needed; off-screen point labels currently mask aim only. Attack pointers
+Ahri84553/85455, Garen23084/23767; Garen R296/305. Stop has zero received labels,
+so no learned-stop claim. Not all13source-audit diagnostics are complete.
+At receipt handling,13049 RUNNING52s and13050 PENDING; await registered callbacks.
+No broad Ahri baseline launched before learner/strict gates. B untouched.
+
+**Learner smoke13049 FAILED at final comparison**, not during training/eval.
+Uninterrupted32 steps and resumed16→32 both completed; one full held-out replay
+scored6791 valid frames. Max parameter difference7.426e-5 exceeded1e-5 assertion;
+max logged loss difference7.564e-5, first resumed loss differs9.54e-7. Cause not
+established; do not call exact resume validated or relax solely to pass. Added
+GPU probe: byte-exact checkpoint roundtrip, optimizer count16, two continuations
+from the same checkpoint, relative/global and end-loss comparisons with explicit
+numerical bounds. No broad baseline started. Strict13050 remains registered.
+
+**Resume numerical probe13055 registered**, source5fd69a8f, GPU20GB/20min.
+Stages immutable13049 donor checkpoint/results and24-perspective fixture into
+private scratch. Checks exact parameter/optimizer serialization roundtrip,
+optimizer step16, two separate16→32 continuations, and original control/resume
+comparisons. Declared bounds maxabs1e-3/relativeL2 1e-4/end-loss spread1e-3;
+results remain diagnostic, not bitwise-determinism proof. Await13055 and strict
+memorization13050 callbacks. Dataset828 remains finalized; broader training gated.
+
 
 ## Independent BC code/data review (2026-10-24)
 
