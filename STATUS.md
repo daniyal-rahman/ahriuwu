@@ -1148,3 +1148,15 @@ by calibration QWER eventF1 averaged3 fixed seeds, then freeze. Causal per-frame
 probability transform; no future lookahead or cooldown masks. Assessor validates
 checkpoint/dataset fingerprints. Test for rate restoration/causal prefix added,
 unrun. No calibration fitted or scored yet;51calibration/B still untouched.
+
+**Separate emitter-calibration chain registered**,sourcecefee640:13092 full-suite
+CPU gate;13093 GPU frozen smooth2 checkpoint collects only51 calibration
+perspectives;13094 CPU fits intercepts/temperatures1,.7,.5 and freezes selection;
+13095 GPU scores frozen choice on71 validation perspectives/T1 sampling seed0
+(with selected temperature inside logits). No validation fitting, no label changes
+or retraining; collect/score snapshots verify checkpoint and dataset fingerprints.
+Fit criterion is mean calibration QWER eventF1 across3 fixed sampling seeds after
+rate matching; unsupported calibration classes disabled (stop has no labels).
+No future lookahead, refractory or engine masks. Private immutable staging,
+20GiB reserve,no-requeue/append; logs/results NFS. Calibration not completed yet,
+B untouched. Await13087/13090/13091 plus13092–13095; no policy promotion.
