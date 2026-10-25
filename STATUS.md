@@ -922,3 +922,24 @@ so nonzero total loss does not imply failed memorization. Same two windows only;
 no held-out quality/leakage-control claim. Benchmark13070 now eligible afterok;
 await measured batch8/32/64 throughput before selecting first broad Ahri budget.
 No additional jobs submitted on this receipt; no broad Ahri training launched.
+
+**Exclusive batch benchmark13070 COMPLETED/0:**batch8/32/64 all fit and train
+16 updates on470 Ahri train perspectives. Median update0.1822/0.2728/0.3740s,
+11.24k/30.03k/43.80k frames/s; batch64 selected. Each process39–57s including
+load/compile; throughput only, no quality comparison. Eligible13992 train windows.
+**Ahri baseline13074 registered**, sourcef2891e0a,1000 total updates,batch64,
+window256/burn32,seed0,Adam3e-4 cosine→3e-5,100-step warmup,clip0.5. Natural
+unweighted event+aim losses, history on, conditional targets, no co-move/auxloss.
+470train perspectives sampled with replacement;64000 window draws (~4.57 times
+eligible-window count), not four exact epochs. Save250/500/750/1000; full71val
+stateful raw evaluation after training.51calibration perspectives untouched.
+GPU24GB/1h/no-requeue/append/private immutable data+code copies. Expected6–8min
+training from benchmark, evaluation additional. No model-quality result yet.
+Matched unconditional control registered afterok13074: same source/seed/batches/
+budget/target parameterization, only conditional_aim=False. No automatic promotion.
+Matched unconditional control job ID13075, afterok13074. The first comparison is
+identical conditional-vs-unconditional target parameterization; no simultaneous
+angle/head/history changes. Report aggregator implemented for summed event counts,
+per-button joint/conditional target success and match-bootstrap paired intervals;
+macro frame AP and mean per-match median point errors explicitly named, not pooled
+AP or pooled medians. Aggregator syntax checked; real broad validation unrun.
