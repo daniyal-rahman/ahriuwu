@@ -990,3 +990,13 @@ button, and PRNG continuity across chunks.13077/13078/13079 dependencies cleared
 conditional-minus-unconditional intervals on same71matches, private snapshots/
 NFS output. This assesses uncertainty, not a new training run. Await registered
 13077 emitter,13078 angle,13079 cast-weight and13080 reports; calibration/B unused.
+
+**Paired report13080 COMPLETED/0**,71 matched validation bases,500 bootstrap
+draws. Conditional-minus-unconditional 95% intervals: Q aim-within2 -0.087 to
++0.660pp; E -0.277 to+0.911pp, neither resolved. Movement within2 +0.341 to
++0.634pp, a small gain. Q exact-frame AP -0.461 to-0.015pp, W -0.463 to-0.070pp;
+E/R intervals cross zero. These quantify held-out match uncertainty for one seed,
+not training-seed robustness. Conditioning alone is not an accepted practical fix.
+No new jobs on this receipt. Await13077 sampled emitter,13078 directional targets,
+13079 cast-aim weighting. All current quality remains offline replay-conditioned;
+no promotion, no calibration or corpus-B use.
