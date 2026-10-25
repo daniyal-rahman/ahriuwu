@@ -1204,3 +1204,16 @@ cast aim weight1, own history on. Tests whether timing/aim gains coexist and
 measures movement/attack tradeoffs; no new code, labels or calibration fitting.
 Private deep-copy staging,20GiB reserve,NFS outputs,no-requeue/append,1h limit.
 Await13096 and calibration13093–13095 callbacks; no policy promotion.
+
+**Calibration collection13093 and fitting13094 COMPLETED/0.** Collection
+metadata confirms frozen smooth2 step1000,51 calibration perspectives, dataset
+manifest SHA matches source. Fit artifact emitter-calibration-13094.json pins
+checkpoint SHA ecf632bc… and same dataset;51 unique game IDs verified.
+Predeclared temperatures1/.7/.5 yield mean calibration QWER eventF1
+.11343/.14858/.17489 across3 sampling seeds after fitting expected class counts
+within1%. Selected T=.5 plus rate biases; stop disabled (no calibration labels).
+This sharpens state-dependent action preferences while restoring overall event
+rates, without retraining or future-input masks. These are selection-set scores,
+not held-out evidence or a direct comparison to raw uncalibrated T1.
+Frozen71-val scorer13095 dependency cleared; await actual validation callback
+and combined learner13096. No policy promotion or additional job on this receipt.
