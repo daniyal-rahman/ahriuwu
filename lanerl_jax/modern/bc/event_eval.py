@@ -27,8 +27,8 @@ def make_predict(policy, *, sampled=False):
                 button = jax.random.categorical(draw, logits, axis=-1)
             else:
                 button = logits.argmax(-1)
-            actual = policy.apply(params, hidden, tokens, x[1], x[7], button, method=policy.targets)
-            teacher = policy.apply(params, hidden, tokens, x[1], x[7], human_button, method=policy.targets)
+            actual = policy.apply(params, hidden, tokens, x[1], x[7], button, positions=x[0][..., :, 1:3], method=policy.targets)
+            teacher = policy.apply(params, hidden, tokens, x[1], x[7], human_button, positions=x[0][..., :, 1:3], method=policy.targets)
             summary = dict(probabilities=jax.nn.softmax(logits), button=button)
             for prefix, heads in [('actual', actual), ('teacher', teacher)]:
                 for name, head in zip(('pointer', 'grid', 'angle'), heads):

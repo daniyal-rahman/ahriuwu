@@ -38,6 +38,7 @@ def main():
     p.add_argument('--warmup', type=int, default=100)
     p.add_argument('--save-every', type=int, default=250)
     p.add_argument('--conditional-aim', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--opponent-relative-angle', action='store_true')
     p.add_argument('--own-cast-history', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--smoothing-radius', type=int, choices=(0, 1, 2), default=0)
     p.add_argument('--sample-eval', action='store_true')
@@ -60,7 +61,7 @@ def main():
         signal.signal(sig, lambda signum, frame: stopping.append(signum))
     manifest_hash = hashlib.sha256((a.dataset/'manifest.json').read_bytes()).hexdigest()
     cfg = EventPolicyConfig(conditional_aim=a.conditional_aim, history=a.history,
-                            own_cast_history=a.own_cast_history)
+                            own_cast_history=a.own_cast_history, opponent_relative_angle=a.opponent_relative_angle)
     smoothing = {0: (1.,), 1: (.5, 1., .5), 2: (.2, .5, 1., .5, .2)}[a.smoothing_radius]
     # Sampling is stateless by global update, so resume repeats no completed draw.
     contract = dict(config=cfg._asdict(), steps=a.steps, batch_size=a.batch_size, window=a.window,

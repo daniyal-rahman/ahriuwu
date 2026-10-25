@@ -45,3 +45,30 @@ def test_own_age_ablation_does_not_remove_other_history_or_change_parameter_shap
     args[2] = args[2].at[28:].set(.9)
     other_history, _ = policy.apply(params, *args)
     assert not np.allclose(before.button, other_history.button)
+
+
+def test_relative_angle_rotation_keeps_probability_mass_and_full_direction_support():
+    from lanerl_jax.modern.bc.event_policy import rotate_angle_logits
+    logits = jnp.full((3, 72), -10.).at[:, 36].set(10.)
+    rotated = jax.nn.softmax(rotate_angle_logits(logits, jnp.array([0., jnp.pi/2, -jnp.pi/2])), -1)
+    np.testing.assert_array_equal(rotated.argmax(-1), [36, 54, 18])
+    np.testing.assert_allclose(rotated.sum(-1), 1., atol=1e-6)
+    assert np.asarray(rotated).min() > 0
+    uniform = rotate_angle_logits(jnp.zeros((2, 72)), jnp.array([.13, -2.]))
+    np.testing.assert_allclose(jax.nn.softmax(uniform, -1), 1/72, atol=1e-6)
+
+
+def test_missing_opponent_relative_angle_equals_global_head_without_new_parameters():
+    c = EventPolicyConfig(d_model=16, n_heads=2, n_layers=1, ffn_dim=32, ctx_dim=16,
+                          mlp_hidden=32, mlp_layers=1, core_dim=16, target_dim=16, pointer_dim=8)
+    absolute, relative = EventPolicy(c), EventPolicy(c._replace(opponent_relative_angle=True))
+    args = [jnp.zeros((32, c.entity_dim)), jnp.ones(32, bool), jnp.zeros(c.self_dim),
+            jnp.zeros(c.global_dim), jnp.zeros(32, jnp.int32), jnp.asarray(1), jnp.asarray(2),
+            jnp.zeros((4, c.metadata_dim)), jnp.zeros((4, c.metadata_dim)), jnp.asarray(0),
+            absolute.initial_carry()]
+    params = absolute.init(jax.random.key(2), *args)
+    a, _ = absolute.apply(params, *args)
+    b, _ = relative.apply(params, *args)
+    np.testing.assert_allclose(jax.nn.softmax(a.angle), jax.nn.softmax(b.angle), atol=1e-6)
+    np.testing.assert_array_equal(a.button, b.button)
+    np.testing.assert_array_equal(a.grid, b.grid)

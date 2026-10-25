@@ -39,6 +39,19 @@ class EventPolicyConfig(NamedTuple):
     conditional_aim: bool = True
     history: bool = True
     own_cast_history: bool = True
+    opponent_relative_angle: bool = False
+
+
+def rotate_angle_logits(logits, base):
+    """Rotate a categorical offset distribution into global lane-frame angles."""
+    n = logits.shape[-1]
+    index = jnp.arange(n) - base[..., None]*n/(2*jnp.pi)
+    lower = jnp.floor(index).astype(jnp.int32)
+    fraction = index-lower
+    probability = jax.nn.softmax(logits, -1)
+    a = jnp.take_along_axis(probability, lower % n, -1)
+    b = jnp.take_along_axis(probability, (lower+1) % n, -1)
+    return jnp.log(jnp.maximum((1-fraction)*a+fraction*b, 1e-30))
 
 
 class EventLogits(NamedTuple):
@@ -129,7 +142,7 @@ class EventPolicy(nn.Module):
     def buttons(self, hidden):
         return self.button_head(hidden)
 
-    def targets(self, hidden, entity_tokens, pad, own_metadata, button):
+    def targets(self, hidden, entity_tokens, pad, own_metadata, button, *, positions):
         c = self.cfg
         selected = jnp.take_along_axis(own_metadata, jnp.clip(button - B['q'], 0, 3)[..., None, None], -2)[..., 0, :]
         cast = (button >= B['q']) & (button <= B['r'])
@@ -141,7 +154,15 @@ class EventPolicy(nn.Module):
         pointer = jnp.einsum('...d,...nd->...n', self.pointer_query(query),
                              self.pointer_key(entity_tokens)) / c.pointer_dim ** .5
         pointer = jnp.where(pad, -1e4, pointer)
-        return pointer, self.grid_head(query), self.angle_head(query)
+        angle = self.angle_head(query)
+        if c.opponent_relative_angle:
+            # Slot0 is the visible paired opponent; missing evidence keeps global coordinates.
+            xy = positions[..., 0, :]
+            known = ~pad[..., 0] & jnp.isfinite(xy).all(-1) & (jnp.sum(jnp.nan_to_num(xy)**2, -1) > 1e-12)
+            xy = jnp.nan_to_num(xy)
+            base = jnp.where(known, jnp.arctan2(xy[..., 1], xy[..., 0]), 0.)
+            angle = rotate_angle_logits(angle, base)
+        return pointer, self.grid_head(query), angle
 
     def __call__(self, entities, pad, self_vec, global_vec, entity_ids, own_id, enemy_id,
                  own_metadata, enemy_metadata, patch, carry, *, target_button=None):
@@ -149,8 +170,9 @@ class EventPolicy(nn.Module):
                                        own_metadata, enemy_metadata, patch, carry)
         button = self.buttons(h)
         chosen = button.argmax(-1) if target_button is None else target_button
-        pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen)
-        _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']))
+        pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen, positions=entities[..., :, 1:3])
+        _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']),
+                                      positions=entities[..., :, 1:3])
         condition = jnp.concatenate([h, self.button_embedding(chosen)], -1)
         return EventLogits(button, pointer, grid, angle, self.co_move_head(condition), co_grid,
                            self.co_move_order_head(condition), self.own_future_head(h),

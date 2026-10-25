@@ -1087,3 +1087,16 @@ opponent direction on identical qualified visible frames, diagnostic only.
 No labels changed or heuristic supervision introduced; no additional GPU training.
 Await13088 and13084–13087. Existing angle sample summary at angle-emitter-summary-
 13082.json preserves exact-frame support caveat; no whole-policy promotion.
+
+**Matched-aim13088 COMPLETED/0**,2 regression tests pass. Q qualified matches:
+grid344/angle324,within10 33.72/46.60%,joint known-target recall5.06/6.59%.
+E qualified matches36/32,within10 11.11/15.63%,joint recall0.564/0.705%; uncertainty
+large, no hit-rate/closed-loop claim. On identical visible-opponent human frames,
+angle head pooled median Q12.18/E21.13deg versus straight observed-opponent
+Q6.41/E6.04deg (1301Q/456E). This exposes a spatial reference weakness rather
+than evidence that more data alone is necessary. Implemented optional opponent-
+relative angle coordinates: learn a full-circle offset from currently visible
+paired-opponent direction, global fallback if absent. No heuristic labels or
+forced targeting, no extra parameters, replay observations unchanged. Tests for
+rotation/probability support and missing-opponent equivalence added, unrun.
+No promotion; pending13084–13087 remain separate controlled experiments.
