@@ -1015,3 +1015,12 @@ predates source-v3qualification and must not substitute for a v3rebuild.
 Existing dependent13060owns finalization/full profiling; await its receipt,
 no duplicate conversion/profile job launched. Independent review priorities
 remain behavioral gates, input information loss and action-conditioned missingness.
+
+
+13060 finalizer/profile COMPLETED/0 verified from actual outputs: finalized
+event-v2manifest passed with828perspectives/828artifact hash sets. Full corrected
+profile5284445valid frames,0post-initial-burn omissions,0duplicate supervised
+frames;18647valid initial-burn frames are context-only. Legacy fixed windows
+would omit669133frames on this same corrected data. This closes the original
+event-v2conversion/coverage validation graph13058..13061, not the source-v3full
+rebuild or behavioral acceptance. No additional job submitted.
