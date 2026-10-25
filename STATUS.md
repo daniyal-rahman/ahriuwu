@@ -894,3 +894,12 @@ quality-selection claim. Fresh deep-copied target dataset and code; durable
 checkpoints/throughput on NFS.13066 was intentionally cancelled before execution
 and replaced to include required node exclusivity; do not auto-resubmit13066.
 Await strict13063 and benchmark13067 receipts before selecting baseline budget.
+
+**Strict13063 FAILED its declared button-NLL gate after1000 completed updates.**
+Final accuracy99.08% exceeds98%, NLL0.06303 misses0.05; total loss4.5477→0.8184,
+aim CE2.4951 (soft-target entropy is nonzero). Late constant-LR losses oscillate;
+no NaN, checkpoint or runtime failure. Add bounded1000→1200 continuation of the
+same saved params/moments/windows at LR3e-5 rather than3e-4; strict accuracy/NLL
+gates unchanged. This tests optimizer settling, not a larger model or generalization.
+Benchmark13067 dependency cannot pass after13063 failure; cancel/rebind to this
+new gate. No broad baseline started, no strict-success claim.
