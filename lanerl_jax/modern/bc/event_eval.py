@@ -11,7 +11,7 @@ from .event_loss import INPUTS
 from .event_metrics import sequence_metrics
 
 
-def make_predict(policy, *, sampled=False):
+def make_predict(policy, *, sampled=False, temperature=1.):
     @jax.jit
     def predict(params, carry, batch, bias, key):
         inputs = tuple(jnp.swapaxes(batch[k], 0, 1) for k in INPUTS)
@@ -21,7 +21,7 @@ def make_predict(policy, *, sampled=False):
             carry, key = state
             x, human_button = values[:-1], values[-1]
             hidden, carry, tokens = policy.apply(params, *x, carry, method=policy.encode)
-            logits = policy.apply(params, hidden, method=policy.buttons) + bias
+            logits = policy.apply(params, hidden, method=policy.buttons)/temperature + bias
             if sampled:
                 key, draw = jax.random.split(key)
                 button = jax.random.categorical(draw, logits, axis=-1)
@@ -55,8 +55,8 @@ def predict_game(params, policy, predict, game, *, chunk=128, bias=None, seed=No
     return {k: np.concatenate([s[k] for s in summaries]) for k in summaries[0]}
 
 
-def evaluate_games(params, policy, games, *, chunk=128, bias=None, seed=None, prediction_dir=None):
-    predict = make_predict(policy, sampled=seed is not None)
+def evaluate_games(params, policy, games, *, chunk=128, bias=None, seed=None, prediction_dir=None, temperature=1.):
+    predict = make_predict(policy, sampled=seed is not None, temperature=temperature)
     if prediction_dir is not None:
         prediction_dir = Path(prediction_dir)
         prediction_dir.mkdir(parents=True, exist_ok=False)

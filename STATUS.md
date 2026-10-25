@@ -1135,3 +1135,16 @@ reference; no smoothing promotion. Summary smooth1-summary-13085.json.
 Await±0.2s13086,angle+aim3 13087,relative-angle13090 and paired-report13091.
 No new jobs on this receipt; existing registered work continues, B/calibration
 remain unmodified and no policy-quality or online readiness claim.
+
+**Smoothing radius2(±0.2s)13086 COMPLETED/0**,657.42s training/71val.
+Sampled Q/W/E/R F1 .1449/.1092/.0468/.0959→.1845/.1260/.0709/.0922;
+near-frame Q/E AP.2012/.0842→.3186/.1441,exact AP decreases as expected for
+smoothed supervision. Rates near human,Q/E aim12.47/26.94deg essentially stable;
+movement within2 9.304→9.202%,attackF1.3648→.3577. Keep as timing candidate,
+not policy promotion; paired intervals/other heads pending.
+Calibration modules implemented: temperatures1/.7/.5, per-class intercepts fit
+expected human counts using only51calibration perspectives; select temperature
+by calibration QWER eventF1 averaged3 fixed seeds, then freeze. Causal per-frame
+probability transform; no future lookahead or cooldown masks. Assessor validates
+checkpoint/dataset fingerprints. Test for rate restoration/causal prefix added,
+unrun. No calibration fitted or scored yet;51calibration/B still untouched.
