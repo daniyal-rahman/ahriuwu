@@ -1255,3 +1255,19 @@ biases select T.5: mean calibration QWER eventF1 T1/.7/.5 =
 held-out improvement claim or direct ranking against separately fitted smooth2.
 Frozen71-val job13099 dependency cleared; await registered callback. No new
 jobs/policy promotion; calibration artifact emitter-calibration-13098.json.
+
+**Calibrated combined13099 COMPLETED/0**,71val,frozenT.5,checkpoint
+4a623acb… matches13097/13098. Calibrated smooth2→combined Q/W/E/RF1
+.2283/.1786/.1143/.1746→.2298/.1690/.1033/.2028;mean.17394→.17621,
+no demonstrated overall timing gain. Q/E teacher mean match median
+12.47/26.94→8.90/14.28deg; movewithin2 9.202→10.213%,attackpointer
+68.94→68.62%. Cast ratesQ/W/E/R.924/.970/.906/.951×human. Combined aim
+gain survives calibration, but all castF1 far below.5 target. Summary
+combined-calibrated-summary-13099.json; no full-policy promotion.
+**Matched seed1 replications registered13100 smooth2 and13101 relative+smooth2**,
+source2d36adc8/8c668da2 respectively (same learner,relative feature added in
+latter),same1000/b64/window256/burn32/train470/val71. Seed1 changes init/window
+draws and sampled-eval draw together, matched between these two arms; not a
+pure initialization-only test. No calibration fit on val; raw seed1 assessment
+first, own calibrations later if warranted. Existing tested flags/no code edits;
+GPU1h each,private deep copies/reserve,NFS,no-requeue/append. Await callbacks.
