@@ -1363,3 +1363,14 @@ joint exact0 persists. Better checkpoint candidate but castF1 still below.5,
 replay-conditioned history/closed-loop gap remains. Summary calibrated4000-summary-13106.json.
 Compare calibrated8k13110 and train71 readout13108 before more duration;
 13108–13110 remain registered. No new jobs/policy promotion on this receipt.
+
+**8000 collection+train diagnostic13108 COMPLETED/0**,51cal and fixed71train
+metadata verified at8000,matching checkpoint SHAe969520f…. Raw train/val cast
+meanF1 .24624/.21513 (gap.03111);4k gap.00975,so observed gap is growing.
+Train/val Q/W/E/RF1 .355/.258/.197/.176 versus.322/.228/.169/.142;
+near-frameAP Q.449/.386,E.267/.207,R.332/.237. Teacher Q/E aim5.00/8.15deg
+train versus6.45/10.65val;pointer81.50/76.63%,movewithin2 23.08/17.81%.
+Fixed first71 sorted train subset only,not full train or a causal overfit estimate;
+held-out timing still improved but gains mix and generalization gap is emerging.
+Summary train-gap8000-summary-13108.json. Await13109fit/13110frozenval before
+more training; no new jobs or policy promotion.
