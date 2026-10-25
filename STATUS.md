@@ -1042,3 +1042,13 @@ Next independent timing controls implemented: own-cast ages-only toggle (retain
 previous event/enemy history), and mass-preserving smoothing radius0/1/2. Optional
 sampled evaluation added after greedy eval for future learners. Tests added for
 age isolation/shape compatibility; not yet Slurm validated or trained.
+
+**Timing-control validation13083 registered**, source2d36adc8,CPU2/8GB/15min,
+full suite plus explicit own-age isolation/shape compatibility. GPU arms afterok:
+**13084** angle candidate minus only own QWER ages; previous-event/enemy history
+retained. **13085** angle candidate with radius1 cast smoothing; **13086** radius2.
+Each1000updates/b64/seed0/same draws/schedule, natural button mass (preserved per
+cast before window/burn masks), no extra aim weight. Both greedy and categorical
+T1/seed0 eval on71val;51calibration/B untouched. Same immutable code/data private
+staging, no-requeue/append,24GB/1h each. No result/promotion claimed; await13083,
+13084–13086 plus13079 cast-weight and13082 sampled-angle receipts.
