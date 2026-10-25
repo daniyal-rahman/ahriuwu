@@ -903,3 +903,12 @@ same saved params/moments/windows at LR3e-5 rather than3e-4; strict accuracy/NLL
 gates unchanged. This tests optimizer settling, not a larger model or generalization.
 Benchmark13067 dependency cannot pass after13063 failure; cancel/rebind to this
 new gate. No broad baseline started, no strict-success claim.
+
+**Strict polish13069 registered**, source19e43e03, GPU20GB/20min, saved13063
+params and optimizer state, same fixed windows, total ceiling1200 (200 extra),
+LR3e-5. Source/data/donor copied privately with combined-size+20GiB reserve;
+no-requeue/append logs. Benchmark13067 intentionally cancelled because its
+13063 afterok dependency failed; replacement registered afterok13069. Await
+terminal receipts rather than polling; no broad Ahri training yet.
+Replacement exclusive batch benchmark is13070, same f2891e0a source and16-update
+batch8/32/64 recipe; no quality comparison or extra dev-training budget implied.
