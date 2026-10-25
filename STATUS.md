@@ -1217,3 +1217,17 @@ rates, without retraining or future-input masks. These are selection-set scores,
 not held-out evidence or a direct comparison to raw uncalibrated T1.
 Frozen71-val scorer13095 dependency cleared; await actual validation callback
 and combined learner13096. No policy promotion or additional job on this receipt.
+
+**Frozen calibrated validation13095 COMPLETED/0**,71val, same smooth2
+step1000/checkpoint ecf632bc…/dataset as13093–13094; actual metadata confirms
+splitval,T.5,sample0 and frozen calibration hash8ce3f2ee…. Against raw T1
+sampling on same checkpoint, Q/W/E/R eventF1 .1845/.1260/.0709/.0922→
+.2283/.1786/.1143/.1746; macro mean .11839→.17394. Emitted cast ratios
+Q/W/E/R .963/.978/.931/.986×human. AttackF1 .3577→.3931,recall .1036→.1957;
+moveF1 .8007→.7947. Teacher aim unchanged by design,Q/E12.47/26.94deg;
+exact-frame joint-known angle success remains low,Q1.744%,E0.282%,not hits.
+Summary calibrated-summary-13095.json. Separate calibration transfers to this
+validation set, but one sampling/training seed, no paired interval yet and still
+far below castF1.5 target. Keep emitter as component candidate; no full-policy
+promotion/closed-loop claim. Await registered relative+smooth2 learner13096;
+its checkpoint requires its own calibration fit, not reuse of these biases.
