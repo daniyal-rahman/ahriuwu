@@ -912,3 +912,13 @@ no-requeue/append logs. Benchmark13067 intentionally cancelled because its
 terminal receipts rather than polling; no broad Ahri training yet.
 Replacement exclusive batch benchmark is13070, same f2891e0a source and16-update
 batch8/32/64 recipe; no quality comparison or extra dev-training budget implied.
+
+
+**Strict polish13069 COMPLETED/0:**restored1000→1200,LR3e-5,161.97s including
+compile. Fixed109 supervised frames reach100% button accuracy,NLL0.002799;
+total loss0.81843→0.74956,unit loss contribution5.36e-8. Strict98%/<0.05 gate
+passes without changed thresholds. Aim CE2.46658 includes Gaussian-target entropy,
+so nonzero total loss does not imply failed memorization. Same two windows only;
+no held-out quality/leakage-control claim. Benchmark13070 now eligible afterok;
+await measured batch8/32/64 throughput before selecting first broad Ahri budget.
+No additional jobs submitted on this receipt; no broad Ahri training launched.

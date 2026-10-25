@@ -1377,8 +1377,8 @@ learner/checkpoint resume and stateful replay evaluation. Source audit13041 pass
 perspectives with isolated calibration/validation. Gradient13044 passed basic
 wiring; learner13049 completed training/evaluation but failed its bitwise-like
 resume comparison. Probe13055 verified exact checkpoint fidelity and bounded
-numerical continuation agreement. Strict memorization13063 is outstanding; an
-exclusive batch-throughput benchmark is gated after it. No broad Ahri training
+numerical continuation agreement. Strict memorization13069 passed after a bounded lower-rate continuation
+(100% button accuracy,0.0028NLL); exclusive batch benchmark13070 follows it. No broad Ahri training
 or accepted held-out quality result exists. Evaluation uses replay-provided history
 even when scoring actual-button targets, so it is offline conditional assessment,
 not closed-loop rollout evidence. Calibration, shuffle control and staged ablations
