@@ -1000,3 +1000,15 @@ not training-seed robustness. Conditioning alone is not an accepted practical fi
 No new jobs on this receipt. Await13077 sampled emitter,13078 directional targets,
 13079 cast-aim weighting. All current quality remains offline replay-conditioned;
 no promotion, no calibration or corpus-B use.
+
+**Emitter assessment13077 COMPLETED/0:**71val greedy versus categorical T1/seed0,
+frozen baseline, no retraining/calibration. Sampled movement/attack/Q/W/E/R event
+F1@0.5s =0.8064/0.3653/0.1498/0.1068/0.0532/0.0957; emitted rates1.024/0.942/
+0.947/1.098/0.917/1.038x human. Sampling repairs greedy zero-cast behavior but
+not strong timing/targeting. Teacher grid-derived mean per-match median Q/E
+angle errors34.78/87.49deg; within10deg27.82/12.41%. Exact-frame sampled joint
+Q point-near success0.218% of eligible aim labels,E0%; do not interpret as tolerant
+matched-event target scoring. Summary `v2-20261024/emitter-summary-13077.json`.
+Timing-null CLI added to preserve predicted counts per contiguous valid segment
+while permuting times, so high dense movement F1 can be compared to frequency-only
+chance. Not yet run.13078/13079 remain registered; no promotion.
