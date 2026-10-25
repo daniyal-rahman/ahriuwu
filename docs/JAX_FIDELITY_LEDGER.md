@@ -924,3 +924,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-AUXILIARY-QUEUED | 2026-10-25 |13119 fullsuite gate→13120 matched4k lambda.1 future-state trial,source7836e18a. Dropout0 isolates auxiliary terms,existingheads/inputschema. Coverage/count/lossmass logged;tests/quality pending,private staging/NFS/no-requeue,no promotion. |
 
 | BC-V2-AUXILIARY-TESTS-PASS | 2026-10-25 |13119 actual log90passed/38.50s,including future-anchor/mask and loss-gradient regressions.13120 dependency cleared;no learned auxiliary quality result yet,no new jobs/promotion. |
+
+| BC-V2-AUXILIARY-RESULT-AND-CALIBRATION | 2026-10-25 |13120 passed4k/71val:rawcastmean.188 versus.190ref,Q/Eaim5.79/10.23deg. Activeauxloss.2185,~10951own/3657enemy/10567HP targetrows perlatebatch. No clear timing benefit.13121/13122/13123 own frozen calibration registered;aux optional,next-event/delay experiment planned/unimplemented,no promotion. |

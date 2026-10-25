@@ -1509,3 +1509,17 @@ New regressions verify current-anchor future positions,whole-horizon masks for
 gaps/deaths/visibility/identity/jumps,missingHP/shortsequences,and auxiliary
 loss scaling/HP gradient. Afterok13120 gate cleared;learned action quality
 unmeasured. Await registered learner callback,no new jobs/policy promotion.
+
+**Auxiliary.1 learner13120 COMPLETED/0**,4000updates/1948.89s/71val.
+Raw reference→aux Q/W/E/RF1 .2829/.2044/.1281/.1432→.2655/.1976/
+.1232/.1655,mean.18966→.18794. Near-frameAPQ/E lower,W higher,Rslightly
+lower. TeacherQ/E mean match median6.67/10.67→5.79/10.23deg;movewithin2
+17.70→17.12%,pointer75.64→75.66%. Last100updates average ownfuture10951,
+enemyfuture3657,HPfuture10567 weighted supervisedrows/batch;auxlossmass.2185,
+buttonNLL.6149. Aux path active with substantial coverage,not a clear timing
+fix;one seed,uncalibrated. Summary auxiliary01-summary-13120.json.
+**13121→13122→13123 registered**,source7836e18a,own51cal collect/fit/frozen
+71val score foraux donor13120. GPU1h/CPU20min/GPU1h,privatecopies/reserve,
+NFS,no-requeue/append. No more duration/aux sweeps before readout;aux remains
+optional. Next structural experiment planned is next-event-and-delay,not yet
+implemented or submitted. No promotion;replay-only/B isolation unchanged.
