@@ -1494,3 +1494,12 @@ inputs. Static normalization constants only,no sim supervision/data regeneration
 Tests for anchors/gaps/deaths/visibility/identity/missingHP and loss scale/gradient
 added,unrun. Next CPUgate then matched4k lambda.1 on reference(no dropout) to
 isolate auxiliary effect. No policy promotion.
+
+**Auxiliary regression13119→afterok learner13120 registered**,source7836e18a.
+CPU fullsuite with future-anchor/mask/lossgradient tests;GPU matched4k/b64/
+seed0/window256/burn32/relative/smooth2,auxweight.1,historydropout0. Target
+arrays built from immutable replay examples in job scratch;existinginputschema
+andheadcount unchanged. Finalgreedy/sample71val actionmetrics;auxiliary target
+coverage/count/lossmass logged during training. CPU15min/GPU1h,privatecopies/
+20GiBreserve,NFS,no-requeue/append. Both tests/quality pending;awaitcallbacks,
+no policy promotion.

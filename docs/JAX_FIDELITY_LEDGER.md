@@ -920,3 +920,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-DROPOUT-CALIBRATION-FIT | 2026-10-25 |13116/13117 passed51cal,4k/dropout.3,checkpoint79971010…/dataset consistent. Rate-fitted T1/.7/.5 castF1.18850/.23364/.25621,T.5 frozen;selection-set only,lower thanreference. Await13118 to judge normal-performance/robustness tradeoff,no new jobs/promotion. |
 
 | BC-V2-DROPOUT-VAL-AND-AUXILIARY-PREP | 2026-10-25 |13118 passed71val:calcastmean.263 versusref.276,Rregresses,Q/Eaimimproves;keep robustness candidate/reference distinct. Optional future replay-position/HP targets added,whole-horizon visibility/death/gap/jump masks,existingheads,no INPUTS changes. Tests unrun,lambda.1 isolated trial next. No sim/closed-loop/promotion. |
+
+| BC-V2-AUXILIARY-QUEUED | 2026-10-25 |13119 fullsuite gate→13120 matched4k lambda.1 future-state trial,source7836e18a. Dropout0 isolates auxiliary terms,existingheads/inputschema. Coverage/count/lossmass logged;tests/quality pending,private staging/NFS/no-requeue,no promotion. |
