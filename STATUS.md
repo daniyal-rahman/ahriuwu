@@ -1425,3 +1425,10 @@ Evaluation retains normal history,no dropout;does not synthesize policy errors.
 Contract records nonzero probability for exact-resume gate. Regression checks
 reproducibility/group consistency/cast preservation/input immutability;unrun.
 Next fullsuite gate then matched4k dropout trial;no policy promotion.
+
+**Grouped dropout13113tests→13114learner registered**,source2dfd229e.
+FullCPU gate then matched4k/b64/seed0/smooth2/relative with previous history
+enabled and training-only window dropout.3;finalgreedy+sample71val normal
+history. Default schedule/labels/draws same as4k reference,not a closed-loop
+robustness result. CPU15min/GPU1h,private deepcopies/reserve,NFS,no-requeue/
+append. Awaitcallbacks;no calibrated or learned dropout result/promotion yet.

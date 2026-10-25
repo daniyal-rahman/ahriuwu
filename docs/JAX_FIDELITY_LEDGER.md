@@ -908,3 +908,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-PREVIOUS-EVENT-TESTS-PASS | 2026-10-25 |13111 actual log85passed/37.71s,including previous-command mask isolation and cast-history sensitivity.13112 gate cleared;no learned quality/closed-loop result yet,no new jobs/promotion. |
 
 | BC-V2-NO-PREVIOUS-EVENT-AND-DROPOUT | 2026-10-25 |13112 passed4k/71val:raw castmeanF1.190→.152,movewithin2 17.70→6.55%,Q/Eaim5.17/10.04deg. History useful,not deploy/leakage proof. Implemented training-only grouped previous-event dropout/default0,independent RNG preserving draws/cast timers/labels,regression unrun. Next gate and.3 trial,no promotion. |
+
+| BC-V2-PREVIOUS-DROPOUT-QUEUED | 2026-10-25 |13113 fullsuite→13114 matched4k dropout.3 registered,source2dfd229e. Whole-window previous-event masking only,cast timers retained,normal-history finalval. No test/quality/closed-loop result yet;awaitcallbacks. |
