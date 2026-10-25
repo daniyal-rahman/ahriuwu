@@ -1,3 +1,94 @@
+# End-to-end code review — running plan and progress
+
+Updated 2026-10-25. Owner: this independent review thread. This section is the
+single maintained review plan/progress record; older ledger entries below are
+historical evidence. STATUS.md only carries the required short session handoff.
+
+**Scope:** decoder and reconstruction → observations/tensors/labels → BC trainer
+and evaluation → simulator/JAX correctness. Diagnose symptoms, reproduce causes,
+fix verified defects, then simplify where that improves auditability. Passing a
+wiring check does not establish source fidelity or competent play.
+
+**Deferred:** action-space redesign. Later compare a source-faithful Tencent-style
+baseline adapted explicitly for BC against the Fable/modern conditional proposal.
+Do not start this comparison or change target representations during source review.
+
+| Step | State | Evidence required to advance |
+|---|---|---|
+| 1. Reconcile current code, prior fixes, active paths and evidence | In progress | Immutable ref inventory, pipeline map, fix-integration matrix |
+| 2. Independently validate decoder/reconstruction | Next | Source-qualified semantics plus synchronized recording comparisons; errors/missingness by event/state |
+| 3. Trace source through tensorization | Planned | Named field provenance, receipt cutoffs, identity/coordinate/mask checks and human-readable example traces |
+| 4. Audit trainer/evaluator and research claims | Planned | Mask/normalization/sampling/reset/resume checks; covered tiny-set memorization and nontrivial heldout behavior |
+| 5. Review simulator rules and JAX semantics | Planned | Independent mechanic evidence, phase/reset/capacity checks, eager/compiled/batched consistency |
+| 6. Fix and simplify verified issues | Throughout | Reproduction before fix; regression/independent evidence after; behavior-preservation checks for refactors |
+| 7. Tune and run deferred architecture comparisons | Deferred until gates pass | Fixed splits/budgets/baselines; isolated changes; per-match uncertainty; faithful baseline deviations explicit |
+
+## Current checkpoint
+
+- Production review baseline: `modern/bc` resolved to **f10e4f4274bbbdbe3d7a2d7057e7a7fdcb639604**.
+  Independent review snapshot: **8adeecc9c37d3fcc8158ea5dcc841a2174674dac**.
+  Ref names move; findings here bind these SHAs, not an unspecified latest checkout.
+- Current production still declares `replay-lane-events-v1`; reviewed v2/v3 fixes
+  are isolated on the review branch. Current code still has fixed-stride windows,
+  padding-only pointer masks, separately interpreted event history, unqualified
+  damage attribution and position-availability-only acceptance. Prior review passes
+  do not clear these production paths. Reconcile integration before fresh quality claims.
+- New source-provenance reproduction: `_decoder()` appends DECODER_SCRIPTS and
+  imports globally named modules. Switching the requested snapshot A→B in one
+  process returns the original A modules for both loader and position model.
+  Exact current function reproduced using two synthetic directories. This proves
+  the helper does not bind imports to the requested source; it does not prove an
+  existing frozen job imported incorrect modules. Repair must account for the
+  loader's transitive local imports, not merely change sys.path order.
+
+## Pipeline map being verified
+
+| Boundary | Current implementation | Review question |
+|---|---|---|
+| Native export → replay fields/positions | decoder `event_training_loader`/`position_model`, BC `replay.py` | Which code actually executes, and which fields are accepted rather than merely available? |
+| Replay → shared observations | `observation.py`, `fog.py`, `convert.py` | Source qualification, approved visibility approximation, identity and coordinate ownership |
+| Replay/observations → event examples | `event_dataset.py`, `event_labels.py`, `event_inputs.py`, `event_convert.py` | Causal lag, ambiguity, coverage, metadata and artifact contracts |
+| Examples → loss windows | `event_batches.py`, `event_train.py`, `event_loss.py` | Exact supervision coverage, effective sampling distribution and recurrent context |
+| Policy → scored predictions | `event_policy.py`, `event_eval.py`, `event_metrics.py`, `event_next.py` | Actual-button behavior, target eligibility, timing/reset protocol and baseline comparison |
+| Historical pipelines | `train.py`, `dataset.py`, `labels.py`, `render.py`, `gate.py` | What remains used versus historical? Do not delete based on filenames/imports alone |
+
+## Symptom measurements
+
+- Reproducible inventory tool: `python3 -m ops.modern.bc_review_inventory --refs modern/bc HEAD --output NEW_PATH.json`.
+  Reads committed tracked Python at refs resolved once; no ML imports or compute job.
+- Production baseline: **36 non-test files / 5,406 lines; 26 test files / 1,567 lines**.
+  Includes multiple pipeline generations; counts are a triage indicator, not a bloat verdict.
+  Largest modules, imports, function lengths and literal schema constants are in
+  [inventory-initial.json](/mnt/nfs/shared/modern-bc/review-20261025/inventory-initial.json).
+- New import reproduction:
+  [decoder-import-repro.json](/mnt/nfs/shared/modern-bc/review-20261025/decoder-import-repro.json).
+- Existing independent measurements remain BC-REVIEW/BC-SYSTEM rows below:
+  omitted/duplicate supervision, target coverage, missingness/qualification,
+  action frequencies, continue-only baseline, exact versus bounded resume.
+  Next automate the current-code symptom checks without interpreting a heuristic as proof.
+
+## Recording evidence and next concrete actions
+
+1. Finish a fix-integration matrix against the pinned production baseline; inspect
+   newer next-event/history/angle experiments separately from the old reviewed paths.
+2. Verify existing recording receipts before new XPS capture. Newer coupled clips
+   under `/mnt/nfs/datasets/lol_replay_probes/20261014-xps/coverage-ten-001/`
+   have per-image brackets/camera records. Jayce receipt names NA1-5650853252,
+   1,870 frames, transfer_verified and hashes, but acceptance is **not_evaluated**.
+   A transfer receipt alone does not validate images/timing/decoded semantics.
+3. Select a short sequence with independently usable timing and movement/attack/cast
+   evidence, then trace it through the current BC formatter. The older 301-frame
+   Jax overlay is not the only evidence available; newer capture cadence is irregular,
+   and repeated video frames must never be counted as independent observations.
+4. Present the source trace, quantified errors, rejected/unknown fields and reasons.
+   Do not label receipt proxies as literal clicks or use captured memory to fill training data.
+
+No new Slurm jobs, client interactions, subagents, or action-space experiments
+started for this checkpoint. No production checkout edits. Review tool and record
+changes are isolated on `review/bc-quality-20261024`.
+
+---
+
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
 **E46 AFK TRAINING — Slurm1787:** User selected single AFK arm with health/tower shaping.

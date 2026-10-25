@@ -1036,3 +1036,17 @@ their named snapshots, not automatically the current implementation. Initial BC
 size census5376non-test lines includes multiple pipeline generations. Existing
 XPSoverlay/camera tools located; documented timing/height/anchor uncertainty must
 be tested independently. No capture, heavy job or new agent launched.
+
+
+## Review started; single running document (2026-10-25)
+
+Plan/progress now maintained in the top End-to-end code review section of
+docs/JAX_FIDELITY_LEDGER.md. Action-space changes deferred per Dani. Pinned
+modern/bc f10e4f42 still lacks isolated v2/v3review fixes; production remainsv1.
+Added lightweight immutable-ref inventory tool:36production BCfiles/5406lines,
+26testfiles/1567lines. Exact-function synthetic reproduction confirms decoder
+snapshot switching can return cached modules from the old snapshot. Not evidence
+of a wrong import in a historical job. Existing newer XPSrecordings located;
+Jayce transfer receipt acceptance not_evaluated. Next finish integration matrix
+and independently audit a short recorded sequence. No jobs/clientactions or
+production edits; evidence under shared/modern-bc/review-20261025.
