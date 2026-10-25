@@ -1282,3 +1282,20 @@ Seed sensitivity is material; seed changes initialization/window draws/emission
 draw jointly, so no causal assignment to one source. Summary
 smooth2-seed1-summary-13100.json. Await matched relative+smooth2 seed1 job13101
 before deciding follow-up; no new jobs or policy promotion on this receipt.
+
+**Relative+smooth2 seed1 13101 COMPLETED/0**,1000updates/661.91s/71val.
+Matched seed1 smooth2→relative Q/E mean match median9.56/23.44→8.19/13.97deg,
+within10 52.59/32.30→58.35/52.61%; relative E aim gain repeats across2 seeds.
+Raw Q/W/E/RF1 .1713/.1251/.0765/.0706→.1766/.1286/.0721/.0750,mean
+.11087→.11308; timing remains weak/mixed. Move within2 essentially identical
+8.622/8.632%,attackpointer72.26% both. Summary relative-smooth2-seed1-summary-13101.json.
+**Bounded convergence experiment13102→13103 registered.** Relative+smooth2,
+seed0,4000updates/b64/window256/burn32,470train; source8c668da2 learner,
+save1000/2000/3000/4000,no inline evaluation. Separate assessor sourcecefee640
+reads1000/2000/4000 on all71val and fixed first71 sorted training perspectives,
+sample0/no calibration at each point. New4000-step cosine schedule, so compare
+within-run trajectory; not exact continuation or duration-only contrast to old
+1000-step schedules. Question: undertraining versus train-val generalization gap.
+No enlarged data/B/RL; no promotion. Both GPU1h limits, private copies/reserve,
+NFS outputs,no-requeue/append; registered callbacks pending. Existing measured
+~.38s/update implies ~25min updates plus startup/staging; assessment ETA unmeasured.
