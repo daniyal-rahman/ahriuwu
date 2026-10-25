@@ -1271,3 +1271,14 @@ draws and sampled-eval draw together, matched between these two arms; not a
 pure initialization-only test. No calibration fit on val; raw seed1 assessment
 first, own calibrations later if warranted. Existing tested flags/no code edits;
 GPU1h each,private deep copies/reserve,NFS,no-requeue/append. Await callbacks.
+
+**Smooth2 seed1 replication13100 COMPLETED/0**,1000updates/470train/71val,
+658.43s. Raw sampled Q/W/E/RF1 .1713/.1251/.0765/.0706 versus seed0
+.1845/.1260/.0709/.0922;macro.11087 versus.11839. Rates seed1Q/W/E/R
+.821/.879/.861/.843×human; these are uncalibrated and must not compare with
+calibrated13095/13099. Teacher Q/E mean match median9.56/23.44deg versus
+12.47/26.94; attackpointer72.26% versus68.94%,movewithin2 8.622% versus9.202%.
+Seed sensitivity is material; seed changes initialization/window draws/emission
+draw jointly, so no causal assignment to one source. Summary
+smooth2-seed1-summary-13100.json. Await matched relative+smooth2 seed1 job13101
+before deciding follow-up; no new jobs or policy promotion on this receipt.

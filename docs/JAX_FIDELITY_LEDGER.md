@@ -882,3 +882,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-COMBINED-CALIBRATION-FIT | 2026-10-25 |13097/13098 completed51cal collection/fit,frozen relative+smooth2 step1000,checkpoint4a623acb…/dataset fingerprints consistent. T1/.7/.5 calibration castF1.11291/.14291/.17038;own T.5/bias frozen. Selection-set only;13099 held-out scoring dependency cleared, no promotion/new jobs. |
 
 | BC-V2-CALIBRATED-COMBINED-AND-REPLICATION | 2026-10-25 |13099 passed71val:Q/W/E/RF1.230/.169/.103/.203,mean.176 versus smooth2.174. Aim8.90/14.28deg retained,movementwithin2 10.21%;timing bottleneck remains,no promotion.13100/13101 matched seed1 smooth2/relative+smooth2 replications registered,same1000/b64,seed jointly changes init/draws/eval. No validation calibration fitting;await callbacks. |
+
+| BC-V2-SMOOTH2-SEED1-RESULT | 2026-10-25 |13100 completed1000updates/658.43s/71val. Raw Q/W/E/RF1.171/.125/.076/.071,mean.111 versus seed0.118;cast rates.821/.879/.861/.843. Teacher aim9.56/23.44deg,attackpointer72.26%,movewithin2 8.62%. Material seed sensitivity; no comparison to calibrated scores or promotion. Await matched13101;no new jobs. |
