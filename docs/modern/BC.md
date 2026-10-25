@@ -1161,3 +1161,217 @@ manifest has no terminal status; do not infer graceful completion or cleanup.
 Best6500 and latest7000 checkpoint payloads readable on NFS. No auto-restart.
 Scratch cleanup unverified. Target-supervision explanation passes728dark/360light
 previews and all3 target-mode checks; published inline. No training changes.
+
+## 15. Lane BC v2: design pivot (2026-10-24)
+
+This section supersedes the v6/v7 training plan above. Dani adopted the supplied
+“Lane BC v2 — design spec and build plan” and authorized changing the design without
+preserving the old architecture. Git tag `bc-v7-before-v2-20261024` identifies the
+last pre-pivot implementation. Historical checkpoints/data remain evidence and
+controls, not the default model to resume. No RL or simulator-generated supervision
+is part of this phase. The first implementation commit is a foundation, not a
+validated v2 learner.
+
+### Objective and data
+
+Deliver competent replay-only early-lane imitation, Ahri-mid first and Garen-top
+as a contrasting self/unit-targeted kit. Work on corpus A before scaling. Exact
+current inventory: 7309 patch26.19 matches /58470 non-jungle perspectives. Ahri
+678 total (599train/79val), including592mid (521/71); Garen280 total (251/29),
+including236top (210/26). Train/validation are match-disjoint. These counts justify
+a focused dev loop; they do not establish an adequate number of every rare event.
+Do not classify the regime as insufficient from a failed F1 threshold alone.
+
+Scope stays00:30–14:00,10Hz, alive/in-lane decisions, approximate circular vision.
+No buying, leveling, summoners, wards or late-game quality claim. Corpus B is raw
+next-patch acquisition, not converted training data: the read-only archive ledger
+currently lists23879 verified files /326486357375bytes. Freeze its inventory and
+verify decoded coverage/patch separately before use. Do not redownload or start
+collector work. Locate target-champion B matches using roster metadata only;
+reserve their **entire matches**, excluding every perspective in them from future
+pretraining, calibration and model selection. No automatic mixing of the remaining
+players of a held-out match into train. The final test is opened after design
+freeze, not once per experiment. Patch identity is not a mechanism for repairing
+semantic changes; metadata and parser contracts are patch-pinned.
+
+### Event/action contract
+
+Use9 observed semantic categories: continue, move, attack,Q,W,E,R,recall,stop.
+No unused reserved head. Remove held-destination copying from the new labels.
+Retain raw sub-frame action lists and provenance even when primary10Hz labels
+use cast>attack>stop>move and latest tie resolution. Basic attack records currently
+come from execution proxies, not proven attack-input receipts. Distinguish attack
+starts/target changes from repeated executions; do not relabel every execution as
+a new click. Reissue collapse (proposed150units/500ms) is an ablation after review,
+not a fact about player intent. Keep event-source and ambiguity flags.
+
+Button-valid and aim-valid masks are independent. A known cast button survives a
+missing/hidden target; only its aim term is absent. Self/none has no target;
+unit aims select an actual visible entity identity; point aims use a joint spatial
+distribution; verified directional aims can use circular angle bins. Keep a safe
+point-target representation for Ahri R until variable-distance/recast semantics
+are verified. Do not infer a fixed dash or fixed3-charge state from the proposal.
+No pseudo-target at the opponent when received aim is missing. No clamped label
+silently counted as an exact in-screen destination: preserve world point, clipping
+flag and target-valid reason, and audit out-of-view actions before choosing grid
+extent or a direction/distance alternative.
+
+Temporal smoothing is experimental, default width0 until an unsmoothed baseline
+exists. The supplied add-and-renormalize kernel inflates cast mass. The implemented
+`smooth_cast_targets` instead redistributes one unit of mass per received cast
+only into valid continue frames and its original event frame, renormalizing at
+boundaries/missing rows; nearest-cast ownership resolves overlapping neighborhoods.
+It never overwrites another actual event. Aim remains supervised only at its real
+cast frame with the actual button; smoothing targets never enter observations.
+Compare widths0/1/2/4, report target mass and operational event rates. This is
+label uncertainty, not evidence of earlier castability.
+
+### Inputs, metadata, causality
+
+Use named/versioned schemas rather than copied approximate dimensions24/60/12.
+Remove never-observed columns only after freezing a field map. Keep current
+missingness handling and100ms observation lag. Every extra champion row gets a
+patch-stable identity embedding; a projected16-vector cannot simply be added to
+128-wide tokens without a projection. New per-entity cast memory must use only
+receipts whose caster was visible then, retain last-seen identity correctly, and
+not import hidden enemy cast logs. Own received-cast ages retain history beyond
+30s (R cooldowns can exceed this); unknown before first receipt remains unknown.
+
+Keep issued-event history separate from confirmed-cast history. An issued keypress
+can fail. At deployment, absent confirmation must not masquerade as a successful
+cast receipt. Previous target history uses stable unit identity or coordinates,
+not a pointer-slot index that can change when entities reorder. Dropout on this
+input is an experiment, not a substitute for testing history corruption and
+teacher-forcing exposure. No current/future human action is an observation.
+
+Ability metadata comes from pinned client assets/CommunityDragon with hashes and
+per-field evidence/availability. No simulator kit defaults. Static metadata is
+explicitly authorized by this redesign, separately named from replay measurements.
+Use mode, min/max effect range, width/radius, cast time, projectile speed, rank
+cooldown reference, recast/charge/transform tags, damage types and target eligibility
+only where semantics are qualified. Metadata width is generated from the schema.
+Missing values stay masked; never map unknown mode to ground or missing cooldown
+to10s. Current Ahri Q/R catalog cast ranges25000 and E10000 are sentinel values,
+not usable effect ranges. Raw spell root evidence is not a verified policy mode.
+Ahri's recasts require explicit handling; a universal1s refractory mask is not a
+replacement for readiness. A base-cooldown-minus-age feature is an explicitly
+uncertain reference, not a true cooldown, legality label or hard action mask.
+Haste, resets, charges and recasts must be represented or uncertainty retained.
+
+### Model and losses
+
+Target architecture: structured entity transformer plus self token, retained
+entity outputs, shared recurrent trunk, button-conditioned target heads. Initial
+candidate:128-wide tokens,3pre-LN blocks/4heads/FF256; context256;3x1024MLP→512;
+GRU512 with normalized input/residual output. Measure real parameter/memory/step
+cost before fixing6–8M or claiming sub-hour runs. Existing2-block/4x1024 trunk
+is the capacity control. Do not simultaneously change every depth, dropout,
+optimizer and target parameterization when measuring the effect of conditioning.
+
+Distribution: p(button|history) p(target|button,history,known metadata). Train
+conditional heads with the received button, infer with the chosen button, and
+report both oracle-button and actual-button target metrics. Unit pointer attends
+to entity outputs (64-d query/keys) with qualified type/team/padding masks; unknown
+eligibility is not silently illegal. Empty candidate set skips aim safely.
+Ground/move uses a joint96x54 grid. Circular72-bin angle head is a later isolated
+ablation for verified directional abilities. No value head is required for BC.
+
+Baseline uses unweighted button CE and per-mode aim CE, valid-mask normalization;
+no5x class weights or held labels. Report actual loss and gradient contribution by
+mode. Natural event frequencies are the calibration reference. Any event sampling
+or weighting changes must state the effective training distribution and evaluate
+rate calibration separately. Auxiliary own-position+2s and opponent-position+1s
+are optional ablations, as is own-HP+3s Huber regression (not CE). Future auxiliary
+labels never become inputs. Enemy future-position targets require observable
+future evidence; deaths, discontinuities, missing units and horizon validity are
+masked. Future own displacement is relative to the current anchor, not a future
+player-centered camera where own position is identicallyzero.
+
+Start with Adam3e-4/floor3e-5/clip0.5 and existing numerical settings as a control;
+AdamW, weight decay, dropout and bf16 are subsequent measured choices. Dev batch64,
+window256/burn32, rematerialization; no detachment through burn-in. Benchmark64/128
+and fixed update budgets before setting epochs. State carry needs contiguous
+windows, resets on perspective/death boundaries, preserved input lag, and an
+explicit train/inference-state protocol; never carry hidden state across shuffled
+games. Ablate stateful versus reset evaluation to quantify mismatch.
+
+### Evaluation and test isolation
+
+Separate train, checkpoint-selection, threshold/bias-calibration and final-test
+match IDs. Hold out some A-training matches for calibration instead of retuning
+thresholds on the same scored validation sample. Calibrate biases/peak thresholds
+there, then freeze them for validation and test. Human-rate threshold selection
+on the scored set is an **oracle diagnostic**, not a deployable metric or useful
+rate veto. Frame-dilated AUPRC is a frame-ranking diagnostic, not event AUPRC.
+
+Operational evaluation runs the actual10Hz event emitter. Score one-to-one
+predicted/received event matching within0.5s, using maximum-cardinality ordered
+matching (nearest-pair greedy can lose valid matches). Report precision/recall/F1,
+events/minute, inter-event intervals, missed/burst events, exact and tolerant
+rankings, angle error, unit-pointer accuracy, movement point error and joint
+button+target quality. Apply all timing masks to exclude burn-in and invalid
+intervals. Angle metrics exclude near-zero direction vectors; pointer/angle targets
+use consistent delayed entity identity and current frame conventions.
+
+Select a Pareto-qualified checkpoint: event discrimination and correctly emitted
+events must improve without material movement/target/calibration regressions.
+Freeze metric tolerances from baseline variance and bootstrap by match. Avoid an
+arbitrary scalar mixing degrees, F1 and cells with unbounded negative angle terms.
+The proposed0.5F1/10deg/0.85pointer/2cell numbers are aspirational, not evidence-based
+pass/fail bars or proof that a failure implies too little data. R with few labels
+must show counts/confidence. Existing v7 reference2000 does not govern v2.
+
+### Staged experiments and gates
+
+1. Inventory and24-perspective Ahri/Garen raw-source audit; then all target games.
+   Verify masks, unit IDs, targeting coverage, event/bin collisions, duplicate
+   receipts, inter-event intervals, raw aiming/origin points, source-qualified
+   metadata and role/match split counts. Latency and “aim at opponent” distributions
+   are diagnostics; a human need not react to every enemy cast or aim every Q at
+   the paired opponent. Do not force peaks at200–500ms or0degrees as correctness.
+2. Versioned event/aim/history sidecars reuse observations where parity holds.
+   Validate known-target synthetic fixtures plus deterministic fixed-window
+   memorization and a label-shuffle leakage control. Ten-game validation improvement
+   is not a leakage test. Re-run source/lag parity before any new learner.
+3. Ahri-mid unsmoothed event baseline; bounded compute benchmark and actual-button
+   targeting evaluation. Compare conditional versus unconditional **same target
+   head/inputs** first. Then isolate pointer and angle parameterizations.
+4. Own-history on/off plus a small conditioning/history2x2 if interaction matters;
+   smoothing widths after unsmoothed baseline. Auxiliaries and metadata are separate
+   toggles. Evaluate raw and calibrated metrics, shuffled/corrupted history, and
+   at least two seeds for close decisions; bootstrap match confidence intervals.
+5. All-champion pretrain→80%Ahri/20%mixed fine-tune versus target-only, holding
+   target updates, total compute and calibration protocol explicit. Source-known
+   simple modes first; complex/unknown modes retain button supervision and use
+   point targets only with qualified received points. No need to finish172
+   hand-written tables before the Ahri dev loop.
+6. Expand to Garen and then frozen corpus-B test after design freeze. Keep a
+   learning curve by unique match/event count to distinguish data from architecture.
+   Do not run capacity/parameter sweeps on the final test. No RL is automatically
+   added if BC stalls.
+
+Live client evaluation is a separate measured dependency, not an existing harness.
+Define observable fields and successful-action feedback first. Canonical-to-client
+projection is not assumed to be a fixed affine map; calibrate actual camera/world
+projection and latency. Replay adapter parity is necessary but does not establish
+live observation parity. Blind50ms click retries and1s spell suppression can alter
+commands/recasts; neither is a default. Online CS targets require an explicit
+buying/leveling/loadout protocol because those behaviors are out of policy scope.
+Do not promise competent real-client play without that adapter and scope bridge.
+
+### Research grounding and current build state
+
+[JueWu-SL](https://arxiv.org/abs/2011.12582) reports competitive supervised-only
+play with hierarchical actions, intent tasks and scene-based sampling; it is not
+proof that RL is necessary for competent BC, nor a guarantee for our smaller and
+partially observed corpus. [Tencent's control paper](https://arxiv.org/abs/1912.09729)
+provides target attention/action masks/control-dependency motivation.
+[DI-star's action head](https://github.com/opendilab/DI-star/blob/main/distar/agent/default/model/head/action_type_head.py)
+provides a concrete teacher-forced versus sampled conditioning implementation.
+Robotics chunking is a hypothesis to test here, not a demonstrated MOBA improvement.
+
+Implemented foundations:9-event vocabulary, mass-preserving optional smoothing,
+ordered one-to-one event matching, raw metadata inventory without defaults, and
+regression tests. They are not wired into the legacy trainer. Validation is pending
+Slurm; raw-target audit and v2 learner remain to build. This distinction belongs
+in every progress update until actual v2 training runs.

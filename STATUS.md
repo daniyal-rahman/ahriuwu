@@ -720,3 +720,17 @@ manifest has no terminal status; do not infer graceful completion or cleanup.
 Best6500 and latest7000 checkpoint payloads readable on NFS. No auto-restart.
 Scratch cleanup unverified. Target-supervision explanation passes728dark/360light
 previews and all3 target-mode checks; published inline. No training changes.
+
+**2026-10-24 DESIGN PIVOT — Lane BC v2.** Dani adopted the supplied redesign;
+section15 of `docs/modern/BC.md` now supersedes v6/v7 training directions.
+Tag `bc-v7-before-v2-20261024` preserves the pre-pivot commit. Current worktree and
+branch retained; do not resume cancelled v7 jobs by default. Verified Ahri-mid
+592 perspectives(521train/71val), Garen-top236(210/26); enough for the proposed
+dev loop without assuming that more corpus size fixes representation. Corpus B
+ledger23879 verified raw files; no decoded/training readiness claim. Static client
+metadata is explicitly authorized in v2, with source masks/hashes, not sim defaults.
+Critical amendments: match-wide heldout isolation; mass-preserving smoothing;
+no assumed fixed Ahri R/no blanket refractory; issued versus confirmed history;
+separate calibration; no repeated final-test tuning; real-client adapter unbuilt.
+New event/metadata foundation modules and tests are committed as unvalidated
+scaffolding, not a trained v2 model. Unrelated AGENTS/CLAUDE edits remain untouched.
