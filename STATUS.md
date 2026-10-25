@@ -1076,3 +1076,14 @@ visible-opponent direction heuristic as diagnostic only, never BC supervision.
 Assessor now persists checkpoint hash and model contract for future provenance.
 New matching/angle-wrap/gap regression tests pending execution. No promotion;
 13084–13087 timing/weighting interactions remain registered.
+
+**Matched-aim CPU13088 registered**, sourcee4288d17,1core/2GB/15min. Stages
+immutable grid/angle sampled prediction exports plus original target arrays,
+verifies time/button identity, runs2 index/wrap/gap tests, scores actual emitted
+angles at predicted time versus human directions at matched receipt time(±0.5s).
+Reports qualified-match aim accuracy and joint known-target recall, explicitly
+agreement not hit rate. Also compares learned teacher aim with visible paired-
+opponent direction on identical qualified visible frames, diagnostic only.
+No labels changed or heuristic supervision introduced; no additional GPU training.
+Await13088 and13084–13087. Existing angle sample summary at angle-emitter-summary-
+13082.json preserves exact-frame support caveat; no whole-policy promotion.
