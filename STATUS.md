@@ -1551,3 +1551,9 @@ as4k reference;labels/emissionfactorization/newdelayhead jointly changed.
 Finalsharedcausalgreedy+sample71val;training logs next-known/observedevent
 counts and delaylossmass. CPU15min/GPU1h,privatecopies/reserve,NFS,no-requeue/
 append. Tests/learnedquality pending;no policy promotion.
+
+**Next-event testgate13124 COMPLETED/0:** actual NFS log95passed/40.26s.
+Censoring/gap handling,immediate probability conservation,teacher-aim-button
+independence and correct-next-type delay gradients passed. Afterok13125 gate
+cleared;learned action quality unmeasured. Awaitregistered learner callback,
+no new jobs/policy promotion.
