@@ -1381,3 +1381,13 @@ history even when scoring actual-button targets, so this is offline conditional
 assessment, not closed-loop rollout evidence. Calibration, broad target conversion,
 training orchestration, shuffle control and the staged ablations remain to build.
 See STATUS and the fidelity ledger for subsequent receipts.
+
+V2 job restart protocol: short validation jobs use explicit `--no-requeue` and
+`--open-mode=append`. Job13050 demonstrated that Slurm's default requeue can
+restart a script against its already-created output path and truncate the earlier
+log. Keep unique job/attempt output paths and preserve failed evidence; never make
+`exist_ok=True` an implicit checkpoint-resume policy. Until a job wrapper implements
+and validates attempt-aware staging, checkpoint restoration and the original total
+budget, production learners also use explicit no-requeue and resume via a newly
+registered job after terminal feedback. A fresh output directory alone does not
+resume a training budget.

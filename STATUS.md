@@ -867,3 +867,13 @@ optimizer step16, two separate16→32 continuations, and original control/resume
 comparisons. Declared bounds maxabs1e-3/relativeL2 1e-4/end-loss spread1e-3;
 results remain diagnostic, not bitwise-determinism proof. Await13055 and strict
 memorization13050 callbacks. Dataset828 remains finalized; broader training gated.
+
+**Strict13050 FAILED before a completed model result:**Slurm Restarts=1;
+restarted script encountered existing empty NFS output directory and refused it.
+Original attempt's stdout was overwritten, so no inference about its loss curve
+or the original restart cause. No strict-memorization verdict exists.
+**Strict retry13063 registered** with identical b8b8f957 code/1000-step gate,
+fresh job-private staging/output, explicit no-requeue and append logs. No model
+changes or larger budget.13055 was RUNNING first attempt(Restarts=0); disabled
+requeue for this owned diagnostic as well. No polling loop; await both receipts.
+BC.md records explicit short-job restart policy; broader training remains gated.
