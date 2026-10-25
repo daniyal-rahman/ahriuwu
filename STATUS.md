@@ -1432,3 +1432,9 @@ enabled and training-only window dropout.3;finalgreedy+sample71val normal
 history. Default schedule/labels/draws same as4k reference,not a closed-loop
 robustness result. CPU15min/GPU1h,private deepcopies/reserve,NFS,no-requeue/
 append. Awaitcallbacks;no calibrated or learned dropout result/promotion yet.
+
+**Grouped dropout test gate13113 COMPLETED/0:** actual NFS log86passed/
+37.78s. Group consistency/reproducibility,cast-timer preservation,unchanged
+labels and source-input immutability regression passed. Afterok13114 cleared;
+learned dropout quality and deploy robustness unmeasured. Await registered
+learner callback,no new jobs or policy promotion.
