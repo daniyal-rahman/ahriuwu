@@ -836,3 +836,24 @@ separate. Three focused metric tests passed, including this denominator case.
 Active registered work: target conversion13045/finalizer13047, learner/resume/
 eval smoke13049 and strict memorization13050. Await receipts; no broad Ahri
 training or accepted quality result yet. Existing unrelated edits untouched.
+
+
+## Independent BC code/data review (2026-10-24)
+
+Review branch `review/bc-quality-20261024` audits v2 source `5a369951` against
+BC.md§15 and Dani's pasted Fable design. Findings/evidence are in fidelity-ledger
+rows BC-REVIEW-001..010; no production BC fixes or new training run in this review.
+CPU13052 passed all75 BC tests and independently profiled24 perspectives.
+CPU13053 profiled all828 finalized Ahri/Garen perspectives/5,420,481 valid frames.
+Default windows permanently omit378,532 of2,992,280 Ahri train frames, including
+2,123Q/685E/294R labels. Pointer masks omit known team/type restrictions.
+CPU13054 checked original24-perspective decoder records: all356 equal-time
+cast/path pairs lose source order in the reader;423 multipoint special-motion
+paths lose their motion distinction when made into Action records. Prioritize
+these source semantics, window coverage and target eligibility before scaling.
+Full Ahri clipped aim counts: Q3219/21801,E1059/6899,R469/3220; these labels are
+excluded from target scoring, so aiming reports cover a selected subset.
+Repro tool: `ops/modern/bc_quality_profile.py`; scripts, JSON and logs at
+`/mnt/nfs/shared/modern-bc/review-20261024/`. All three review jobs completed;
+private staging cleanup verified. Other agent's learner/memorization work is
+independent; its current state belongs to its receipts, not this review snapshot.
