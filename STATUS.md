@@ -1024,3 +1024,15 @@ frames;18647valid initial-burn frames are context-only. Legacy fixed windows
 would omit669133frames on this same corrected data. This closes the original
 event-v2conversion/coverage validation graph13058..13061, not the source-v3full
 rebuild or behavioral acceptance. No additional job submitted.
+
+
+## End-to-end review requested (2026-10-25)
+
+Dani expanded review to decoder/XPSvisual proof, tensorization, action-space
+learnability, trainer/paper fidelity, hyperparameters, simulator/JAX and symptom-
+driven code quality. Roadmap recorded in fidelity ledger. First reconcile current
+modern/bc8343868b with isolated review fixes; previous findings/receipts apply to
+their named snapshots, not automatically the current implementation. Initial BC
+size census5376non-test lines includes multiple pipeline generations. Existing
+XPSoverlay/camera tools located; documented timing/height/anchor uncertainty must
+be tested independently. No capture, heavy job or new agent launched.
