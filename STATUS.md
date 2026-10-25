@@ -1059,3 +1059,837 @@ functions changed but the specific old mask/gate defects remain by inspection.
 Running document contains evidence and avoids calling this a regression. Newer
 experiments must be preserved/reviewed when integrating corrections. Next evidence
 selection/source-trace work uses existing XPSrecordings, no new capture job yet.
+
+**Strict13050 FAILED before a completed model result:**Slurm Restarts=1;
+restarted script encountered existing empty NFS output directory and refused it.
+Original attempt's stdout was overwritten, so no inference about its loss curve
+or the original restart cause. No strict-memorization verdict exists.
+**Strict retry13063 registered** with identical b8b8f957 code/1000-step gate,
+fresh job-private staging/output, explicit no-requeue and append logs. No model
+changes or larger budget.13055 was RUNNING first attempt(Restarts=0); disabled
+requeue for this owned diagnostic as well. No polling loop; await both receipts.
+BC.md records explicit short-job restart policy; broader training remains gated.
+
+**Resume probe13055 COMPLETED/0:**checkpoint parameter/optimizer roundtrip
+exact, both optimizer counters16. Two same-process continuation replicas agree
+bitwise. Original control/resume versus probe: maxabs<=1.1275e-4, relativeL2
+<=2.799e-5; final-loss spread7.153e-6. Accept bounded numerical resume fidelity
+for this fixture, not cross-process bitwise determinism or a proved kernel cause.
+No learner logic/loss/tolerance changed to hide a checkpoint mismatch. Original
+13049 final strict assertion remains failed evidence;13055 supplies the separate
+numerical comparison. Strict13063 remains the gate before broad Ahri learning.
+
+**Batch benchmark13067 registered afterok:13063**, sourcef2891e0a, exclusive
+GPU node/24GB/45min, no-requeue/append logs. Separate16-update processes for
+batch8/32/64,window256,burn32 on470 train Ahri perspectives; no validation or
+quality-selection claim. Fresh deep-copied target dataset and code; durable
+checkpoints/throughput on NFS.13066 was intentionally cancelled before execution
+and replaced to include required node exclusivity; do not auto-resubmit13066.
+Await strict13063 and benchmark13067 receipts before selecting baseline budget.
+
+**Strict13063 FAILED its declared button-NLL gate after1000 completed updates.**
+Final accuracy99.08% exceeds98%, NLL0.06303 misses0.05; total loss4.5477→0.8184,
+aim CE2.4951 (soft-target entropy is nonzero). Late constant-LR losses oscillate;
+no NaN, checkpoint or runtime failure. Add bounded1000→1200 continuation of the
+same saved params/moments/windows at LR3e-5 rather than3e-4; strict accuracy/NLL
+gates unchanged. This tests optimizer settling, not a larger model or generalization.
+Benchmark13067 dependency cannot pass after13063 failure; cancel/rebind to this
+new gate. No broad baseline started, no strict-success claim.
+
+**Strict polish13069 registered**, source19e43e03, GPU20GB/20min, saved13063
+params and optimizer state, same fixed windows, total ceiling1200 (200 extra),
+LR3e-5. Source/data/donor copied privately with combined-size+20GiB reserve;
+no-requeue/append logs. Benchmark13067 intentionally cancelled because its
+13063 afterok dependency failed; replacement registered afterok13069. Await
+terminal receipts rather than polling; no broad Ahri training yet.
+Replacement exclusive batch benchmark is13070, same f2891e0a source and16-update
+batch8/32/64 recipe; no quality comparison or extra dev-training budget implied.
+
+
+**Strict polish13069 COMPLETED/0:**restored1000→1200,LR3e-5,161.97s including
+compile. Fixed109 supervised frames reach100% button accuracy,NLL0.002799;
+total loss0.81843→0.74956,unit loss contribution5.36e-8. Strict98%/<0.05 gate
+passes without changed thresholds. Aim CE2.46658 includes Gaussian-target entropy,
+so nonzero total loss does not imply failed memorization. Same two windows only;
+no held-out quality/leakage-control claim. Benchmark13070 now eligible afterok;
+await measured batch8/32/64 throughput before selecting first broad Ahri budget.
+No additional jobs submitted on this receipt; no broad Ahri training launched.
+
+**Exclusive batch benchmark13070 COMPLETED/0:**batch8/32/64 all fit and train
+16 updates on470 Ahri train perspectives. Median update0.1822/0.2728/0.3740s,
+11.24k/30.03k/43.80k frames/s; batch64 selected. Each process39–57s including
+load/compile; throughput only, no quality comparison. Eligible13992 train windows.
+**Ahri baseline13074 registered**, sourcef2891e0a,1000 total updates,batch64,
+window256/burn32,seed0,Adam3e-4 cosine→3e-5,100-step warmup,clip0.5. Natural
+unweighted event+aim losses, history on, conditional targets, no co-move/auxloss.
+470train perspectives sampled with replacement;64000 window draws (~4.57 times
+eligible-window count), not four exact epochs. Save250/500/750/1000; full71val
+stateful raw evaluation after training.51calibration perspectives untouched.
+GPU24GB/1h/no-requeue/append/private immutable data+code copies. Expected6–8min
+training from benchmark, evaluation additional. No model-quality result yet.
+Matched unconditional control registered afterok13074: same source/seed/batches/
+budget/target parameterization, only conditional_aim=False. No automatic promotion.
+Matched unconditional control job ID13075, afterok13074. The first comparison is
+identical conditional-vs-unconditional target parameterization; no simultaneous
+angle/head/history changes. Report aggregator implemented for summed event counts,
+per-button joint/conditional target success and match-bootstrap paired intervals;
+macro frame AP and mean per-match median point errors explicitly named, not pooled
+AP or pooled medians. Aggregator syntax checked; real broad validation unrun.
+
+**Ahri baseline13074 COMPLETED/0**,1000 updates/661.46s training,6.903Mparams,
+b64 median0.3818s/update. Full71val/451441valid frames: greedy emits0attacks and
+0QWER/recalls; expected QWER counts0.942/1.047/0.955/0.926x human. Exact-frame
+macro AP Q/W/E/R0.06355/0.03521/0.02073/0.02579. Teacher Q/E within2cells only
+1.57/1.41%,mean per-match median25.43/24.69cells; attack pointer68.68%.
+Movement teacher within2 9.93%,mean per-match median10.89cells. Not useful policy
+quality and no promotion. Raw greedy diagnostic is not intended sampled-emitter
+quality.13075 matched unconditional remains registered; await its result.
+Implemented isolated Q/E angle-label and3x cast-aim ablation flags, preserving
+original aim-valid support for parameterization comparison (no clipped-label
+recovery yet). Added sampled emitter with RNG carried across chunks and targets
+conditioned on sampled buttons, plus checkpoint assessor/prediction export.
+Tests added for weighting isolation, label/input preservation and sampled-target/
+chunk invariance. Not Slurm validated yet; no new ablation training launched.
+Grid-target evaluation now also converts predicted cells through the shared static
+camera projection to direction error against saved replay angles. This supplies
+angular metrics for a fair grid-versus-angle comparison; no simulator rollout or
+new state source. Direction support is reported explicitly; inputs unchanged.
+
+**Ablation/emitter validation13076 registered**, source73fe070d, CPU2/8GB/15min,
+full suite including new label/loss isolation and sampled-target chunk/RNG tests.
+Three GPU jobs gated afterok13076, same immutable source/private staging:
+**13077** re-assesses frozen baseline greedy plus categorical T1/seed0 on71val,
+exports prediction summaries and direction metrics, no fitting or retraining.
+**13078** Ahri Q/E angle-head ablation, original valid-label support unchanged.
+**13079** original grid with3x cast-aim loss only, button loss unchanged.
+Both learning arms match baseline1000updates/b64/window256/burn32/seed0/schedule;
+no angle+weight combination yet.51calibration and B untouched. No promotion.
+All no-requeue/append, logs/checkpoints NFS; runtime training measured11min for
+first baseline including startup, plus evaluation/queue. Paired13075 remains
+registered, no result inspected yet. Baseline summary saved to
+`v2-20261024/baseline-summary-13074.json`; await registered callbacks.
+
+**Matched unconditional13075 COMPLETED/0**,same71val match IDs as13074.
+Conditional versus unconditional teacher Q within2 1.570%vs1.265%, E1.410%vs1.128%,
+movement9.932%vs9.449%; attack pointer68.678%vs68.956%. Macro exact-frame Q AP
+6.355%vs6.583%, E2.073%vs2.189%; greedy QWER zero in both. These are small,
+mixed changes and neither policy is useful; no conditional-head quality promotion.
+Summary `v2-20261024/conditioning-summary-13075.json`.
+**Ablation/emitter tests13076 COMPLETED/0:**78 passed35.66s, including isolated
+cast-aim weighting, angle-label/input support, sampled target follows emitted
+button, and PRNG continuity across chunks.13077/13078/13079 dependencies cleared.
+**CPU paired report13080 registered**, source73fe070d,500 match-bootstrap draws,
+conditional-minus-unconditional intervals on same71matches, private snapshots/
+NFS output. This assesses uncertainty, not a new training run. Await registered
+13077 emitter,13078 angle,13079 cast-weight and13080 reports; calibration/B unused.
+
+**Paired report13080 COMPLETED/0**,71 matched validation bases,500 bootstrap
+draws. Conditional-minus-unconditional 95% intervals: Q aim-within2 -0.087 to
++0.660pp; E -0.277 to+0.911pp, neither resolved. Movement within2 +0.341 to
++0.634pp, a small gain. Q exact-frame AP -0.461 to-0.015pp, W -0.463 to-0.070pp;
+E/R intervals cross zero. These quantify held-out match uncertainty for one seed,
+not training-seed robustness. Conditioning alone is not an accepted practical fix.
+No new jobs on this receipt. Await13077 sampled emitter,13078 directional targets,
+13079 cast-aim weighting. All current quality remains offline replay-conditioned;
+no promotion, no calibration or corpus-B use.
+
+**Emitter assessment13077 COMPLETED/0:**71val greedy versus categorical T1/seed0,
+frozen baseline, no retraining/calibration. Sampled movement/attack/Q/W/E/R event
+F1@0.5s =0.8064/0.3653/0.1498/0.1068/0.0532/0.0957; emitted rates1.024/0.942/
+0.947/1.098/0.917/1.038x human. Sampling repairs greedy zero-cast behavior but
+not strong timing/targeting. Teacher grid-derived mean per-match median Q/E
+angle errors34.78/87.49deg; within10deg27.82/12.41%. Exact-frame sampled joint
+Q point-near success0.218% of eligible aim labels,E0%; do not interpret as tolerant
+matched-event target scoring. Summary `v2-20261024/emitter-summary-13077.json`.
+Timing-null CLI added to preserve predicted counts per contiguous valid segment
+while permuting times, so high dense movement F1 can be compared to frequency-only
+chance. Not yet run.13078/13079 remain registered; no promotion.
+
+**Timing-null13081 registered**, sourceedc27926,CPU1/2GB/15min,32 within-valid-
+segment permutations of frozen13077 sampled buttons. Per-segment per-button
+counts asserted equal; output timing-null-13081.json on NFS. This compares temporal
+alignment to a frequency/context baseline, not action-target quality, independent
+training seeds or closed-loop competence. Private copied predictions/code and
+20GiB reserve; no new model training. Await13081 and aim ablations13078/13079.
+
+**Timing null13081 COMPLETED/0**,32 permutations preserve each button's count
+within every valid segment. Observed versus null-median F1: movement0.8064vs0.7456,
+attack0.3653vs0.2429,Q0.1498vs0.0670,W0.1068vs0.0675,E0.0532vs0.0272,
+R0.0957vs0.0359,recall0.1140vs0.0154. Learned timing signal exists beyond
+segment frequency, but absolute spell F1 remains weak; most dense movement
+matching score survives shuffling. Null intervals describe this permutation
+control, not match-bootstrap/training-seed uncertainty. One sampled emitter seed;
+no action-target, availability or closed-loop quality inference. No promotion.
+Await registered angle13078 and cast-aim13079 results; no new jobs on this receipt.
+
+**Angle ablation13078 COMPLETED/0:**1000 matching updates/71val,657.17s training.
+Same original valid Q/E aim support: teacher mean per-match median angle error
+Q34.78→12.37deg,E87.49→27.36deg; within10 Q27.82→42.52%,E12.41→23.70%.
+Movement within2 9.932→9.304% and median10.888→11.078cells, a small regression;
+timing macro QAP6.355→6.254%,E2.073→2.313%. Clear parameterization benefit,
+not whole-policy promotion or seed-robustness proof. Summary angle-summary-13078.
+**Sampled angle assessment13082 registered**, same73fe070d source/frozen angle
+checkpoint,71val/T1/seed0; no fitting. Cast-aim13079 still pending result.
+Next independent timing controls implemented: own-cast ages-only toggle (retain
+previous event/enemy history), and mass-preserving smoothing radius0/1/2. Optional
+sampled evaluation added after greedy eval for future learners. Tests added for
+age isolation/shape compatibility; not yet Slurm validated or trained.
+
+**Timing-control validation13083 registered**, source2d36adc8,CPU2/8GB/15min,
+full suite plus explicit own-age isolation/shape compatibility. GPU arms afterok:
+**13084** angle candidate minus only own QWER ages; previous-event/enemy history
+retained. **13085** angle candidate with radius1 cast smoothing; **13086** radius2.
+Each1000updates/b64/seed0/same draws/schedule, natural button mass (preserved per
+cast before window/burn masks), no extra aim weight. Both greedy and categorical
+T1/seed0 eval on71val;51calibration/B untouched. Same immutable code/data private
+staging, no-requeue/append,24GB/1h each. No result/promotion claimed; await13083,
+13084–13086 plus13079 cast-weight and13082 sampled-angle receipts.
+
+**Cast-aim3 grid13079 COMPLETED/0**,1000updates/71val,665.26s training.
+Q within2cells1.570→6.062%,angular mean match median34.78→19.13deg; E within2
+1.410→1.551%,angle87.49→78.16deg. Movement within2 essentially unchanged
+9.932→9.900%; Q/E exact-frame AP6.355→6.461%/2.073→2.164%, W/R mixed.
+Target weighting helps Q grid learning but not enough, and angle-only12.37/27.36deg
+remains better. No complete-policy promotion. Summary cast-aim3-summary-13079.
+**Timing tests13083 COMPLETED/0:**79passed37.31s, own-age-only mask/parameter
+shape and other-history retention validated;13084–13086 gates cleared.
+**Angle+aim3 interaction13087 registered**, same2d36adc8 source/data/1000updates/
+b64/seed0, angle candidate plus only3x cast-aim weight, no smoothing or history
+removal, both greedy/sampled eval. This tests weighting on the improved target
+parameterization; angle-only remains the reference. Private staging/no-requeue/
+append/24GB/1h. Await13082 sampled angle,13084–13087; calibration and B unused.
+
+**Sampled angle13082 COMPLETED/0**,71val/T1/seed0: Q eventF1.1449 versus grid.1498,
+E.0468 versus.0532,movement.8020vs.8064; no timing rescue. On exact correct-button
+frames, Q angle within10 is26/49, E0/1: tiny E support makes0% uninformative.
+Implemented matched-event direction agreement using separate predicted/received
+frame indices and stable contiguous-valid matching; no hit-rate claim. Added
+visible-opponent direction heuristic as diagnostic only, never BC supervision.
+Assessor now persists checkpoint hash and model contract for future provenance.
+New matching/angle-wrap/gap regression tests pending execution. No promotion;
+13084–13087 timing/weighting interactions remain registered.
+
+**Matched-aim CPU13088 registered**, sourcee4288d17,1core/2GB/15min. Stages
+immutable grid/angle sampled prediction exports plus original target arrays,
+verifies time/button identity, runs2 index/wrap/gap tests, scores actual emitted
+angles at predicted time versus human directions at matched receipt time(±0.5s).
+Reports qualified-match aim accuracy and joint known-target recall, explicitly
+agreement not hit rate. Also compares learned teacher aim with visible paired-
+opponent direction on identical qualified visible frames, diagnostic only.
+No labels changed or heuristic supervision introduced; no additional GPU training.
+Await13088 and13084–13087. Existing angle sample summary at angle-emitter-summary-
+13082.json preserves exact-frame support caveat; no whole-policy promotion.
+
+**Matched-aim13088 COMPLETED/0**,2 regression tests pass. Q qualified matches:
+grid344/angle324,within10 33.72/46.60%,joint known-target recall5.06/6.59%.
+E qualified matches36/32,within10 11.11/15.63%,joint recall0.564/0.705%; uncertainty
+large, no hit-rate/closed-loop claim. On identical visible-opponent human frames,
+angle head pooled median Q12.18/E21.13deg versus straight observed-opponent
+Q6.41/E6.04deg (1301Q/456E). This exposes a spatial reference weakness rather
+than evidence that more data alone is necessary. Implemented optional opponent-
+relative angle coordinates: learn a full-circle offset from currently visible
+paired-opponent direction, global fallback if absent. No heuristic labels or
+forced targeting, no extra parameters, replay observations unchanged. Tests for
+rotation/probability support and missing-opponent equivalence added, unrun.
+No promotion; pending13084–13087 remain separate controlled experiments.
+
+**Relative-coordinate tests13089 registered**,source8c668da2,CPU2/4GB/15min,
+full suite including mass/full-support rotation, absent-opponent equality and
+sampled-target compatibility. **Relative-angle learner registered afterok13089**:
+angle-only reference plus full-circle observed-opponent-relative coordinates,
+same1000/b64/seed0/draws/schedule, no smoothing/weight/history changes, greedy+
+sampled71val assessment. No extra trainable parameters, no new source features
+or labels; eligible target support unchanged. No-requeue/append/private copies.
+Await validation/model receipts plus13084–13087; no complete-policy promotion.
+Relative-coordinate learner job ID13090. **Tests13089 COMPLETED/0:**
+83 passed38.62s. Dependency afterok13089 cleared; no learned relative
+head quality result yet. This receipt is a validation result, not model promotion.
+
+**Own-age removal13084 COMPLETED/0**,same1000updates/71val,656.23s training.
+Own ages on→off: exact-frame macro Q AP6.254→5.387%, E2.313→2.019%; sampled
+Q F1.1449→.1355,R.0959→.0694. E sampled F1 rises.0468→.0528 despite worse
+ranking; one draw/seed does not establish an E improvement. Q/E aim mean match
+median12.37/27.36→13.15/28.05deg. Retain own-age features provisionally; this
+isolates explicit four ages, not previous-event/GRU/enemy history. No availability
+mask or engine cooldown added. Summary no-own-age-summary-13084.json.
+**Paired ablation report13091 registered**,CPU1/2GB/20min,afterok13085/13086/
+13087/13090.500 match-bootstrap draws per arm against fixed angle reference on
+same71matches; copies validation/config receipts, verifies1000steps/470train.
+Source8c668da2 report code; no training, same-seed match uncertainty only.
+Await smoothing/weight/relative arms and13091; no complete-policy promotion.
+
+**Smoothing radius1(±0.1s)13085 COMPLETED/0**,1000 matching updates/71val,
+664.42s training. Sampled Q/W/E/R F1 .1449/.1092/.0468/.0959→.1457/.1125/
+.0520/.1010: small changes, no clear practical timing fix from one seed/draw.
+Movement within2 9.304→8.434%, exact move AP40.651→39.731%; Q/E mean per-match
+median angles12.37/27.36→11.99/25.85deg. Original unsmoothed angle remains
+reference; no smoothing promotion. Summary smooth1-summary-13085.json.
+Await±0.2s13086,angle+aim3 13087,relative-angle13090 and paired-report13091.
+No new jobs on this receipt; existing registered work continues, B/calibration
+remain unmodified and no policy-quality or online readiness claim.
+
+**Smoothing radius2(±0.2s)13086 COMPLETED/0**,657.42s training/71val.
+Sampled Q/W/E/R F1 .1449/.1092/.0468/.0959→.1845/.1260/.0709/.0922;
+near-frame Q/E AP.2012/.0842→.3186/.1441,exact AP decreases as expected for
+smoothed supervision. Rates near human,Q/E aim12.47/26.94deg essentially stable;
+movement within2 9.304→9.202%,attackF1.3648→.3577. Keep as timing candidate,
+not policy promotion; paired intervals/other heads pending.
+Calibration modules implemented: temperatures1/.7/.5, per-class intercepts fit
+expected human counts using only51calibration perspectives; select temperature
+by calibration QWER eventF1 averaged3 fixed seeds, then freeze. Causal per-frame
+probability transform; no future lookahead or cooldown masks. Assessor validates
+checkpoint/dataset fingerprints. Test for rate restoration/causal prefix added,
+unrun. No calibration fitted or scored yet;51calibration/B still untouched.
+
+**Separate emitter-calibration chain registered**,sourcecefee640:13092 full-suite
+CPU gate;13093 GPU frozen smooth2 checkpoint collects only51 calibration
+perspectives;13094 CPU fits intercepts/temperatures1,.7,.5 and freezes selection;
+13095 GPU scores frozen choice on71 validation perspectives/T1 sampling seed0
+(with selected temperature inside logits). No validation fitting, no label changes
+or retraining; collect/score snapshots verify checkpoint and dataset fingerprints.
+Fit criterion is mean calibration QWER eventF1 across3 fixed sampling seeds after
+rate matching; unsupported calibration classes disabled (stop has no labels).
+No future lookahead, refractory or engine masks. Private immutable staging,
+20GiB reserve,no-requeue/append; logs/results NFS. Calibration not completed yet,
+B untouched. Await13087/13090/13091 plus13092–13095; no policy promotion.
+
+**Calibration regression gate13092 COMPLETED/0:** actual NFS log confirms
+84 tests passed in39.12s. This clears the afterok gate for51-perspective
+calibration collection13093; fitting13094 and frozen71-val assessment13095
+remain dependent on upstream success. No calibration-fit or calibrated-policy
+quality result yet. Await registered callbacks; no duplicate jobs or promotion.
+
+**Angle +3x cast-aim13087 COMPLETED/0**,1000updates/470train/71val,
+655.46s training, same seed/draws as angle reference. Q/E teacher aim mean
+per-match median12.37/27.36→8.79/22.37deg; within10 42.52/23.70→56.00/31.45%.
+Sampled Q/W/E/R eventF1 .1449/.1092/.0468/.0959→.1546/.1055/.0466/.0840: aim
+improves but timing remains weak/mixed. Move within2 9.304→9.685%,attackpointer
+69.05→69.11%; sampled attackF1 .3648→.3601. Keep target-loss weighting as
+a component candidate, no complete-policy promotion. Summary artifact
+angle-aim3-summary-13087.json; paired intervals13091 remain gated on relative
+arm13090. Await registered calibration13093–13095 and remaining comparisons;
+no additional jobs needed on this receipt.
+
+**Opponent-relative angle13090 COMPLETED/0**,1000updates/470train/71val,
+662.82s training, same isolated budget/seed as angle reference. Q/E teacher aim
+mean per-match median12.37/27.36→8.93/14.27deg; within10 42.52/23.70→55.30/51.76%.
+Relative coordinates outperform angle+3x on E (14.27 versus22.37deg), similar Q
+(8.93 versus8.79deg), without extra labels/parameters. Sampled Q/W/E/R eventF1
+.1468/.1082/.0496/.0954: timing largely unchanged. Movement within2
+9.304→8.624%,attackpointer69.05→68.89%, so not a complete-policy promotion.
+Summary relative-angle-summary-13090.json. All model prerequisites for paired
+report13091 now completed; await its intervals before deciding combinations.
+Calibration13093–13095 remains registered; no duplicate jobs on this receipt.
+
+**Paired report13091 COMPLETED/0**,71 held-out matches,500 paired bootstrap
+draws per arm versus angle reference. Smooth2 sampled F1 deltas Q+.0396
+[.0289,.0495],W+.0167[.0098,.0246],E+.0241[.0129,.0359],R includes0;
+attack-.0071[-.0109,-.0032]. Relative-angle Q/E mean per-match median error
+deltas -3.44[-4.28,-2.59]deg/-13.09[-16.07,-10.15]deg, but movement within2
+-.00681[-.00836,-.00527]. Aim3 Q/E improvements also exclude0; smooth1
+castF1 intervals all include0. These intervals cover match variation conditional
+on ONE training/sampling seed, not seed robustness or multiple-testing control.
+Reports: shared v2-20261024/ablation-reports-13091.
+**Combined relative-angle+smooth2 job13096 registered**, tested source8c668da2,
+same1000updates/b64/seed0/window256/burn32/470train/71val as isolated arms;
+cast aim weight1, own history on. Tests whether timing/aim gains coexist and
+measures movement/attack tradeoffs; no new code, labels or calibration fitting.
+Private deep-copy staging,20GiB reserve,NFS outputs,no-requeue/append,1h limit.
+Await13096 and calibration13093–13095 callbacks; no policy promotion.
+
+**Calibration collection13093 and fitting13094 COMPLETED/0.** Collection
+metadata confirms frozen smooth2 step1000,51 calibration perspectives, dataset
+manifest SHA matches source. Fit artifact emitter-calibration-13094.json pins
+checkpoint SHA ecf632bc… and same dataset;51 unique game IDs verified.
+Predeclared temperatures1/.7/.5 yield mean calibration QWER eventF1
+.11343/.14858/.17489 across3 sampling seeds after fitting expected class counts
+within1%. Selected T=.5 plus rate biases; stop disabled (no calibration labels).
+This sharpens state-dependent action preferences while restoring overall event
+rates, without retraining or future-input masks. These are selection-set scores,
+not held-out evidence or a direct comparison to raw uncalibrated T1.
+Frozen71-val scorer13095 dependency cleared; await actual validation callback
+and combined learner13096. No policy promotion or additional job on this receipt.
+
+**Frozen calibrated validation13095 COMPLETED/0**,71val, same smooth2
+step1000/checkpoint ecf632bc…/dataset as13093–13094; actual metadata confirms
+splitval,T.5,sample0 and frozen calibration hash8ce3f2ee…. Against raw T1
+sampling on same checkpoint, Q/W/E/R eventF1 .1845/.1260/.0709/.0922→
+.2283/.1786/.1143/.1746; macro mean .11839→.17394. Emitted cast ratios
+Q/W/E/R .963/.978/.931/.986×human. AttackF1 .3577→.3931,recall .1036→.1957;
+moveF1 .8007→.7947. Teacher aim unchanged by design,Q/E12.47/26.94deg;
+exact-frame joint-known angle success remains low,Q1.744%,E0.282%,not hits.
+Summary calibrated-summary-13095.json. Separate calibration transfers to this
+validation set, but one sampling/training seed, no paired interval yet and still
+far below castF1.5 target. Keep emitter as component candidate; no full-policy
+promotion/closed-loop claim. Await registered relative+smooth2 learner13096;
+its checkpoint requires its own calibration fit, not reuse of these biases.
+
+**Combined relative+smooth2 13096 COMPLETED/0**,1000updates/470train/71val,
+659.07s training. Versus smooth2 alone, teacher Q/E mean match median
+12.47/26.94→8.90/14.28deg; within10 42.87/26.38→54.82/52.05%. Movement
+within2 9.202→10.213%,attackpointer68.94→68.62%. Raw sampled Q/W/E/RF1
+.1845/.1260/.0709/.0922→.1783/.1296/.0650/.1088: largely retains smoothing
+gains versus original angle reference but not all individual smooth2 scores.
+Summary relative-smooth2-summary-13096.json; one training/sampling seed.
+**Checkpoint-specific calibration chain13097→13098→13099 registered**, tested
+sourcecefee640, immutable donor13096/latest. Collect same51cal only, fit frozen
+T/bias with unchanged criterion, then score71val sample0. Own calibration artifact,
+no reuse of13094 biases; no retraining or B exposure. GPU1h/CPU20min/GPU1h,
+private deep copies+20GiB reserve,NFS outputs,no-requeue/append. Await callbacks;
+no complete-policy promotion.
+
+**Combined calibration13097/13098 COMPLETED/0.** Actual collection metadata
+confirms51cal perspectives,step1000,relative-angle flag and smooth2 contract.
+Fit checkpoint SHA4a623acb… agrees with collection; dataset manifest hash
+verified against source;51unique IDs and51report rows. Independent fitted
+biases select T.5: mean calibration QWER eventF1 T1/.7/.5 =
+.11291/.14291/.17038 over3 draws. This is selection-set evidence only; no
+held-out improvement claim or direct ranking against separately fitted smooth2.
+Frozen71-val job13099 dependency cleared; await registered callback. No new
+jobs/policy promotion; calibration artifact emitter-calibration-13098.json.
+
+**Calibrated combined13099 COMPLETED/0**,71val,frozenT.5,checkpoint
+4a623acb… matches13097/13098. Calibrated smooth2→combined Q/W/E/RF1
+.2283/.1786/.1143/.1746→.2298/.1690/.1033/.2028;mean.17394→.17621,
+no demonstrated overall timing gain. Q/E teacher mean match median
+12.47/26.94→8.90/14.28deg; movewithin2 9.202→10.213%,attackpointer
+68.94→68.62%. Cast ratesQ/W/E/R.924/.970/.906/.951×human. Combined aim
+gain survives calibration, but all castF1 far below.5 target. Summary
+combined-calibrated-summary-13099.json; no full-policy promotion.
+**Matched seed1 replications registered13100 smooth2 and13101 relative+smooth2**,
+source2d36adc8/8c668da2 respectively (same learner,relative feature added in
+latter),same1000/b64/window256/burn32/train470/val71. Seed1 changes init/window
+draws and sampled-eval draw together, matched between these two arms; not a
+pure initialization-only test. No calibration fit on val; raw seed1 assessment
+first, own calibrations later if warranted. Existing tested flags/no code edits;
+GPU1h each,private deep copies/reserve,NFS,no-requeue/append. Await callbacks.
+
+**Smooth2 seed1 replication13100 COMPLETED/0**,1000updates/470train/71val,
+658.43s. Raw sampled Q/W/E/RF1 .1713/.1251/.0765/.0706 versus seed0
+.1845/.1260/.0709/.0922;macro.11087 versus.11839. Rates seed1Q/W/E/R
+.821/.879/.861/.843×human; these are uncalibrated and must not compare with
+calibrated13095/13099. Teacher Q/E mean match median9.56/23.44deg versus
+12.47/26.94; attackpointer72.26% versus68.94%,movewithin2 8.622% versus9.202%.
+Seed sensitivity is material; seed changes initialization/window draws/emission
+draw jointly, so no causal assignment to one source. Summary
+smooth2-seed1-summary-13100.json. Await matched relative+smooth2 seed1 job13101
+before deciding follow-up; no new jobs or policy promotion on this receipt.
+
+**Relative+smooth2 seed1 13101 COMPLETED/0**,1000updates/661.91s/71val.
+Matched seed1 smooth2→relative Q/E mean match median9.56/23.44→8.19/13.97deg,
+within10 52.59/32.30→58.35/52.61%; relative E aim gain repeats across2 seeds.
+Raw Q/W/E/RF1 .1713/.1251/.0765/.0706→.1766/.1286/.0721/.0750,mean
+.11087→.11308; timing remains weak/mixed. Move within2 essentially identical
+8.622/8.632%,attackpointer72.26% both. Summary relative-smooth2-seed1-summary-13101.json.
+**Bounded convergence experiment13102→13103 registered.** Relative+smooth2,
+seed0,4000updates/b64/window256/burn32,470train; source8c668da2 learner,
+save1000/2000/3000/4000,no inline evaluation. Separate assessor sourcecefee640
+reads1000/2000/4000 on all71val and fixed first71 sorted training perspectives,
+sample0/no calibration at each point. New4000-step cosine schedule, so compare
+within-run trajectory; not exact continuation or duration-only contrast to old
+1000-step schedules. Question: undertraining versus train-val generalization gap.
+No enlarged data/B/RL; no promotion. Both GPU1h limits, private copies/reserve,
+NFS outputs,no-requeue/append; registered callbacks pending. Existing measured
+~.38s/update implies ~25min updates plus startup/staging; assessment ETA unmeasured.
+
+**Duration learner13102 COMPLETED/0**,4000updates/470train,1893.34s
+(31.56min including startup),medianupdate.3844s. NFS checkpoints1000/2000/
+3000/4000 each82848996bytes verified present; frozen config seed0,smooth2,
+relative angle,b64,4000-step schedule. Last100-update averages at1000→4000:
+buttonNLL .65668→.61082,buttonaccuracy71.38→72.98%,aimNLL6.3996→6.0028,
+loss2.2609→2.1098,finite gradients. These are training minibatch diagnostics,
+not evidence of generalization or improved cast timing. No inline validation
+was requested. Registered13103 dependency cleared for fixed1000/2000/4000
+train71/val71 assessment; await callback before choosing further training or
+changing event formulation. No new jobs/policy promotion on this receipt.
+
+**Train/val curve13103 COMPLETED/0**,six completed assessments,71 fixed
+training perspectives and71val at1000/2000/4000. Within4000-step schedule,
+raw valQ/W/E/RF1 at1000 .230/.153/.081/.110→4000 .283/.204/.128/.143;
+macro.1434→.1896. Train4000 .286/.219/.153/.139 (macro.1994),small observed
+gap; training subset is first71 sorted matches,not all470 or matched players.
+ValQ/E near-frameAP .341/.147→.376/.213,teacher aim8.51/13.61→6.67/10.67deg.
+AttackF1 .382→.444,move .810→.832. Useful held-out learning continues; no
+evidence here that severe overfitting or dataset size already sets the ceiling.
+No oracle cooldowns/rewards/new data. Summary duration-curve-summary-13103.json.
+**13104→13105→13106 registered**,separate51cal collection/fit/frozen71val score
+for4000-step donor13102 using testedcefee640; own fingerprints/biases.
+**13107 registered**,relative+smooth2 seed0 fresh8000-step schedule,b64,save2000,
+finalgreedy+sample71val,source8c668da2,1h30limit. This is a new training-duration/
+schedule experiment,not an exact resume or isolated duration-only comparison.
+Measured.384s/update suggests51min updates plus startup/evaluation/queue,not
+a guaranteed end-to-end ETA. Private deep copies/reserve,NFS outputs,no-requeue/
+append. Await callbacks; do not force next-event redesign before convergence
+readouts. No policy promotion; leakage/history/deploy gates remain outstanding.
+
+**4000-step calibration13104/13105 COMPLETED/0.** Actual collection/fit
+artifacts verify51uniquecal perspectives,step4000,checkpoint SHA4b3f302f…
+consistent and actual dataset manifest hash matching. T1/.7/.5 rate-fitted
+calibration castF1 .19013/.24042/.27364 averaged3 draws;T.5 frozen again.
+These are selection-set scores,not held-out improvement or policy promotion.
+Frozen71-val scorer13106 dependency cleared; bounded8000 learner13107
+already registered. Await callbacks,no new jobs on these receipts.
+
+**8000-step run13107 COMPLETED/0**,3539.94s training(59min),medianupdate
+.3854s,470train/71val. Raw val4k→8k Q/W/E/RF1 .2829/.2044/.1281/.1432→
+.3216/.2283/.1690/.1417,macro.18966→.21513. AttackF1.4442→.4717;teacher
+attackpointer75.64→76.63%,move within2 17.70→17.81%. Teacher Q/E mean match
+median6.67/10.67→6.45/10.65deg. Near-frameAPQ/W slightlyup,E.213→.207,
+R.285→.237: raw event gains do not establish uniformly better ranking.
+Fresh8k versus4k cosine schedules,one training/sampling seed;no simple
+duration-only causal claim or policy promotion. Summary duration8000-summary-13107.json.
+**13108→13109→13110 registered**,testedcefee640: collect51cal plus fixed
+first71train diagnostic at8k,fit ownT/bias,scorefrozen71val. No retraining/B/RL;
+private deep copies/reserve,NFS,no-requeue/append,1h/20min/1h. Await8k train-gap
+and calibrated4k13106/8k13110 results before more duration; do not blindly
+double training while ranking gains mix.
+
+**Calibrated4k validation13106 COMPLETED/0**,actual metadata71val/step4000,
+checkpoint consistent with13105 frozen fit. Calibrated1k→4k Q/W/E/R eventF1
+.2298/.1690/.1033/.2028→.3456/.2885/.2318/.2368;macro.17621→.27568.
+Cast emitted ratiosQ/W/E/R.954/.933/.955/.854×human. AttackF1.3889→.4811,
+moveF1.7986→.8349;teacherpointer68.62→75.64%,movewithin2 10.21→17.70%,
+Q/E mean match median8.90/14.28→6.67/10.67deg. Exact-frame joint-known Q/E
+angle success5.28%/.846%,not hit rates or tolerant joint correctness;R grid
+joint exact0 persists. Better checkpoint candidate but castF1 still below.5,
+replay-conditioned history/closed-loop gap remains. Summary calibrated4000-summary-13106.json.
+Compare calibrated8k13110 and train71 readout13108 before more duration;
+13108–13110 remain registered. No new jobs/policy promotion on this receipt.
+
+**8000 collection+train diagnostic13108 COMPLETED/0**,51cal and fixed71train
+metadata verified at8000,matching checkpoint SHAe969520f…. Raw train/val cast
+meanF1 .24624/.21513 (gap.03111);4k gap.00975,so observed gap is growing.
+Train/val Q/W/E/RF1 .355/.258/.197/.176 versus.322/.228/.169/.142;
+near-frameAP Q.449/.386,E.267/.207,R.332/.237. Teacher Q/E aim5.00/8.15deg
+train versus6.45/10.65val;pointer81.50/76.63%,movewithin2 23.08/17.81%.
+Fixed first71 sorted train subset only,not full train or a causal overfit estimate;
+held-out timing still improved but gains mix and generalization gap is emerging.
+Summary train-gap8000-summary-13108.json. Await13109fit/13110frozenval before
+more training; no new jobs or policy promotion.
+
+**8k calibration fit13109 COMPLETED/0**,51unique calibration IDs,step8000,
+checkpoint e969520f…/actual manifest fingerprints match collection. Rate-fitted
+T1/.7/.5 calibration mean castF1 .22149/.25642/.26778 over3draws;T.5 frozen.
+Best calibration score below4k .27364,although rawT1 is higher;selection-set
+difference alone does not establish a checkpoint winner. Await frozen71-val
+13110;no more duration/new jobs/policy promotion on this receipt.
+
+**Calibrated8k13110 COMPLETED/0**,71val at8000. Calibrated4k→8k
+Q/W/E/RF1 .3456/.2885/.2318/.2368→.3348/.2849/.2535/.1813;mean
+.27568→.26364. AttackF1 .4811→.5040,move.8349→.8335;aim6.45/10.65deg.
+RatesQ/W/E/R.999/.888/.956/.883. Do not extend duration; retain4k as offline
+reference candidate,not promoted standalone policy. Summary calibrated8000-summary-13110.json.
+**Previous-event-only ablation implemented**,default on/old checkpoints default
+on,identical parameter shapes. Flag masks self28:40 previous command group and
+entity24 previous-target match;retains self24:28 own cast ages and entity20:24
+observed enemy ages. Regression checks masked-feature invariance and retained
+cast-history sensitivity. Tests unrun; next CPU gate then matched4k train and
+frozen-reference feature-removal assessment. Motivation is replay human-history
+dependence/deploy distribution shift,not proof of leakage or a closed-loop test.
+
+**Previous-event gate13111 and afterok learner13112 registered**,immutable
+source21e2b806. CPU fullsuite includes new feature isolation regression; GPU
+no-previous-event4000/b64/seed0/window256/burn32/smooth2/relative,matching
+4k reference schedule/draws/aim support except this input group. Final greedy+
+sample71val,own/enemy cast history retained,identical parameter count expected.
+Tests and quality pending; no calibration on val. CPU15min/GPU1h,privatecopies/
+20GiBreserve,NFS,no-requeue/append. Frozen-reference inference perturbation
+assessment remains planned/unimplemented,not part of13112. Await callbacks;
+no policy promotion.
+
+**Previous-event regression gate13111 COMPLETED/0:** actual NFS log
+85passed/37.71s. Includes masked previous-command/target invariance and retained
+own/enemy cast-history sensitivity. Learner13112 afterok gate cleared; quality
+result pending. This establishes feature isolation,not robustness to policy
+history or closed-loop play. Await registered callback,no new jobs/promotion.
+
+**No-previous-event13112 COMPLETED/0**,4000updates/1902.36s/71val,
+6.903Mparams matched. Raw reference→removed Q/W/E/RF1 .2829/.2044/.1281/
+.1432→.2248/.1591/.1066/.1165;mean.18966→.15174. NearAPallcasts lower,
+move within2 17.70→6.55%,pointer75.64→74.18%;Q/E teacher aim6.67/10.67→
+5.17/10.04deg. History useful;does not establish leakage or deployment robustness.
+Uncalibrated comparison only,one seed. Summary no-previous-event-summary-13112.json.
+**Grouped previous-event dropout implemented**,CLI probability default0;
+experiment.3 samples one independent Bernoulli per training window and masks
+self28:40/entity24 through burn-in and supervised rows. Separate per-step RNG
+stream preserves window draws;own/enemy cast timers and labels unchanged.
+Evaluation retains normal history,no dropout;does not synthesize policy errors.
+Contract records nonzero probability for exact-resume gate. Regression checks
+reproducibility/group consistency/cast preservation/input immutability;unrun.
+Next fullsuite gate then matched4k dropout trial;no policy promotion.
+
+**Grouped dropout13113tests→13114learner registered**,source2dfd229e.
+FullCPU gate then matched4k/b64/seed0/smooth2/relative with previous history
+enabled and training-only window dropout.3;finalgreedy+sample71val normal
+history. Default schedule/labels/draws same as4k reference,not a closed-loop
+robustness result. CPU15min/GPU1h,private deepcopies/reserve,NFS,no-requeue/
+append. Awaitcallbacks;no calibrated or learned dropout result/promotion yet.
+
+**Grouped dropout test gate13113 COMPLETED/0:** actual NFS log86passed/
+37.78s. Group consistency/reproducibility,cast-timer preservation,unchanged
+labels and source-input immutability regression passed. Afterok13114 cleared;
+learned dropout quality and deploy robustness unmeasured. Await registered
+learner callback,no new jobs or policy promotion.
+
+**Dropout.3 learner13114 COMPLETED/0**,4000updates/1893.37s/71val.
+Raw reference→dropout Q/W/E/RF1 .2829/.2044/.1281/.1432→.2644/.2072/
+.1198/.1404;mean.18966→.18297. Teacher Q/E mean match median6.67/10.67→
+6.13/9.93deg;movewithin2 17.70→17.17%,pointer75.64→76.20%. Most
+performance retained,but normal-history evaluation alone shows no robustness
+benefit. Summary previous-dropout03-summary-13114.json;one seed,uncalibrated.
+**Frozen history perturbation13115 registered**,tested source2dfd229e plus
+immutable worker SHA d766e5b8de76…,GPU1h. Both frozen4k reference13102 and
+dropout13114 assessed on same71val/sample0 with previous-event-only config
+mask;compare saved normal assessments,checkpoint/effective config recorded.
+Own/enemy cast timers preserved,no retraining/calibration or synthesized policy
+errors. Missing-history sensitivity only,not closed-loop deployment. Private
+deep-copy staging/reserve,NFS,no-requeue/append;awaitcallback,no promotion.
+
+**Frozen missing-history sensitivity13115 COMPLETED/0**,71val/sample0,
+both4k checkpoints. Normal→masked rawcastmeanF1 reference.18966→.07641
+(59.7%drop),dropout.18297→.15274(16.5%drop). Reference Q/E aim6.67/10.67→
+16.53/18.81deg;dropout6.13/9.93→5.87/9.94deg. Reference movewithin2
+17.70→2.12%,dropout17.17→6.11%;movement still depends strongly on history.
+Mask removes previouscommand/target group,retainscasttimers. No policy errors
+synthesized,no closed-loop or seed-robustness claim;one training/sampling seed.
+Artifact history-perturbation-13115/summary.json records original/effective
+configs and checkpoint hashes. Keep dropout as robustness candidate,not yet
+chosen checkpoint or deploy-ready policy.
+**13116→13117→13118 registered**,source2dfd229e (supports new config),own
+51cal collect/fit/frozen71val score fordropout donor13114. Normal history at
+calibration/eval;no reuse ofreference biases. GPU1h/CPU20min/GPU1h,private
+deepcopies/reserve,NFS,no-requeue/append. Awaitcallbacks;no promotion.
+
+**Dropout calibration13116/13117 COMPLETED/0.** Actual metadata verifies
+51uniquecal,step4000,dropout.3 training contract,checkpoint79971010… and
+actual dataset manifest fingerprints match. Rate-fitted T1/.7/.5 mean castF1
+.18850/.23364/.25621 across3draws;T.5 frozen. Calibration score below
+reference4k .27364,selection-set only;normal-performance cost versus missing-
+history benefit remains a tradeoff,not an established winner. Await13118
+frozen71val;no new jobs or policy promotion on these receipts.
+
+**Dropout calibrated13118 COMPLETED/0**,71val/4k. Reference→dropout Q/W/E/RF1
+.3456/.2885/.2318/.2368→.3484/.2732/.2423/.1898,mean.27568→.26344.
+Pointer76.20%,Q/Eaim6.13/9.93deg. Keep both4k checkpoints:reference stronger
+normalcastmean,dropout more tolerant of missinghistory;no overall winner or
+deploy promotion. Summary calibrated-dropout03-summary-13118.json.
+**Future-state auxiliary experiment implemented**,optionalweight(default0),
+existing heads/losses now get replay-derived own-position+2s,visible opponent
+position+1s,ownHP+3s targets from cached delayed observation rows. Targets never
+enter INPUTS. Position grid24x14 spans±3000 lane-units relative toCURRENT own
+anchor. Entire horizons masked on invalidscope/death/cadencegaps/nonfinite
+positions;enemy additionallyrequirescontinuousvisible sameunit/positiveHP.
+Conservative adjacentposition jump>1500units masks discontinuities (heuristic,
+also excludes some long dashes). HP requiresfinite[0,1]acrosshorizon. Horizons
+are observation-relative (timestamps lag decisions100ms);not target-timeoracle
+inputs. Static normalization constants only,no sim supervision/data regeneration.
+Tests for anchors/gaps/deaths/visibility/identity/missingHP and loss scale/gradient
+added,unrun. Next CPUgate then matched4k lambda.1 on reference(no dropout) to
+isolate auxiliary effect. No policy promotion.
+
+**Auxiliary regression13119→afterok learner13120 registered**,source7836e18a.
+CPU fullsuite with future-anchor/mask/lossgradient tests;GPU matched4k/b64/
+seed0/window256/burn32/relative/smooth2,auxweight.1,historydropout0. Target
+arrays built from immutable replay examples in job scratch;existinginputschema
+andheadcount unchanged. Finalgreedy/sample71val actionmetrics;auxiliary target
+coverage/count/lossmass logged during training. CPU15min/GPU1h,privatecopies/
+20GiBreserve,NFS,no-requeue/append. Both tests/quality pending;awaitcallbacks,
+no policy promotion.
+
+**Auxiliary test gate13119 COMPLETED/0:** actual NFS log90passed/38.50s.
+New regressions verify current-anchor future positions,whole-horizon masks for
+gaps/deaths/visibility/identity/jumps,missingHP/shortsequences,and auxiliary
+loss scaling/HP gradient. Afterok13120 gate cleared;learned action quality
+unmeasured. Await registered learner callback,no new jobs/policy promotion.
+
+**Auxiliary.1 learner13120 COMPLETED/0**,4000updates/1948.89s/71val.
+Raw reference→aux Q/W/E/RF1 .2829/.2044/.1281/.1432→.2655/.1976/
+.1232/.1655,mean.18966→.18794. Near-frameAPQ/E lower,W higher,Rslightly
+lower. TeacherQ/E mean match median6.67/10.67→5.79/10.23deg;movewithin2
+17.70→17.12%,pointer75.64→75.66%. Last100updates average ownfuture10951,
+enemyfuture3657,HPfuture10567 weighted supervisedrows/batch;auxlossmass.2185,
+buttonNLL.6149. Aux path active with substantial coverage,not a clear timing
+fix;one seed,uncalibrated. Summary auxiliary01-summary-13120.json.
+**13121→13122→13123 registered**,source7836e18a,own51cal collect/fit/frozen
+71val score foraux donor13120. GPU1h/CPU20min/GPU1h,privatecopies/reserve,
+NFS,no-requeue/append. No more duration/aux sweeps before readout;aux remains
+optional. Next structural experiment planned is next-event-and-delay,not yet
+implemented or submitted. No promotion;replay-only/B isolation unchanged.
+
+**Auxiliary calibration13121/13122 COMPLETED/0:** actualmetadata confirms
+51uniquecal,step4000,auxweight.1,checkpoint033ae259… and actualmanifest
+fingerprints match. Rate-fitted T1/.7/.5 calibration mean castF1
+.18726/.22897/.25431 across3draws;T.5 frozen. Belowreference4k selection
+score.27364,but not held-out winner evidence. Await registered13123 frozen
+71val;no additional jobs or promotion on these receipts.
+
+**Auxiliary calibrated13123 COMPLETED/0**,71val/4k:Q/W/E/RF1
+.3298/.2872/.2139/.2212,mean.26300 versusreference.27568;attack.4688
+versus.4811. Aux off for reference;no clear action-timing gain despite active
+supervision. Summary calibrated-auxiliary01-summary-13123.json.
+**Next-event/delay experimental path implemented**,cfg/CLI horizon(default0);
+firsttrial20frames,unsmoothed/noaux/nodropout. Next type CE plus conditional
+delayCE;right-censored/no-event/gap masks;current aim labels/support unchanged.
+Immediate emission p(nexttype)*p(delay0|type),remainingcontinue,causal10Hz.
+No future target inputs or scheduled human commands. New optional head~86k
+params;not capacity-matched,baseline head path remainsdefault. Contract inBC.md;
+tests for gap/censoring/probability/teacher independence/delaygradient added,unrun.
+Next fullsuite gate then bounded learner;no policy promotion.
+
+**Next-event CPUgate13124→afterok learner13125 registered**,source3f25ce66.
+Fullsuite then4k/b64/seed0/window256/burn32/Ahriangle/relative,next horizon20,
+no smoothing/aux/dropout. Same training data/window draws/schedule/aim support
+as4k reference;labels/emissionfactorization/newdelayhead jointly changed.
+Finalsharedcausalgreedy+sample71val;training logs next-known/observedevent
+counts and delaylossmass. CPU15min/GPU1h,privatecopies/reserve,NFS,no-requeue/
+append. Tests/learnedquality pending;no policy promotion.
+
+**Next-event testgate13124 COMPLETED/0:** actual NFS log95passed/40.26s.
+Censoring/gap handling,immediate probability conservation,teacher-aim-button
+independence and correct-next-type delay gradients passed. Afterok13125 gate
+cleared;learned action quality unmeasured. Awaitregistered learner callback,
+no new jobs/policy promotion.
+
+**Next-event20 learner13125 COMPLETED/0**,4000updates/1939.95s/71val,
+6989318params(+86184),nextheadactive. Raw reference→next Q/W/E/RF1
+.2829/.2044/.1281/.1432→.2555/.1934/.1068/.1247;mean.18966→.17008.
+Near-frameAPallcasts lower,but exact-frameAP Q/W/E/R .0894/.0623/.0269/
+.0455→.1137/.0854/.0542/.0698. Label smoothing differs by design;raw event
+scores/ranking do not establish calibrated winner. TeacherQ/Eaim6.97/11.94deg,
+movewithin2 15.35%,pointer74.94%. Last100 mean delaylossmass1.5709,typeNLL
+.4398,known11788/observed10717 targetrows perbatch: substantial active delay
+supervision. Summary next-event20-summary-13125.json.
+**13127→13128→13129 registered**,source3f25ce66,own51cal collect/fit/frozen
+71val immediate-distribution scoring fornext donor13125. Calibrate emitted
+probabilities,not next-type logits;sameT/rate protocol,fingerprintgate,no val
+fitting. GPU1h/CPU20min/GPU1h,privatecopies/reserve,NFS,no-requeue/append.
+Awaitcallbacks,no baseline switch/policy promotion.
+
+**Next-event calibration13127/13128 COMPLETED/0.** Verified51unique
+cal IDs,step4000/horizon20,checkpoint9f53e19b… and actualmanifest hashes
+consistent. Rate-fitted T1/.7/.5 immediate-distribution calibration castF1
+.16848/.20172/.21086 over3draws;T.5 frozen. Belowreference selection.27364,
+but wait13129 frozen71val before final experiment verdict. No val fitting,
+new jobs,baseline switch or policy promotion on these receipts.
+
+**Next-event calibrated13129 COMPLETED/0**,71val/4k:Q/W/E/RF1
+.2964/.2315/.1420/.1394,mean.20229 versusreference.27568;attack.4845
+versus.4811,move.8187 versus.8349. Reject this next-event20 configuration
+for reference;not a general rejection of eventprediction. Summary
+calibrated-next-event20-summary-13129.json.
+**Memory reset diagnostic implemented**,optional assessor reset-every multiple
+of128,default0(fullstate),GRU-only resets preserve emitterPRNG across chunks;
+metadata records reset protocol. Regressionadded/unrun. Next CPUgate then
+frozen4k reference with256-frame resets against existing fullstate readout,
+same T1/sample0/data. Counterfactual evaluation only,not statecarry training
+or deployment proof. No policy promotion.
+
+**13130 CPUgate→13131 frozen memoryreset256 registered**,sourcee0322297.
+Reference donor13102/latest4000,same71val/rawT1/sample0,resetGRU every256
+frames while keeping draw stream/history inputs unchanged;no retraining or
+calibration. Compare to saved fullstate13103/val-4000;export predictions for
+early-versus-late window analysis if needed. CPU15min/GPU1h,privatecopies/
+reserve,NFS,no-requeue/append. Tests/quality pending;awaitcallbacks,no promotion.
+
+**Memory-reset testgate13130 COMPLETED/0:** actual NFS log96passed/40.28s,
+including GRU-reset boundary and unchanged emitterPRNG sequence regression.
+Afterok13131 evaluation gate cleared;memory-effect quality result pending.
+Awaitregistered callback,no new jobs or policy promotion.
+
+**Memoryreset25613131 COMPLETED/0**,71val/frozen4k/T1/sample0.
+Fullstate→reset rawQ/W/E/RF1 .2829/.2044/.1281/.1432→.2820/.2037/
+.1329/.1455,mean.18966→.19102;nearAP/aim/pointer/movement almost unchanged.
+Periodicreset is not a large aggregate timing fix. Summary memory-reset256-summary-13131.json.
+**13133 CPU boundaryreport registered**,sourcee0322297 plus immutableworker,
+compares same cached full/reset predictions on first50 supervisedrows(phase32:82)
+andlaterrows(82:256),masking burn32 at everywindow forboth. Compare reset/full
+within groups,not raw early/later F1 across different event distributions.
+**Garen timing-control13132 registered**,sourcee0322297,185train/25cal/26val,
+1600/b64/seed0/window256/burn32,smooth2,standardframewise,aux/dropoutoff,
+noAhriangle/relativehead. OneGPUjob train→own25cal fit→frozen26val,artifacts
+v2-garen-timing-control-13132. SelfcastQWE/unitR simpler-kit diagnostic,not
+equal-data Ahri comparison or fullquality gate (Garen count below300).
+CPU20min/GPU1h,privatecopies/reserve,NFS,no-requeue/append;awaitcallbacks,
+no policy promotion.
+
+**Memory boundaryreport13133 COMPLETED/0.** On first50 supervisedrows
+phase32:82,full/reset rawcastmeanF1 .19345/.19475;later82:256 .18572/.18580.
+Per-cast near-frameAP also nearly unchanged within each group. First32rows
+aftereveryreset excluded forboth,matching trainingburn-in;this does not assess
+startup rows without burn-in. No hidden large supervised-boundary penalty in
+this check;deprioritize statecarry training as immediate timing fix. Report
+memory-boundary-13133.json. Garencontrol13132 remainsregistered;awaitcallback,
+no new jobs or policy promotion.
+
+**Garen control13132 COMPLETED/0**,1600updates/904.94s,185train/25cal/26val,
+5735windows. Calibrated Q/W/E/RF1 .1743/.1055/.2696/.0750,macro.15610
+(raw.09762). Eventcounts872/251/937/40;Rpointer92.5%,attackpointer76.33%,
+attackF1.3604,movewithin2 18.78%. Simpler-kit timing remains weak;different
+champion/data/sample and sparseR forbid directcausal comparison toAhri.
+Summary garen-timing-control-summary-13132.json. No policy promotion.
+**Transfer-pilot conversion13134(array4,max2)→13137finalizer registered**,
+sourcee0322297,frozenplan f2c00b915126.512trainperspectives,64eachViktor/Syndra/
+Lux/Orianna/Xerath/Annie/Lissandra/Veigar mid;deterministichashselection. All
+originalAvalidation andglobalcalhashmatches excluded,assertnooverlapwith
+targetcal/valbases;B untouched. Reuses frozen544decoder/staticcatalogs/v6
+observationparity,privateper-job+per-gamecopies;1h/shard,8GB/2CPU,max2;final
+CPU10min/2GB. Outputs transfer-pilot-events-f2c00b915126,sourceplan stored
+onNFS. Metadata remains qualifiedrawmode/cooldown references,not completed
+fullabilityannotations. Pilot limitsconversion/memorybeforeallchamp expansion.
+All-champion training/warmstart path still unimplemented;conversion is not
+pretraining. Await conversion gates;then build pretrain→Ahri recipe comparison.
+
+**Transfer conversion13134 all4 +finalizer13137 COMPLETED/0**,each128views,
+721–758s/shard.512perspectives/499matches,3391158validframes,.36768GBNPZ;
+allplannedfiles/shardhashes verified and finalmanifest512 confirmed. Dataset
+transfer-pilot-events-f2c00b915126,onlyAtrain/non-globalcal;B untouched.
+**Mixed pretraining/weights-only initialization implemented**,championall requires
+noeval and loads alltrainperspectives;target-only fine-tuning remainsnormal.
+Initializer validates normalizedsavedcfg/tree/shapes,loadsparams only,records
+donorhash/step/sourcecontract;freshoptimizer/schedule. Resume retains donor
+provenance while enforcingremainingcontractexactly. Tests added/unrun.
+Planned recipe:otherchamp512 pretrain1000→Ahri4000 at1e-4 versus existing
+Ahri-only1000donor13096→Ahri4000 atsame1e-4. Bothrecipe total5000updates;
+metadata is qualifiedrawmode/CDonly,not completeabilitydescriptors. No
+pretraining run/transfer benefit or policy promotion claimed yet.
+
+**Transfer initializer gate13139 and pilot chain registered**,source75ecb810.
+13140 afteroktests:512otherchampviews/alltrain,1000/b64/seed0/smooth2/relative,
+noeval;donor only,not target-quality claim.13141 afteroktests:Ahri phase2 from
+existingAhri1000donor13096;13142 afterok13140:Ahri phase2 frommixed1000.
+Bothphase2 use4000/b64/seed0/window256/burn32/lr1e-4/freshoptimizer/same
+targetdata470train/71val/normalhistory/noaux/nodropout;bothrecipe5000total
+updates. Sameinitial phase1LRschedule and existingmatchedcontrol reused;
+phase1data/windowdraw distribution differs intentionally. Not all172champ or
+metadata-completeness proof;no 80/20 mixed fine-tune yet. Calibration remains
+separate/reserved for ownfits afterresults. Source/data/donor deepcopies,NFS
+checkpoints,20GiBreserve,CPU15min/GPU1h each,no-requeue/append. Awaitgate/run
+callbacks,no policy promotion.
+
+**Transfer initializer testgate13139 COMPLETED/0:** actual NFS log98passed/
+40.09s,including weights-only loading/donorprovenance and architecture/tree/
+shape rejection.13140pretrain and13141control afterok gates cleared;13142
+remains dependent on13140 success. No learned transfer result yet;await
+registered callbacks,no new jobs or policy promotion.
+
+**Mixed pretraining13140 COMPLETED/0**,1000updates/512trainperspectives/
+15519windows,664.62s,6.903Mparams. Actual allchampion training config/dataset
+manifest hash verified;latestcheckpoint82849052bytes,SHA c164a6da… persisted.
+First100→last100 trainaverages buttonNLL1.0401→.66284,aimNLL7.449→6.636,
+buttonaccuracy67.01→72.07%;trainingdiagnostics only,no targetquality or transfer
+claim. No validation requested or written. Afterok13142 Ahri fine-tune gate
+cleared;13141matchedcontrol alreadyregistered. Await both finalAhri readouts,
+no new jobs or policy promotion.
+
+
+## BC integration in progress (2026-10-25)
+
+Dani authorized landing review fixes and workspace/snapshot hygiene. Merging
+modern/bc f10e4f42 into review branch, retaining experimental flags/next-event/
+auxiliary/calibration/transfer code and reviewed correctness fixes.12focused
+source/emitter tests pass; full combined checks required before fast-forwarding
+modern/bc. New decoder guard rejects mixed cached source modules; finalizer
+rejects mixed source/contract shards; checkpoint records dataset contract.
+Fetched origin/main remains September3 c1ecec9b,941commits behindmodern/bc;
+main merge is outside this bounded integration.41worktrees/23archived/13dirty
+recorded; uncommitted changes and historical snapshots preserved.

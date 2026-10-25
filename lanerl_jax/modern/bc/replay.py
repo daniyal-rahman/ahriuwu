@@ -170,9 +170,17 @@ def lane_distance(x, y, polyline=TOP_LANE) -> np.ndarray:
 
 
 def _decoder():
-    """The decoder's loader and position model (read-only import from its checkout)."""
-    if str(DECODER_SCRIPTS) not in sys.path:
-        sys.path.append(str(DECODER_SCRIPTS))
+    """Bind decoder imports to one snapshot; mixed Python module caches are unsafe."""
+    root = DECODER_SCRIPTS.resolve(strict=True)
+    for source in root.glob("*.py"):
+        loaded = sys.modules.get(source.stem)
+        if loaded is not None and Path(getattr(loaded, "__file__", "")).resolve() != source:
+            raise ValueError(f"decoder module {source.stem} is already loaded from another source; "
+                             "use a fresh process for this decoder snapshot")
+    path = str(root)
+    if path in sys.path:
+        sys.path.remove(path)
+    sys.path.insert(0, path)
     import event_training_loader
     import position_model
     return event_training_loader, position_model

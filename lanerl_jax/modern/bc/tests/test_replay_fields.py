@@ -150,3 +150,33 @@ def test_unknown_combat_stays_unknown_in_formatter():
     sv = build(g)[2]
     col = C._self_columns(OB.REPLAY_PROFILE)
     assert np.isnan(sv[:, [col['in_combat'], col['cs']]]).all()
+
+
+def test_decoder_rejects_cached_modules_from_another_snapshot(tmp_path, monkeypatch):
+    import sys
+    from types import ModuleType
+    from lanerl_jax.modern.bc import replay
+    snapshot = tmp_path/'requested'
+    snapshot.mkdir()
+    (snapshot/'position_model.py').write_text('VERSION = "test"\n')
+    foreign = ModuleType('position_model')
+    foreign.__file__ = str(tmp_path/'other'/'position_model.py')
+    monkeypatch.setitem(sys.modules, 'position_model', foreign)
+    monkeypatch.setattr(replay, 'DECODER_SCRIPTS', snapshot)
+    import pytest
+    with pytest.raises(ValueError, match='fresh process'):
+        replay._decoder()
+
+
+def test_decoder_rejects_cached_transitive_dependency_before_import(tmp_path, monkeypatch):
+    import sys
+    from types import ModuleType
+    from lanerl_jax.modern.bc import replay
+    (tmp_path/'event_value_codec.py').write_text('')
+    foreign = ModuleType('event_value_codec')
+    foreign.__file__ = str(tmp_path/'other'/'event_value_codec.py')
+    monkeypatch.setitem(sys.modules, 'event_value_codec', foreign)
+    monkeypatch.setattr(replay, 'DECODER_SCRIPTS', tmp_path)
+    import pytest
+    with pytest.raises(ValueError, match='event_value_codec'):
+        replay._decoder()

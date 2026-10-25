@@ -48,12 +48,16 @@ def main():
     if a.finish:
         parts = [json.loads((a.output / ('shard-'+str(i)+'.json')).read_text()) for i in range(a.shards)]
         assert all(x['passed'] and x['plan_sha256'] == digest for x in parts)
+        sources = {part.get('source_commit') for part in parts}
+        if (any(part.get('contract') != CONTRACT for part in parts)
+                or len(sources) != 1 or not next(iter(sources))):
+            raise ValueError('conversion shards mix source commits or dataset contracts')
         reports = [r for part in parts for r in part['reports']]
         assert sorted(r['game'] for r in reports) == sorted(names)
         for name in names:
             for suffix in ('.npz', '.json', '.events.json.gz'):
                 assert (a.output/'games'/(name+suffix)).is_file()
-        write_json(a.output/'manifest.json', dict(passed=True, contract=CONTRACT, plan_sha256=digest,
+        write_json(a.output/'manifest.json', dict(passed=True, contract=CONTRACT, source_commit=next(iter(sources)), plan_sha256=digest,
             games=rows, reports=reports, shards=parts,
             artifacts={name: artifact_hashes(a.output/'games'/name) for name in names}, limits='target-only replay events; no policy-quality gate'))
         print('FINALIZED', a.output, len(rows), flush=True)

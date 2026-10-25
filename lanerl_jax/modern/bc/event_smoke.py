@@ -22,10 +22,12 @@ def main():
     p = argparse.ArgumentParser(__doc__)
     p.add_argument('--dataset', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--steps', type=int, default=200)
+    p.add_argument('--steps', type=int, default=200, help='total update ceiling, including restored updates')
+    p.add_argument('--resume', type=Path)
+    p.add_argument('--lr', type=float, default=3e-4)
     p.add_argument('--strict', action='store_true', help='require button memorization, beyond gradient wiring')
     a = p.parse_args()
-    if a.steps < 1:
+    if a.steps < 1 or not np.isfinite(a.lr) or a.lr <= 0:
         p.error('steps must be positive')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('this gradient check requires a Slurm GPU allocation')
@@ -53,12 +55,29 @@ def main():
     policy = EventPolicy(EventPolicyConfig())
     init_args = [batch[k][:, 0] for k in INPUTS]
     started = time.monotonic()
-    params = policy.init(jax.random.key(0), *init_args, policy.initial_carry((len(items),)),
-                         target_button=batch['button'][:, 0])
+    windows = [dict(game=games[g]['row']['game'], start=s) for g, s in items]
+    restored = None
+    start_step = 0
+    if a.resume:
+        restored = serialization.msgpack_restore(a.resume.read_bytes())
+        if EventPolicyConfig(**restored['config']) != policy.cfg:
+            raise ValueError('memorization resume model changed')
+        donor = json.loads((a.resume.parent/'results.json').read_text())
+        if donor['windows'] != windows:
+            raise ValueError('memorization resume windows changed')
+        params = jax.device_put(restored['params'])
+        start_step = int(restored['step'])
+        if not start_step < a.steps:
+            raise ValueError('total budget must exceed restored step')
+    else:
+        params = policy.init(jax.random.key(0), *init_args, policy.initial_carry((len(items),)),
+                             target_button=batch['button'][:, 0])
     n_params = sum(x.size for x in jax.tree.leaves(params))
     loss = make_event_loss(policy)
-    tx = optax.chain(optax.clip_by_global_norm(.5), optax.adam(3e-4, eps=1e-5))
+    tx = optax.chain(optax.clip_by_global_norm(.5), optax.adam(a.lr, eps=1e-5))
     state = tx.init(params)
+    if restored is not None:
+        state = jax.device_put(serialization.from_state_dict(state, restored['opt_state']))
     initial_params = params
 
     @jax.jit
@@ -73,13 +92,13 @@ def main():
     initial = float(initial)
     assert np.isfinite(initial)
     rows = []
-    step = 0
-    for step in range(1, a.steps + 1):
+    step = start_step
+    for step in range(start_step + 1, a.steps + 1):
         params, state, info = update(params, state)
         values = {k: float(v) for k, v in info.items()}
         if not all(np.isfinite(list(values.values()))):
             raise FloatingPointError(values)
-        if step == 1 or step % 25 == 0:
+        if step == start_step + 1 or step % 25 == 0:
             rows.append(dict(step=step, **values))
             print(json.dumps(rows[-1]), flush=True)
         if stopping:
@@ -91,14 +110,16 @@ def main():
     temp.write_bytes(serialization.to_bytes(payload))
     temp.replace(a.output / 'checkpoint.msgpack')
     # This is a wiring/memorization gate, not a held-out quality or leakage result.
-    passed = not stopping and float(final) < .7 * initial and delta > 0 and rows[0]['grad_norm'] > 0
+    improved = float(final) <= initial if a.resume else float(final) < .7 * initial
+    passed = not stopping and improved and delta > 0 and rows[0]['grad_norm'] > 0
     if a.strict:
         passed = passed and float(final_info['button_nll']) < .05 and float(final_info['button_accuracy']) > .98
     report = dict(passed=passed, strict=a.strict, status='interrupted' if stopping else 'complete', steps=step,
                   initial_loss=initial, final_loss=float(final), parameter_delta=delta, parameters=n_params,
+                  resumed_at=start_step, lr=a.lr,
                   initial={k: float(v) for k, v in initial_info.items()},
                   final={k: float(v) for k, v in final_info.items()}, curve=rows,
-                  windows=[dict(game=games[g]['row']['game'], start=s) for g, s in items],
+                  windows=windows,
                   seconds=time.monotonic()-started, job=os.environ.get('SLURM_JOB_ID'),
                   limits='two fixed training windows; no generalization, calibration or leakage claim')
     (a.output / 'results.json').write_text(json.dumps(report, indent=2))

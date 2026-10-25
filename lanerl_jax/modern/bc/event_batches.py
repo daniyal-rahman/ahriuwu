@@ -14,7 +14,8 @@ SCALARS = ('own_id', 'enemy_id', 'patch')
 LABELS = ('button', 'aim_mode', 'aim_valid', 'target_row', 'screen_x', 'screen_y', 'angle',
           'co_move_source', 'co_move_valid', 'co_move_x', 'co_move_y', 'co_move_delta', 'co_move_after', 'co_move_order_valid')
 AUXILIARIES = ('own_future', 'own_future_valid', 'enemy_future', 'enemy_future_valid',
-               'own_hp_future', 'own_hp_future_valid')
+               'own_hp_future', 'own_hp_future_valid',
+               'next_button', 'next_delay', 'next_valid', 'next_observed')
 
 
 def load_event_games(root, split=None, smoothing=(1.,), champion=None):
@@ -84,3 +85,33 @@ def event_batch(games, items, window=256, burn=32):
         batch['weight'][i, :length] = arrays['valid'][start:end]
         batch['weight'][i, :burn] = 0.
     return batch
+
+
+def ahri_angle_targets(games):
+    """Q/E direction ablation on exactly the existing valid point labels."""
+    from .event_labels import POINT_TARGET, ANGLE_TARGET
+    from .events import BUTTON_INDEX as B
+    for game in games:
+        if game['row']['champion'] != 'Ahri':
+            continue
+        arrays = game['arrays']
+        selected = (arrays['valid'] & arrays['aim_valid'] &
+                    (arrays['aim_mode'] == POINT_TARGET) &
+                    np.isin(arrays['button'], [B['q'], B['e']]) & np.isfinite(arrays['angle']))
+        arrays['aim_mode'][selected] = ANGLE_TARGET
+    return games
+
+
+def drop_previous_event_history(batch, rng, probability):
+    """Hide one whole command-history group per window, including burn-in."""
+    if not np.isfinite(probability) or not 0 <= probability <= 1:
+        raise ValueError('previous-event dropout must be in [0,1]')
+    if probability == 0:
+        return batch
+    selected = rng.random(batch['self'].shape[0]) < probability
+    result = dict(batch)
+    result['self'] = batch['self'].copy()
+    result['entities'] = batch['entities'].copy()
+    result['self'][selected, ..., 28:] = np.nan
+    result['entities'][selected, ..., 24:] = np.nan
+    return result

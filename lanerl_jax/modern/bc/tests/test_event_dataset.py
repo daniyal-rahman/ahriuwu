@@ -28,3 +28,23 @@ def test_co_movement_missing_delayed_anchor_masks_aim_but_preserves_evidence():
     np.testing.assert_array_equal(valid, [False, False, True])
     np.testing.assert_allclose(dt, .01)
     assert x[0] == y[0] == 0
+
+
+def test_finalizer_rejects_shards_from_different_code_snapshots(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    import sys
+    import pytest
+    from lanerl_jax.modern.bc.event_convert import main
+    from lanerl_jax.modern.bc.event_dataset import CONTRACT
+    plan = tmp_path/'plan.json'
+    plan.write_text(json.dumps(dict(games=[])))
+    digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+    for i in range(2):
+        (tmp_path/f'shard-{i}.json').write_text(json.dumps(dict(
+            passed=True, contract=CONTRACT, plan_sha256=digest, reports=[], source_commit=str(i)*40)))
+    monkeypatch.setattr(sys, 'argv', ['event_convert', '--plan', str(plan), '--output',
+                                     str(tmp_path), '--shards', '2', '--finish'])
+    with pytest.raises(ValueError, match='mix source commits'):
+        main()
+    assert not (tmp_path/'manifest.json').exists()

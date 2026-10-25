@@ -1429,3 +1429,54 @@ diagnostic and never consults a receipt later than the queried death. Combat
 history remains unavailable for sources with unqualified damage roles. Missing
 combat stays NaN through formatting. Rebuild shared observations as well as event
 sidecars: v2 arrays with unsupported inputs are not compatible v3 data.
+
+history, button-conditioned pointer/joint-grid policy, losses, batches, bounded
+learner/checkpoint resume and stateful replay evaluation. Source audit13041 passed
+24 perspectives; target conversion13045/finalizer13047 passed828 Ahri/Garen
+perspectives with isolated calibration/validation. Gradient13044 passed basic
+wiring; learner13049 completed training/evaluation but failed its bitwise-like
+resume comparison. Probe13055 verified exact checkpoint fidelity and bounded
+numerical continuation agreement. Strict memorization13069 passed after a bounded lower-rate continuation
+(100% button accuracy,0.0028NLL); exclusive batch benchmark13070 follows it. No broad Ahri training
+or accepted held-out quality result exists. Evaluation uses replay-provided history
+even when scoring actual-button targets, so it is offline conditional assessment,
+not closed-loop rollout evidence. Calibration, shuffle control and staged ablations
+remain to build. See STATUS and the fidelity ledger for subsequent receipts.
+
+V2 job restart protocol: short validation jobs use explicit `--no-requeue` and
+`--open-mode=append`. Job13050 demonstrated that Slurm's default requeue can
+restart a script against its already-created output path and truncate the earlier
+log. Keep unique job/attempt output paths and preserve failed evidence; never make
+`exist_ok=True` an implicit checkpoint-resume policy. Until a job wrapper implements
+and validates attempt-aware staging, checkpoint restoration and the original total
+budget, production learners also use explicit no-requeue and resume via a newly
+registered job after terminal feedback. A fresh output directory alone does not
+resume a training budget.
+
+### Experimental next-event/delay control (2026-10-25)
+
+The framewise reference remains available. `--next-event-horizon 20` selects an
+isolated alternative with no cast smoothing, auxiliary losses, or history dropout
+in its first trial. At each observed state, supervise the next received event at
+or after the current frame, up to 20 frames (2 seconds). Class0 denotes no event
+within a fully observed horizon. Mask right-censored horizons without a known
+next event; never cross invalid scope or cadence gaps. Future event identity and
+delay are targets only. Actual current event labels and eligible aim support stay
+unchanged for button-conditioned target supervision.
+
+The trunk predicts p(next type) over9 classes and p(delay | next type) over21
+bins for each of8 event types. Train type CE on known targets and conditional
+delay CE on observed next events, each normalized by current valid-frame weight.
+At inference p(emit b now)=p(next b)*p(delay0|b); all remaining mass is continue.
+Recompute this causal distribution every100ms, without scheduling future human
+commands or reading future states. Target heads condition on the actual emitted
+button. Existing calibration operates on this immediate distribution, with its
+own checkpoint fingerprint. A later target's aim is never substituted for the
+current event's aim.
+
+This tests a joint change in temporal labels and the emission factorization;
+it is not a capacity-matched ablation or an established improvement. Report
+natural-rate raw and separately calibrated event metrics against the fixed4k
+reference. Validate censoring/gaps, probability conservation, teacher-button
+independence and delay gradients before launching training. No simulator rollout,
+rewards, engine availability masks, or corpus-B exposure is involved.

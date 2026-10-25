@@ -23,7 +23,33 @@ Do not start this comparison or change target representations during source revi
 | 6. Fix and simplify verified issues | Throughout | Reproduction before fix; regression/independent evidence after; behavior-preservation checks for refactors |
 | 7. Tune and run deferred architecture comparisons | Deferred until gates pass | Fixed splits/budgets/baselines; isolated changes; per-match uncertainty; faithful baseline deviations explicit |
 
-## Current checkpoint
+## Integration and workspace checkpoint (2026-10-25)
+
+Dani authorized landing fixes and reviewing workspace/snapshot hygiene before
+continuing deeper review. Merge current modern/bc into this review branch first,
+retain experimental flags/auxiliary/next-event/calibration/transfer paths, test the
+combined result, then fast-forward modern/bc. No main merge: fetched origin/main
+is September3 c1ecec9b and modern/bc is941commits ahead, so a main PR would pull
+unreviewed historical scope. Preserve user AGENTS.md/CLAUDE.md worktree edits.
+
+Workspace census:41registered,23already archived,13dirty. Several archived
+worktrees contain uncommitted changes; archival location does not prove landed
+or disposable. Full status/ancestry inventory in
+[worktrees-before.json](/mnt/nfs/shared/modern-bc/review-20261025/worktrees-before.json).
+Do not delete or move active/app-bound worktrees blindly. Source/data snapshots
+are immutable reproducibility inputs, not alternate current checkouts. Current
+v3loader rejects older contracts and verifies artifact hashes; combined finalizer
+also rejects shards mixing source commits/contracts. Checkpoints bind dataset
+contract and burn sampling; initialization transfers weights explicitly with donor
+provenance/fresh optimizer, whereas incompatible resume is rejected.
+
+Merge resolution retains both sets of evidence/docs/tests. The decoder source
+binding defect now fails closed for top-level and transitive cached local modules;
+use a fresh process to switch decoder snapshots.12focused source/emitter tests
+passed4.26s. Full combined tests/raw reconversion/GPU checks remain required
+before landing. No old job inputs or checkpoints rewritten.
+
+## Historical checkpoint before integration
 
 - Production review baseline: `modern/bc` resolved to **f10e4f4274bbbdbe3d7a2d7057e7a7fdcb639604**.
   Independent review snapshot: **8adeecc9c37d3fcc8158ea5dcc841a2174674dac**.
@@ -998,3 +1024,124 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-REVIEW-FIX-FULL-PROFILE-PASS | 2026-10-24 |13060COMPLETED/0; actual finalizer log has no errors, finalized v2manifest passed828perspectives/828artifact hash sets. Profile5284445valid frames (Ahri3684018/Garen1600427),0post-initial-burn omissions/0duplicates.18647valid first-burn frames context-only; legacy fixed-window omissions669133 on same corrected data. Confirms window fix at full scale; retains source196698a8/v2limits, superseded source qualification requires fullv3rebuild. Original13058..13061graph settled; no additional jobs submitted. |
 
 | BC-REVIEW-ROADMAP-20261025 | 2026-10-25 | Dani requested end-to-end review with symptom indicators: inventory current branches/integrated fixes; independently synchronized XPS overlay/source validation; tensor provenance/causality/identity/missingness/coordinate checks; controlled action-space comparison; trainer-paper/behavior gates; bounded hyperparameter studies; simulator/JAX semantics; targeted simplification. Current modern/bc8343868b differs from review branch; old receipts are snapshot-specific. Lightweight current-branch census:BC36non-testPython files/5376lines,25testfiles/1524lines; includes historical and event pipelines, not a bloat verdict. Existing decoder replay-overlay docs describe301-frame Jax clip with schedule-derived times,59camera polls,first20frames uncovered, unknown replayheight and HPbaranchor; native camera-math proof does not resolve clock/anchor uncertainty. Reuse and independently verify this infrastructure before new capture. Action proposal:retain rawworld receipts,learn semantic buttons/unitidentity/qualified direction or relativepoint distributions,compare against current96x54grid with targetcoverage and representation-oracle errors; no blanket angle conversion or inferred literal clicks. No new run/model acceptance. |
+
+| BC-V2-STRICT-REQUEUE-FAIL | 2026-10-24 |13050 Restarts=1, empty output already exists, original log overwritten; no completed metrics or strict-model verdict.13063 registered identical source/budget with no-requeue/append logs, fresh job output. Owned13055 running first attempt, Requeue disabled. Future BC wrappers require explicit restart policy; no baseline launched. |
+| BC-V2-RESUME-PROBE-PASS | 2026-10-24 |13055 exact parameter/optimizer serialization, count16x2; continuation replicas identical. Across original/probe maxabs1.1275e-4,relativeL2<=2.799e-5,final-loss spread7.153e-6. Bounded numerical resume accepted, no cross-process bitwise/kernel-cause claim. Strict13063 outstanding; baseline not launched. |
+| BC-V2-BATCH-BENCHMARK-QUEUED | 2026-10-24 | Exclusive13067 afterok13063, sourcef2891e0a, batch8/32/64 separate16-step processes,window256/burn32,24GB/45min. Capacity/throughput only.13066 intentionally cancelled before execution to add node exclusivity; no automatic restart. Broad baseline still gated. |
+| BC-V2-STRICT-NLL-MISS | 2026-10-24 |13063 ran1000updates/217.86s:99.08%button accuracy,NLL0.06303>0.05,loss0.81843,aimCE2.49509. Constant-LR late oscillation. Prepare same-checkpoint/moments1000→1200 at3e-5, unchanged strict criteria; no broad baseline.13067 must be rebound after failed dependency. |
+| BC-V2-STRICT-POLISH-QUEUED | 2026-10-24 |13069 source19e43e03 resumes13063 exact windows/optimizer,1000→1200 total at3e-5 with unchanged98%/0.05 gate.13067 intentionally cancelled for failed dependency; exclusive benchmark13070 afterok13069 replaces it. No broad baseline; await receipts. |
+
+| BC-V2-STRICT-MEMORIZATION-PASS | 2026-10-24 |13069 restored1000→1200 at3e-5/161.97s,100%button accuracy,NLL0.002799,loss0.74956; unchanged98%/0.05 gate passes. Aim CE2.46658 includes nonzero soft-target entropy. Two fixed windows only, no held-out/leakage claim. Await exclusive13070 throughput then broad Ahri baseline. |
+| BC-V2-AHRI-BASELINE-QUEUED | 2026-10-24 |13070 passed batch8/32/64 capacity;43.80kfps at64 selected.13074 baseline1000updates/b64/window256/burn32,470train/71val,seed0;51calibration unused.13075 matched unconditional afterok13074, same sampling/budget/heads. No quality results yet; report aggregation/match bootstrap implemented. |
+| BC-V2-AHRI-BASELINE-RESULT | 2026-10-25 |13074 passed1000 updates/71val/451441frames. Greedy0attack/QWER despite expected ratios0.94–1.05; Q/E oracle-button within2 only1.57/1.41%,attackpointer68.68%. No promotion.13075 pending result. Added isolated angle/cast-aim flags and sampled-target/RNG evaluator + tests, not yet validated or trained. |
+| BC-V2-AIM-EMITTER-ABLATIONS-QUEUED | 2026-10-25 | CPU13076 validates source73fe070d; GPU13077 frozen-baseline greedy/sample0 assessment with angular metrics,13078 Q/E angle same label support,13079 grid+3x cast aim. Both learners1000/b64 same seed/schedule/draws as13074. No combined changes, no test/calibration fitting or promotion. Await13075 and new receipts. |
+| BC-V2-CONDITIONING-CONTROL-RESULT | 2026-10-25 |13075 same71val: conditional Q/E within2 +0.305/+0.282pp, movement+0.483pp; attackpointer-0.277pp,Q/E exactAPslightly worse. Both greedyQWER0, no useful quality/promotion.13076 passes78tests/35.66s. CPU13080 registered paired500-match-bootstrap comparison;13077–13079 gates cleared. |
+| BC-V2-CONDITIONING-PAIRED-INTERVALS | 2026-10-25 |13080 passed71matches/500bootstrap draws: Q/E within2 delta intervals include0; movement+0.341..0.634pp; Q/W exact-frame AP intervals negative. One training seed only. No practical conditioning-only promotion; await13077–13079, no new jobs. |
+| BC-V2-SAMPLED-EMITTER-RESULT | 2026-10-25 |13077 passed71val: sampled Q/W/E/R F1 .150/.107/.053/.096 at near-human rates; movement.806,attack.365. Teacher grid angular error Q34.78/E87.49deg mean per-match median. Greedy-zero issue partly emitter choice; timing/aim still weak. Added count-preserving timing null, unrun; await13078/13079. |
+| BC-V2-TIMING-NULL-QUEUED | 2026-10-25 | CPU13081 sourceedc27926,32 permutations of13077 buttons within valid segments, counts preserved exactly. Frequency-only timing comparison; no matched-target/closed-loop claim. Await13081/13078/13079, no promotion. |
+| BC-V2-TIMING-NULL-RESULT | 2026-10-25 |13081 passed32 count-preserving permutations. Actual/null median F1 move.806/.746,attack.365/.243,Q.150/.067,W.107/.067,E.053/.027,R.096/.036. Timing exceeds frequency control but spells weak; dense moveF1 mostly retained when shuffled. Not generalization CI or play-quality proof. Await13078/13079; no promotion. |
+| BC-V2-ANGLE-RESULT | 2026-10-25 |13078 same71val/1000updates: Q angle34.78→12.37deg,E87.49→27.36 (mean match medians),within10 42.52/23.70%; movement within2 drops0.628pp,timing little changed. Strong aim component, no policy promotion.13082 sampled angle assessment registered; own-age/smoothing controls implemented, unvalidated. |
+| BC-V2-TIMING-CONTROLS-QUEUED | 2026-10-25 |13083 full-suite gate,source2d36adc8;13084 own-age-only removal,13085 smoothing±0.1s,13086±0.2s on angle baseline.1000/b64 matchingseed/draws, greedy+sampled71val. No compound weighting/history changes, no calibration/B fitting. Await registered results; no promotion. |
+| BC-V2-CAST-AIM-WEIGHT-RESULT | 2026-10-25 |13079 grid+3x target loss: Qwithin2 1.57→6.06%,angular34.78→19.13deg; E1.41→1.55%,87.49→78.16deg. Movementstable,timingmixed; angle-only still better.13083 passes79tests/37.31s.13087 registered angle+3x interaction, same1000/b64/seed0; no promotion. |
+| BC-V2-SAMPLED-ANGLE-RESULT | 2026-10-25 |13082 Q/E sampled F1.145/.047, little timing change. Exact-frame Qaim26/49,E0/1 too sparse for operational joint claim. Implemented tolerant matched-direction scorer with index/gap/wrap tests and observed-opponent heuristic diagnostic, unrun. Assessor fingerprint provenance added; no promotion. |
+| BC-V2-MATCHED-AIM-QUEUED | 2026-10-25 | CPU13088 sourcee4288d17, cached71val grid/angle sampled predictions + original labels,2regression tests, tolerant direction agreement and visible-opponent diagnostic. Predicted/received indices distinct; no new supervision/hit-rate claim. Await13088/13084–13087; no promotion. |
+| BC-V2-MATCHED-AIM-RESULT | 2026-10-25 |13088 passes2tests; angle joint-known recall Q6.59%,E0.705%. Visible-opponent heuristic medians6.41/6.04deg beat learned12.18/21.13 on same1301Q/456E frames. Added optional full-circle opponent-relative head/global missing fallback, no new labels/params; tests pending. No policy promotion; await timing/weight arms. |
+| BC-V2-RELATIVE-COORDINATES-QUEUED | 2026-10-25 |13089 full-suite83tests/38.62s completed;13090 relative-angle arm registered against8c668da2, same1000/b64/seed0/no smoothing/weighting change. Full-circle support/global missing fallback, no extra parameters or supervision. No quality result yet; await13084–13087/13090. |
+| BC-V2-OWN-AGE-RESULT | 2026-10-25 |13084 removal worsens Q/E exactAP6.254/2.313→5.387/2.019%,Q/R sampledF1.145/.096→.135/.069; E sample mixed,aimlittlechanged. Retain explicit ages provisionally, no engine readiness.13091 paired-report job after remaining arms,500bootstrap/71matches, same-seed only. |
+| BC-V2-SMOOTH1-RESULT | 2026-10-25 |13085 ±0.1s: sampled Q/W/E/R F1.146/.112/.052/.101 versus.145/.109/.047/.096, small; movementwithin2 drops9.30→8.43%,angleQ/E11.99/25.85deg. No practical timing fix/promotion yet; await±0.2s/weight/relative and paired intervals. |
+| BC-V2-SMOOTH2-RESULT | 2026-10-25 |13086 Q/W/E/R sampledF1.185/.126/.071/.092,nearAPQ/E.319/.144,aimstable; small movement/attack regressions. Timing candidate, not promotion. Separate-calibration temperature/rate module implemented with fingerprint gate/test, unrun; no validation fitting or future-input masks. |
+| BC-V2-SEPARATE-CALIBRATION-QUEUED | 2026-10-25 |13092 tests→13093 smooth2 frozen51cal collect→13094 fit temperature/rate biases by3-seed calibration castF1→13095 frozen71val assessment. Sourcecefee640, fingerprints, no validation fitting/retraining/future-input/cooldown masks. Candidate only; await registered results and remaining angle/weight comparisons. |
+
+| BC-V2-CALIBRATION-TESTS-PASS | 2026-10-25 |13092 actual log confirms84tests/39.12s,COMPLETED/0. Collection13093 dependency cleared;13094 fit and13095 frozen validation remain gated. No fitted-emitter or model-quality result yet; await registered callbacks, no duplicate work/promotion. |
+
+| BC-V2-ANGLE-AIM3-RESULT | 2026-10-25 |13087 completed1000updates/655.46s/71val. Q/E mean per-match median aim12.37/27.36→8.79/22.37deg,within10 42.52/23.70→56.00/31.45%. Sampled Q/W/E/RF1.1546/.1055/.0466/.0840, timing mixed; movementwithin2 9.304→9.685%. Component candidate only, one training/sampling seed; paired13091 and relative13090 pending. No policy promotion/new jobs. |
+
+| BC-V2-RELATIVE-ANGLE-RESULT | 2026-10-25 |13090 completed1000updates/662.82s/71val. Q/E teacher mean per-match median12.37/27.36→8.93/14.27deg,within10 42.52/23.70→55.30/51.76%. E better than angle+3x22.37deg; sampled Q/W/E/RF1.147/.108/.050/.095 largely unchanged. Movewithin2 9.304→8.624%; component candidate, one seed, no policy promotion. Paired13091 prerequisites cleared; calibration chain pending. |
+
+| BC-V2-PAIRED-ABLATIONS-RESULT | 2026-10-25 |13091 passed71matches/500paired draws. Smooth2 Q/W/E sampledF1 delta CIs all positive; attack negative. Relative Q/E angle-error delta CIs negative, movementwithin2 negative. Aim3 aim improves; smooth1 timing uncertain. Conditional on one training/sampling seed, no multiplicity correction/policy promotion.13096 registered relative+smooth2 interaction,source8c668da2,same1000/b64/seed0,weight1; registered calibration chain unchanged. |
+
+| BC-V2-CALIBRATION-FIT-RESULT | 2026-10-25 |13093/13094 completed.51unique calibration perspectives,frozen smooth2 step1000,metadata/checkpoint fingerprint and actual manifest hash consistent. Rate-fitted T1/.7/.5 calibration QWERF1 .11343/.14858/.17489 averaged3draws;T.5 selected,stop unsupported/disabled. Selection-set only,no validation quality claim.13095 frozen71val dependency cleared;13096 combined learner pending. |
+
+| BC-V2-FROZEN-CALIBRATION-VAL-RESULT | 2026-10-25 |13095 passed71val with frozen T.5/bias,checkpoint/dataset fingerprints consistent. Same smooth2 model raw→cal Q/W/E/RF1 .185/.126/.071/.092→.228/.179/.114/.175,mean.118→.174;rates.963/.978/.931/.986. Attack.358→.393,move.801→.795;teacher aim unchanged. One training/sampling seed,no interval/closed-loop or promotion. Await13096; new checkpoint needs own calibration. |
+
+| BC-V2-COMBINED-RESULT-AND-CALIBRATION | 2026-10-25 |13096 completed1000updates/659.07s/71val. Relative+smooth2 Q/E teacher error8.90/14.28deg,movementwithin2 10.21%,raw Q/W/E/RF1.178/.130/.065/.109. Aim gains survive,raw timing mixed versus smooth2 alone.13097 collect→13098 own frozen calibration fit→13099 val registered,sourcecefee640,donor13096; no bias reuse/B/retraining/policy promotion. |
+
+| BC-V2-COMBINED-CALIBRATION-FIT | 2026-10-25 |13097/13098 completed51cal collection/fit,frozen relative+smooth2 step1000,checkpoint4a623acb…/dataset fingerprints consistent. T1/.7/.5 calibration castF1.11291/.14291/.17038;own T.5/bias frozen. Selection-set only;13099 held-out scoring dependency cleared, no promotion/new jobs. |
+
+| BC-V2-CALIBRATED-COMBINED-AND-REPLICATION | 2026-10-25 |13099 passed71val:Q/W/E/RF1.230/.169/.103/.203,mean.176 versus smooth2.174. Aim8.90/14.28deg retained,movementwithin2 10.21%;timing bottleneck remains,no promotion.13100/13101 matched seed1 smooth2/relative+smooth2 replications registered,same1000/b64,seed jointly changes init/draws/eval. No validation calibration fitting;await callbacks. |
+
+| BC-V2-SMOOTH2-SEED1-RESULT | 2026-10-25 |13100 completed1000updates/658.43s/71val. Raw Q/W/E/RF1.171/.125/.076/.071,mean.111 versus seed0.118;cast rates.821/.879/.861/.843. Teacher aim9.56/23.44deg,attackpointer72.26%,movewithin2 8.62%. Material seed sensitivity; no comparison to calibrated scores or promotion. Await matched13101;no new jobs. |
+
+| BC-V2-SEED1-RELATIVE-AND-CONVERGENCE | 2026-10-25 |13101 passed:matched seed1 Q/E aim9.56/23.44→8.19/13.97deg,timing meanF1.111→.113 raw. Relative aim gain repeats,timing weak.13102 4000-update relative+smooth2 seed0 and13103 train71/val71 curve1000/2000/4000 registered. New4000-step schedule,within-run convergence diagnostic,no calibration/B/RL or promotion. |
+
+| BC-V2-DURATION-TRAIN-COMPLETE | 2026-10-25 |13102 completed4000updates/1893.34s,4NFS checkpoints verified. Last100-batch averages1000→4000 buttonNLL.6567→.6108,aimNLL6.400→6.003,accuracy71.38→72.98%;training-only.13103 fixed train/val curve dependency cleared,no generalization or policy promotion claim. |
+
+| BC-V2-DURATION-CURVE-RESULT | 2026-10-25 |13103 passed6assessments:within4k schedule val castmeanF1.1434→.1896,train4k.1994,aimQ/E6.67/10.67deg. No large observed train-val gap on fixed71train/71val;not data-ceiling proof.13104/13105/13106 own4k calibration chain and13107 bounded8k freshschedule registered. Current formulation still learns;no policy promotion/B/RL,remaining leakage/history/deploy gates unchanged. |
+
+| BC-V2-4000-CALIBRATION-FIT | 2026-10-25 |13104/13105 passed51cal,step4000,checkpoint4b3f302f…/manifest consistent. Rate-fitted T1/.7/.5 calibration castF1.19013/.24042/.27364;T.5 frozen. Selection-set only;13106 val gate cleared,13107 bounded8k registered. No promotion/new jobs. |
+
+| BC-V2-8000-RESULT-AND-CALIBRATION | 2026-10-25 |13107 completed8k/3539.94s,raw valcastmeanF1.190→.215,Q/W/E improve,Rflat;aim6.45/10.65deg,attackF1.472. E/RnearAP regresses,so no uniform ranking/policy claim.13108 calibration51+train71 diagnostic→13109 fit→13110 frozenval registered;wait4k/8k calibrated and train-gap evidence before further duration. |
+
+| BC-V2-CALIBRATED-4000-VAL | 2026-10-25 |13106 passed71val/frozenfit4k:Q/W/E/RF1.346/.289/.232/.237,mean.276 versus1k.176;attackF1.481,move.835. Rates.954/.933/.955/.854,teacher aim6.67/10.67deg. Stronger offline candidate,still belowcastF1.5;exactjointR0,not hit/closed-loop proof. Await8k13108–13110,no new jobs/promotion. |
+
+| BC-V2-8000-TRAIN-GAP | 2026-10-25 |13108 passed51cal+71train assessments,8k checkpoint e969520f…. Raw castmeanF1 train.246/val.215,gap.031 versus4k.010;Q/E/R ranking gaps grow. Train subset first71sorted,not full train/causal estimate. Held-out gains persist but emerging generalization gap argues against blind extension. Await13109/13110,no new jobs/promotion. |
+
+| BC-V2-8000-CALIBRATION-FIT | 2026-10-25 |13109 passed51cal,fingerprintse969520f… consistent. T1/.7/.5 castF1.22149/.25642/.26778,T.5 selected. Selection score slightly below4k.27364,not held-out winner evidence.13110 frozenval pending;no new training/promotion. |
+
+| BC-V2-8000-CALIBRATED-PLATEAU | 2026-10-25 |13110 passed71val:mean castF1.264 versus4k.276;E/attack improve,R regresses. Keep4k reference,stop duration extension. Added previous-event-only toggle preserving cast ages/default behavior/parameter shapes,regression unrun. Audit replay history dependence before next architecture change;not leakage/closed-loop proof. |
+
+| BC-V2-PREVIOUS-EVENT-ABLATION-QUEUED | 2026-10-25 |13111 fullsuite gate→13112 matched4k previous-event-only removal,source21e2b806. Cast ages retained,seed0/schedule/draws/support same;no test or quality result yet. Inference perturbation control not implemented. Private staging/NFS/no-requeue,awaitcallbacks. |
+
+| BC-V2-PREVIOUS-EVENT-TESTS-PASS | 2026-10-25 |13111 actual log85passed/37.71s,including previous-command mask isolation and cast-history sensitivity.13112 gate cleared;no learned quality/closed-loop result yet,no new jobs/promotion. |
+
+| BC-V2-NO-PREVIOUS-EVENT-AND-DROPOUT | 2026-10-25 |13112 passed4k/71val:raw castmeanF1.190→.152,movewithin2 17.70→6.55%,Q/Eaim5.17/10.04deg. History useful,not deploy/leakage proof. Implemented training-only grouped previous-event dropout/default0,independent RNG preserving draws/cast timers/labels,regression unrun. Next gate and.3 trial,no promotion. |
+
+| BC-V2-PREVIOUS-DROPOUT-QUEUED | 2026-10-25 |13113 fullsuite→13114 matched4k dropout.3 registered,source2dfd229e. Whole-window previous-event masking only,cast timers retained,normal-history finalval. No test/quality/closed-loop result yet;awaitcallbacks. |
+
+| BC-V2-GROUPED-DROPOUT-TESTS-PASS | 2026-10-25 |13113 actual log86passed/37.78s;mask grouping/reproducibility/cast preservation/input immutability validated.13114 dependency cleared;no learned-quality/deploy evidence yet,no new jobs/promotion. |
+
+| BC-V2-DROPOUT-RESULT-AND-SENSITIVITY | 2026-10-25 |13114 passed4k/71val:raw castmeanF1.183 versus.190 reference,Q/Eaim6.13/9.93deg,movewithin2 17.17%. Most normal-history performance retained,robustness unknown.13115 frozen previous-event mask assessment both4k checkpoints registered,source2dfd229e/worker d766e5b8de76,checkpoint/effectiveconfig provenance. No simulated errors/closed-loop or promotion. |
+
+| BC-V2-HISTORY-SENSITIVITY-RESULT | 2026-10-25 |13115 passed71val both4k:missinghistory castmeanF1 reference.190→.076,dropout.183→.153;dropout Q/Eaimstable,moveaccuracy17.17→6.11% remains sensitive. Missing-group robustness only,not policy-error/closed-loop/seed proof.13116/13117/13118 own dropout calibration chain registered,source2dfd229e;candidate only,no promotion. |
+
+| BC-V2-DROPOUT-CALIBRATION-FIT | 2026-10-25 |13116/13117 passed51cal,4k/dropout.3,checkpoint79971010…/dataset consistent. Rate-fitted T1/.7/.5 castF1.18850/.23364/.25621,T.5 frozen;selection-set only,lower thanreference. Await13118 to judge normal-performance/robustness tradeoff,no new jobs/promotion. |
+
+| BC-V2-DROPOUT-VAL-AND-AUXILIARY-PREP | 2026-10-25 |13118 passed71val:calcastmean.263 versusref.276,Rregresses,Q/Eaimimproves;keep robustness candidate/reference distinct. Optional future replay-position/HP targets added,whole-horizon visibility/death/gap/jump masks,existingheads,no INPUTS changes. Tests unrun,lambda.1 isolated trial next. No sim/closed-loop/promotion. |
+
+| BC-V2-AUXILIARY-QUEUED | 2026-10-25 |13119 fullsuite gate→13120 matched4k lambda.1 future-state trial,source7836e18a. Dropout0 isolates auxiliary terms,existingheads/inputschema. Coverage/count/lossmass logged;tests/quality pending,private staging/NFS/no-requeue,no promotion. |
+
+| BC-V2-AUXILIARY-TESTS-PASS | 2026-10-25 |13119 actual log90passed/38.50s,including future-anchor/mask and loss-gradient regressions.13120 dependency cleared;no learned auxiliary quality result yet,no new jobs/promotion. |
+
+| BC-V2-AUXILIARY-RESULT-AND-CALIBRATION | 2026-10-25 |13120 passed4k/71val:rawcastmean.188 versus.190ref,Q/Eaim5.79/10.23deg. Activeauxloss.2185,~10951own/3657enemy/10567HP targetrows perlatebatch. No clear timing benefit.13121/13122/13123 own frozen calibration registered;aux optional,next-event/delay experiment planned/unimplemented,no promotion. |
+
+| BC-V2-AUXILIARY-CALIBRATION-FIT | 2026-10-25 |13121/13122 passed51cal/4k/aux.1,checkpoint033ae259…/actualmanifest consistent. Rate-fitted T1/.7/.5 castF1.18726/.22897/.25431,T.5 frozen;selection-set only. Await13123,no new jobs/promotion. |
+
+| BC-V2-AUXILIARY-VAL-AND-NEXT-EVENT-PREP | 2026-10-25 |13123 passed71val:calcastmean.263 versus.276reference,aux remainsoff. Implemented optional nexttype/conditionaldelay head and targets,causal immediate marginal,no future inputs,currentaim support preserved. Newhead/label factorization jointly changes,tests unrun;next gate/trial,no promotion/B/RL. |
+
+| BC-V2-NEXT-EVENT-QUEUED | 2026-10-25 |13124 fullsuite→13125 4k next-event horizon20 trial registered,source3f25ce66. Unsmooth/noaux/nodropout,causal shared evaluator,temporal labels+emission+delayhead jointly change. Data/draws/aim support fixed;tests/quality pending,no promotion. |
+
+| BC-V2-NEXT-EVENT-TESTS-PASS | 2026-10-25 |13124 actual log95passed/40.26s;temporal target masks,causal marginal probability,teacher independence and conditional-delay gradient checks pass.13125 dependency cleared,no learned-quality claim/new jobs/promotion. |
+
+| BC-V2-NEXT-EVENT-RESULT-AND-CALIBRATION | 2026-10-25 |13125 passed4k/71val/6.989Mparams:rawcastmean.170 versus.190ref,nearAPworse,exactAPallcastsbetter(E.027→.054). Delaylossactive1.571;labels/smoothing differ,not established winner.13127/13128/13129 immediate-probability calibration chain registered,source3f25ce66;no baseline switch/promotion. |
+
+| BC-V2-NEXT-EVENT-CALIBRATION-FIT | 2026-10-25 |13127/13128 passed51cal/4k/horizon20,checkpoint9f53e19b…/manifest consistent. Immediate-rate-fitted T1/.7/.5 castF1.16848/.20172/.21086,T.5 frozen. Selection-only,13129 pending,no switch/new jobs/promotion. |
+
+| BC-V2-NEXT-EVENT-VAL-AND-MEMORY-PREP | 2026-10-25 |13129 passed71val:calcastmean.202 versus.276ref,allcastF1lower;rejectthisconfiguration. Added optional GRU-only periodic evalreset with continuous emitterRNG/defaultfullstate;regression unrun,next frozen256reset diagnostic. No statecarry training/closed-loop/promotion. |
+
+| BC-V2-MEMORY-RESET-QUEUED | 2026-10-25 |13130 fullsuite→13131 frozen4k GRUreset256 registered,sourcee0322297,same71val/T1/sample0,PRNG/historyinputs preserved. Compare savedfullstate13103,not statecarry training. Tests/quality pending,private staging/NFS/no-requeue,no promotion. |
+
+| BC-V2-MEMORY-RESET-TESTS-PASS | 2026-10-25 |13130 actual log96passed/40.28s,resetboundary/RNGstream regressionpasses.13131 dependencycleared,no memory-quality claim/new jobs/promotion. |
+
+| BC-V2-MEMORY-RESULT-AND-SIMPLER-KIT-CONTROL | 2026-10-25 |13131 passed71val:full/reset castmean.18966/.19102,othermetricsalmostsame.13133 early/later boundarypaired diagnostic queued.13132 Garen185/25/26 train1600→owncal→val queued,sourcee0322297;selfcast-kit timing diagnostic,not equaldata/qualitypromotion. No sim/B/RL. |
+
+| BC-V2-MEMORY-BOUNDARY-RESULT | 2026-10-25 |13133 passed:phase32:82 full/reset castF1.19345/.19475,later.18572/.18580,APnearlysame. Burn32 excluded both,not startup test;no large supervised-boundary deficit,so statecarry lowpriority. Await13132 Garen,no new jobs/promotion. |
+
+| BC-V2-GAREN-RESULT-AND-TRANSFER-PILOT | 2026-10-25 |13132 passed185/25/26:calQ/W/E/RF1.174/.105/.270/.075,R40events/pointer92.5%;timingweakdespitesimplekit,notequaldataAhri comparison.13134 array4max2→13137 convert/finalize512other-midtrainperspectives registered,planf2c00b915126/sourcee0322297,allAeval/cal matches excluded,Buntouched. Conversion only,mixedtraining/warmstart notimplemented,no promotion. |
+
+| BC-V2-TRANSFER-DATA-PASS-AND-INITIALIZER | 2026-10-25 |13134all4/13137 passed512views/499matches/3.391Mvalidframes,.368GBNPZ,finalmanifestverified. Addedalltrain mode/strictweights-onlyinitializer+provenance/freshoptimizer,resumecontractpreserved;tests unrun. Planmixed1000→Ahri4000 versusAhri1000→Ahri4000 samephaseLR. Conversiononly,no transfer quality/promotion. |
+
+| BC-V2-TRANSFER-RECIPE-QUEUED | 2026-10-25 |13139 tests→13140 mixed512pretrain1k;13141 Ahri1kdonor13096→4kcontrol;13142 mixed1k→4kafter13140. Source75ecb810,phase2lr1e-4/freshoptimizer/same470train/71val,5000totalstepsboth. No80/20 finetune/allchamp proof/calfit yet. Private snapshots/NFS/no-requeue;tests/quality pending,no promotion. |
+
+| BC-V2-TRANSFER-INITIALIZER-TESTS-PASS | 2026-10-25 |13139 actual log98passed/40.09s,weights-only/provenance/architecture/tree/shape checks pass.13140/13141 gatescleared,13142 after13140. No transfer-quality claim/new jobs/promotion. |
+
+| BC-V2-MIXED-PRETRAIN-COMPLETE | 2026-10-25 |13140 passed1000updates/512views/15519windows/664.62s,datasethashverified,NFSdonor c164a6da…. TrainingbuttonNLL1.040→.663,not target/transfer quality.13142 fine-tune dependencycleared,13141control pending;no promotion/new jobs. |

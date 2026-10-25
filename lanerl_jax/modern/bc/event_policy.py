@@ -9,8 +9,9 @@ import jax.numpy as jnp
 
 from ..rl.policy import _Block, TRUNK, HEAD
 from .event_inputs import ENTITY_DIM, SELF_DIM, GLOBAL_DIM, ABILITY_FIELDS, SELF_FIELDS
-from .event_targets import pointer_candidates, emission_logits, grid_candidates
 from .events import BUTTONS, BUTTON_INDEX as B
+from .event_targets import pointer_candidates, emission_logits, grid_candidates
+from .event_next import immediate_logits
 
 
 class EventPolicyConfig(NamedTuple):
@@ -39,6 +40,22 @@ class EventPolicyConfig(NamedTuple):
     grid_y: int = 54
     conditional_aim: bool = True
     history: bool = True
+    own_cast_history: bool = True
+    next_event_horizon: int = 0
+    previous_event_history: bool = True
+    opponent_relative_angle: bool = False
+
+
+def rotate_angle_logits(logits, base):
+    """Rotate a categorical offset distribution into global lane-frame angles."""
+    n = logits.shape[-1]
+    index = jnp.arange(n) - base[..., None]*n/(2*jnp.pi)
+    lower = jnp.floor(index).astype(jnp.int32)
+    fraction = index-lower
+    probability = jax.nn.softmax(logits, -1)
+    a = jnp.take_along_axis(probability, lower % n, -1)
+    b = jnp.take_along_axis(probability, (lower+1) % n, -1)
+    return jnp.log(jnp.maximum((1-fraction)*a+fraction*b, 1e-30))
 
 
 class EventLogits(NamedTuple):
@@ -52,6 +69,7 @@ class EventLogits(NamedTuple):
     own_future: jax.Array
     enemy_future: jax.Array
     own_hp_future: jax.Array
+    delay: jax.Array | None = None
 
 
 class EventPolicy(nn.Module):
@@ -73,6 +91,8 @@ class EventPolicy(nn.Module):
         self.core_norm = nn.LayerNorm()
         self.gru = nn.GRUCell(c.core_dim)
         self.button_head = nn.Dense(len(BUTTONS), **HEAD)
+        if c.next_event_horizon:
+            self.delay_head = nn.Dense((len(BUTTONS)-1)*(c.next_event_horizon+1), **HEAD)
         self.button_embedding = nn.Embed(len(BUTTONS), c.button_embed)
         self.condition = nn.Dense(c.target_dim, **TRUNK)
         self.pointer_query = nn.Dense(c.pointer_dim, use_bias=False, **HEAD)
@@ -94,6 +114,11 @@ class EventPolicy(nn.Module):
             # Keep identical parameter shapes in the history ablation.
             entities = entities.at[..., 20:].set(jnp.nan)
             self_vec = self_vec.at[..., 24:].set(jnp.nan)
+        if not c.own_cast_history:
+            self_vec = self_vec.at[..., 24:28].set(jnp.nan)
+        if not c.previous_event_history:
+            entities = entities.at[..., 24:].set(jnp.nan)
+            self_vec = self_vec.at[..., 28:].set(jnp.nan)
         em = ~jnp.isfinite(entities)
         values = jnp.where(em, 0., entities)
         tokens = self.entity(values) + self.entity_missing(em.astype(jnp.float32))
@@ -127,10 +152,16 @@ class EventPolicy(nn.Module):
         carry = jnp.where(dead[..., None], 0., carry)
         return h + recurrent, carry, entity_tokens
 
+    def next_events(self, hidden):
+        delay = self.delay_head(hidden).reshape(hidden.shape[:-1] + (len(BUTTONS)-1, self.cfg.next_event_horizon+1))
+        return self.button_head(hidden), delay
+
     def buttons(self, hidden):
+        if self.cfg.next_event_horizon:
+            return immediate_logits(*self.next_events(hidden))
         return self.button_head(hidden)
 
-    def targets(self, hidden, entity_tokens, pad, own_metadata, button, eligible):
+    def targets(self, hidden, entity_tokens, pad, own_metadata, button, *, positions, eligible):
         c = self.cfg
         selected = jnp.take_along_axis(own_metadata, jnp.clip(button - B['q'], 0, 3)[..., None, None], -2)[..., 0, :]
         cast = (button >= B['q']) & (button <= B['r'])
@@ -142,23 +173,40 @@ class EventPolicy(nn.Module):
         pointer = jnp.einsum('...d,...nd->...n', self.pointer_query(query),
                              self.pointer_key(entity_tokens)) / c.pointer_dim ** .5
         pointer = jnp.where(pad | ~eligible, -1e4, pointer)
+        angle = self.angle_head(query)
+        if c.opponent_relative_angle:
+            # Slot0 is the visible paired opponent; missing evidence keeps global coordinates.
+            xy = positions[..., 0, :]
+            known = ~pad[..., 0] & jnp.isfinite(xy).all(-1) & (jnp.sum(jnp.nan_to_num(xy)**2, -1) > 1e-12)
+            xy = jnp.nan_to_num(xy)
+            base = jnp.where(known, jnp.arctan2(xy[..., 1], xy[..., 0]), 0.)
+            angle = rotate_angle_logits(angle, base)
         grid = jnp.where(grid_candidates(c.grid_x, c.grid_y).reshape(-1), self.grid_head(query), -1e4)
-        return pointer, grid, self.angle_head(query)
+        return pointer, grid, angle
 
     def __call__(self, entities, pad, self_vec, global_vec, entity_ids, own_id, enemy_id,
                  own_metadata, enemy_metadata, patch, carry, *, target_button=None):
         h, carry, tokens = self.encode(entities, pad, self_vec, global_vec, entity_ids, own_id, enemy_id,
                                        own_metadata, enemy_metadata, patch, carry)
-        button = self.buttons(h)
+        if self.cfg.next_event_horizon:
+            button, delay = self.next_events(h)
+            emitted = immediate_logits(button, delay)
+        else:
+            button, delay = self.buttons(h), None
+            emitted = button
         if target_button is None:
-            button = emission_logits(button, entities, pad, own_id)
-        chosen = button.argmax(-1) if target_button is None else target_button
-        pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen, pointer_candidates(entities, pad, own_id, chosen))
-        _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']), ~pad)
+            emitted = emission_logits(emitted, entities, pad, own_id)
+            if not self.cfg.next_event_horizon:
+                button = emitted
+        chosen = emitted.argmax(-1) if target_button is None else target_button
+        pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen, positions=entities[..., :, 1:3],
+                                            eligible=pointer_candidates(entities, pad, own_id, chosen))
+        _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']),
+                                      positions=entities[..., :, 1:3], eligible=~pad)
         condition = jnp.concatenate([h, self.button_embedding(chosen)], -1)
         return EventLogits(button, pointer, grid, angle, self.co_move_head(condition), co_grid,
                            self.co_move_order_head(condition), self.own_future_head(h),
-                           self.enemy_future_head(h), self.hp_future_head(h)[..., 0]), carry
+                           self.enemy_future_head(h), self.hp_future_head(h)[..., 0], delay), carry
 
     def initial_carry(self, batch_shape=()):
         return jnp.zeros(tuple(batch_shape) + (self.cfg.core_dim,), jnp.float32)

@@ -12,7 +12,10 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from .event_batches import event_batch, event_windows, load_event_games
+from .event_batches import event_batch, event_windows, load_event_games, ahri_angle_targets, drop_previous_event_history
+from .event_auxiliary import future_targets
+from .event_next import next_event_targets
+from .event_dataset import CONTRACT
 from .event_eval import evaluate_games
 from .event_loss import INPUTS, make_event_loss
 from .event_policy import EventPolicy, EventPolicyConfig
@@ -22,6 +25,25 @@ def save(path, value):
     temp = path.with_name(path.name + '.tmp')
     temp.write_bytes(serialization.to_bytes(value))
     temp.replace(path)
+
+
+def initialize_parameters(path, cfg, template):
+    """Transfer weights only; a new phase always starts a fresh optimizer."""
+    raw = path.read_bytes()
+    saved = serialization.msgpack_restore(raw)
+    previous = json.loads(saved['contract_json'])
+    if EventPolicyConfig(**previous['config']) != cfg:
+        raise ValueError('initialization changes the policy architecture')
+    expected = serialization.to_state_dict(template)
+    if jax.tree.structure(expected) != jax.tree.structure(saved['params']):
+        raise ValueError('initialization parameter structure mismatch')
+    if any(np.shape(a) != np.shape(b) for a, b in
+           zip(jax.tree.leaves(expected), jax.tree.leaves(saved['params']))):
+        raise ValueError('initialization parameter shapes mismatch')
+    params = serialization.from_state_dict(template, saved['params'])
+    return params, dict(checkpoint_sha256=hashlib.sha256(raw).hexdigest(),
+                        step=int(saved['step']), source_contract=previous,
+                        optimizer='fresh; donor optimizer state is not loaded')
 
 
 def main():
@@ -38,13 +60,38 @@ def main():
     p.add_argument('--warmup', type=int, default=100)
     p.add_argument('--save-every', type=int, default=250)
     p.add_argument('--conditional-aim', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--opponent-relative-angle', action='store_true')
+    p.add_argument('--own-cast-history', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--previous-event-history', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--smoothing-radius', type=int, choices=(0, 1, 2), default=0)
+    p.add_argument('--sample-eval', action='store_true')
+    p.add_argument('--ahri-angle', action='store_true')
+    p.add_argument('--cast-aim-weight', type=float, default=1.)
+    p.add_argument('--next-event-horizon', type=int, default=0)
+    p.add_argument('--auxiliary-weight', type=float, default=0.)
+    p.add_argument('--previous-event-dropout', type=float, default=0.)
     p.add_argument('--history', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--evaluate', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--eval-limit', type=int, default=0)
     p.add_argument('--resume', type=Path)
+    p.add_argument('--initialize-from', type=Path)
     a = p.parse_args()
     if a.steps < 2 or min(a.batch_size, a.save_every, a.window) <= 0 or not 0 <= a.burn < a.window:
         p.error('invalid update/window/batch budget')
+    if not np.isfinite(a.cast_aim_weight) or a.cast_aim_weight <= 0:
+        p.error('cast aim weight must be finite and positive')
+    if not np.isfinite(a.previous_event_dropout) or not 0 <= a.previous_event_dropout <= 1:
+        p.error('previous-event dropout must be in [0,1]')
+    if a.previous_event_dropout and not a.previous_event_history:
+        p.error('dropout requires enabled previous-event history')
+    if not np.isfinite(a.auxiliary_weight) or a.auxiliary_weight < 0:
+        p.error('auxiliary weight must be finite and nonnegative')
+    if a.next_event_horizon < 0 or (a.next_event_horizon and a.smoothing_radius):
+        p.error('next-event prediction requires nonnegative horizon and no cast smoothing')
+    if a.resume and a.initialize_from:
+        p.error('resume and initialize-from are mutually exclusive')
+    if a.champion == 'all' and a.evaluate:
+        p.error('mixed pretraining requires --no-evaluate; assess target fine-tuning separately')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('training requires a Slurm GPU allocation')
     a.output.mkdir(parents=True, exist_ok=False)
@@ -52,15 +99,29 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1):
         signal.signal(sig, lambda signum, frame: stopping.append(signum))
     manifest_hash = hashlib.sha256((a.dataset/'manifest.json').read_bytes()).hexdigest()
-    cfg = EventPolicyConfig(conditional_aim=a.conditional_aim, history=a.history)
+    cfg = EventPolicyConfig(conditional_aim=a.conditional_aim, history=a.history,
+                            own_cast_history=a.own_cast_history, previous_event_history=a.previous_event_history,
+                            next_event_horizon=a.next_event_horizon,
+                            opponent_relative_angle=a.opponent_relative_angle)
+    smoothing = {0: (1.,), 1: (.5, 1., .5), 2: (.2, .5, 1., .5, .2)}[a.smoothing_radius]
     # Sampling is stateless by global update, so resume repeats no completed draw.
-    contract = dict(config=cfg._asdict(), steps=a.steps, batch_size=a.batch_size, window=a.window,
+    contract = dict(dataset_contract=CONTRACT, config=cfg._asdict(), steps=a.steps, batch_size=a.batch_size, window=a.window,
                     burn=a.burn, seed=a.seed, lr=a.lr, warmup=a.warmup, dataset_sha256=manifest_hash,
-                    champion=a.champion, smoothing=[1.], co_move_weight=0., auxiliary_weight=0., sampling='overlapping-burn-v2')
-    contract_json = json.dumps(contract, sort_keys=True)
-    (a.output/'config.json').write_text(json.dumps(contract, indent=2))
+                    champion=a.champion, smoothing=list(smoothing), co_move_weight=0., auxiliary_weight=a.auxiliary_weight,
+                    ahri_angle=a.ahri_angle, cast_aim_weight=a.cast_aim_weight, sampling='overlapping-burn-v2')
+    if a.previous_event_dropout:
+        contract['previous_event_dropout'] = a.previous_event_dropout
     started = time.monotonic()
-    games = load_event_games(a.dataset, split='train', champion=a.champion)
+    games = load_event_games(a.dataset, split='train', champion=None if a.champion == 'all' else a.champion, smoothing=smoothing)
+    if a.ahri_angle:
+        ahri_angle_targets(games)
+    if a.auxiliary_weight:
+        for game in games:
+            game['arrays'].update(future_targets(game['arrays']))
+    if a.next_event_horizon:
+        for game in games:
+            arrays = game['arrays']
+            arrays.update(next_event_targets(arrays['button'], arrays['valid'], arrays['t'], a.next_event_horizon))
     if not games:
         raise ValueError('no training perspectives')
     windows = event_windows(games, a.window, burn=a.burn)
@@ -76,12 +137,23 @@ def main():
     def batch_at(step):
         rng = np.random.default_rng(np.random.SeedSequence([a.seed, step]))
         items = windows[rng.integers(len(windows), size=a.batch_size)]
-        return jax.tree.map(jnp.asarray, event_batch(games, list(map(tuple, items)), a.window, a.burn))
+        batch = event_batch(games, list(map(tuple, items)), a.window, a.burn)
+        history_rng = np.random.default_rng(np.random.SeedSequence([a.seed, step, 137]))
+        batch = drop_previous_event_history(batch, history_rng, a.previous_event_dropout)
+        return jax.tree.map(jnp.asarray, batch)
 
     policy = EventPolicy(cfg)
     batch = batch_at(0)
     params = policy.init(jax.random.key(a.seed), *(batch[k][:, 0] for k in INPUTS),
                          policy.initial_carry((a.batch_size,)), target_button=batch['button'][:, 0])
+    if a.initialize_from:
+        params, contract['initialization'] = initialize_parameters(a.initialize_from, cfg, params)
+    if a.resume:
+        resumed_contract = json.loads(serialization.msgpack_restore(a.resume.read_bytes())['contract_json'])
+        if 'initialization' in resumed_contract:
+            contract['initialization'] = resumed_contract['initialization']
+    contract_json = json.dumps(contract, sort_keys=True)
+    (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     warmup = min(a.warmup, max(a.steps//10, 1))
     schedule = optax.warmup_cosine_decay_schedule(0., a.lr, warmup, a.steps, end_value=.1*a.lr)
     tx = optax.chain(optax.clip_by_global_norm(.5), optax.adam(schedule, eps=1e-5))
@@ -94,7 +166,7 @@ def main():
         params = serialization.from_state_dict(params, saved['params'])
         state = serialization.from_state_dict(state, saved['opt_state'])
         step = int(saved['step'])
-    loss = make_event_loss(policy)
+    loss = make_event_loss(policy, cast_aim_weight=a.cast_aim_weight, auxiliary_weight=a.auxiliary_weight)
 
     @jax.jit
     def update(params, state, batch):
@@ -134,11 +206,16 @@ def main():
     if a.evaluate and not stopping:
         del games, batch
         games = load_event_games(a.dataset, split='val', champion=a.champion)
+        if a.ahri_angle:
+            ahri_angle_targets(games)
         games = sorted(games, key=lambda g: g['row']['base'])
         if a.eval_limit:
             games = games[:a.eval_limit]
         reports = evaluate_games(params, policy, games)
         (a.output/'validation.json').write_text(json.dumps(reports, indent=2))
+        if a.sample_eval:
+            sampled = evaluate_games(params, policy, games, seed=a.seed)
+            (a.output/'validation-sampled.json').write_text(json.dumps(sampled, indent=2))
     print(json.dumps(result), flush=True)
     if stopping:
         raise SystemExit(143)
