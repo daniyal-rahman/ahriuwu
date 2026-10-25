@@ -1329,3 +1329,11 @@ Measured.384s/update suggests51min updates plus startup/evaluation/queue,not
 a guaranteed end-to-end ETA. Private deep copies/reserve,NFS outputs,no-requeue/
 append. Await callbacks; do not force next-event redesign before convergence
 readouts. No policy promotion; leakage/history/deploy gates remain outstanding.
+
+**4000-step calibration13104/13105 COMPLETED/0.** Actual collection/fit
+artifacts verify51uniquecal perspectives,step4000,checkpoint SHA4b3f302f…
+consistent and actual dataset manifest hash matching. T1/.7/.5 rate-fitted
+calibration castF1 .19013/.24042/.27364 averaged3 draws;T.5 frozen again.
+These are selection-set scores,not held-out improvement or policy promotion.
+Frozen71-val scorer13106 dependency cleared; bounded8000 learner13107
+already registered. Await callbacks,no new jobs on these receipts.

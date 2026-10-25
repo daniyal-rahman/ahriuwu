@@ -890,3 +890,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-DURATION-TRAIN-COMPLETE | 2026-10-25 |13102 completed4000updates/1893.34s,4NFS checkpoints verified. Last100-batch averages1000→4000 buttonNLL.6567→.6108,aimNLL6.400→6.003,accuracy71.38→72.98%;training-only.13103 fixed train/val curve dependency cleared,no generalization or policy promotion claim. |
 
 | BC-V2-DURATION-CURVE-RESULT | 2026-10-25 |13103 passed6assessments:within4k schedule val castmeanF1.1434→.1896,train4k.1994,aimQ/E6.67/10.67deg. No large observed train-val gap on fixed71train/71val;not data-ceiling proof.13104/13105/13106 own4k calibration chain and13107 bounded8k freshschedule registered. Current formulation still learns;no policy promotion/B/RL,remaining leakage/history/deploy gates unchanged. |
+
+| BC-V2-4000-CALIBRATION-FIT | 2026-10-25 |13104/13105 passed51cal,step4000,checkpoint4b3f302f…/manifest consistent. Rate-fitted T1/.7/.5 calibration castF1.19013/.24042/.27364;T.5 frozen. Selection-set only;13106 val gate cleared,13107 bounded8k registered. No promotion/new jobs. |
