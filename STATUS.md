@@ -1523,3 +1523,10 @@ fix;one seed,uncalibrated. Summary auxiliary01-summary-13120.json.
 NFS,no-requeue/append. No more duration/aux sweeps before readout;aux remains
 optional. Next structural experiment planned is next-event-and-delay,not yet
 implemented or submitted. No promotion;replay-only/B isolation unchanged.
+
+**Auxiliary calibration13121/13122 COMPLETED/0:** actualmetadata confirms
+51uniquecal,step4000,auxweight.1,checkpoint033ae259… and actualmanifest
+fingerprints match. Rate-fitted T1/.7/.5 calibration mean castF1
+.18726/.22897/.25431 across3draws;T.5 frozen. Belowreference4k selection
+score.27364,but not held-out winner evidence. Await registered13123 frozen
+71val;no additional jobs or promotion on these receipts.
