@@ -1438,3 +1438,17 @@ append. Awaitcallbacks;no calibrated or learned dropout result/promotion yet.
 labels and source-input immutability regression passed. Afterok13114 cleared;
 learned dropout quality and deploy robustness unmeasured. Await registered
 learner callback,no new jobs or policy promotion.
+
+**Dropout.3 learner13114 COMPLETED/0**,4000updates/1893.37s/71val.
+Raw reference→dropout Q/W/E/RF1 .2829/.2044/.1281/.1432→.2644/.2072/
+.1198/.1404;mean.18966→.18297. Teacher Q/E mean match median6.67/10.67→
+6.13/9.93deg;movewithin2 17.70→17.17%,pointer75.64→76.20%. Most
+performance retained,but normal-history evaluation alone shows no robustness
+benefit. Summary previous-dropout03-summary-13114.json;one seed,uncalibrated.
+**Frozen history perturbation13115 registered**,tested source2dfd229e plus
+immutable worker SHA d766e5b8de76…,GPU1h. Both frozen4k reference13102 and
+dropout13114 assessed on same71val/sample0 with previous-event-only config
+mask;compare saved normal assessments,checkpoint/effective config recorded.
+Own/enemy cast timers preserved,no retraining/calibration or synthesized policy
+errors. Missing-history sensitivity only,not closed-loop deployment. Private
+deep-copy staging/reserve,NFS,no-requeue/append;awaitcallback,no promotion.
