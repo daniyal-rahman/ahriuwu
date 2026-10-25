@@ -103,3 +103,25 @@ def test_previous_event_ablation_preserves_own_and_enemy_cast_history():
     args[0] = args[0].at[..., 20:24].set(.9)
     enemy, _ = policy.apply(params, *args)
     assert not np.allclose(before.button, enemy.button)
+
+
+def test_next_event_outputs_are_independent_of_teacher_aim_button():
+    c = EventPolicyConfig(d_model=16, n_heads=2, n_layers=1, ffn_dim=32, ctx_dim=16,
+                          mlp_hidden=32, mlp_layers=1, core_dim=16, target_dim=16, pointer_dim=8,
+                          next_event_horizon=20)
+    policy = EventPolicy(c)
+    args = (jnp.zeros((32, c.entity_dim)), jnp.arange(32) > 2, jnp.zeros(c.self_dim),
+            jnp.zeros(c.global_dim), jnp.zeros(32, jnp.int32), jnp.asarray(1), jnp.asarray(2),
+            jnp.zeros((4, c.metadata_dim)), jnp.zeros((4, c.metadata_dim)), jnp.asarray(0),
+            policy.initial_carry())
+    params = policy.init(jax.random.key(4), *args, target_button=jnp.asarray(1))
+    a, ca = policy.apply(params, *args, target_button=jnp.asarray(1))
+    b, cb = policy.apply(params, *args, target_button=jnp.asarray(3))
+    np.testing.assert_array_equal(a.button, b.button)
+    np.testing.assert_array_equal(a.delay, b.delay)
+    np.testing.assert_array_equal(ca, cb)
+    assert a.delay.shape == (8, 21)
+    from lanerl_jax.modern.bc.event_next import immediate_logits
+    h, _, _ = policy.apply(params, *args, method=policy.encode)
+    emitted = policy.apply(params, h, method=policy.buttons)
+    np.testing.assert_allclose(emitted, immediate_logits(a.button, a.delay), atol=1e-6)

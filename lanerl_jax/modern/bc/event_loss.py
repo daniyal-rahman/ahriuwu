@@ -41,6 +41,9 @@ def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.,
     def loss(params, batch):
         lg = forward(params, batch)
         target = batch.get('button_target', jax.nn.one_hot(batch['button'], len(BUTTONS)))
+        next_mode = bool(getattr(policy.cfg, 'next_event_horizon', 0))
+        if next_mode:
+            target = jax.nn.one_hot(batch['next_button'], len(BUTTONS))
         button = -jnp.sum(target * jax.nn.log_softmax(lg.button, -1), -1)
         point = grid_ce(lg.grid, batch['screen_x'], batch['screen_y'], sigma,
                         policy.cfg.grid_x, policy.cfg.grid_y)
@@ -57,10 +60,19 @@ def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.,
         cast = (batch['button'] >= B['q']) & (batch['button'] <= B['r'])
         aim_scale = jnp.where(cast, cast_aim_weight, 1.)
         weighted_aim = target_w * aim_scale * aim
-        total = (w * button).sum() / denom + weighted_aim.sum() / denom
-        info = dict(button_nll=(w * button).sum() / denom,
+        button_w = w * batch['next_valid'] if next_mode else w
+        total = (button_w * button).sum() / denom + weighted_aim.sum() / denom
+        info = dict(button_nll=(button_w * button).sum() / denom,
                     aim_nll=(target_w * aim).sum() / jnp.maximum(target_w.sum(), 1.),
-                    button_accuracy=(w * (lg.button.argmax(-1) == batch['button'])).sum() / denom)
+                    button_accuracy=(button_w * (lg.button.argmax(-1) == (batch['next_button'] if next_mode else batch['button']))).sum() / jnp.maximum(button_w.sum(), 1.))
+        if next_mode:
+            index = jnp.maximum(batch['next_button']-1, 0)
+            delay_logits = jnp.take_along_axis(lg.delay, index[..., None, None], -2)[..., 0, :]
+            delay_w = w * batch['next_observed']
+            info['delay_loss_mass'] = (delay_w * ce(delay_logits, batch['next_delay'])).sum() / denom
+            info['next_known_count'] = button_w.sum()
+            info['next_event_count'] = delay_w.sum()
+            total += info['delay_loss_mass']
         for name, mode in [('unit', UNIT_TARGET), ('point', POINT_TARGET), ('angle', ANGLE_TARGET)]:
             mask = target_w * (batch['aim_mode'] == mode)
             info[name + '_loss_mass'] = (mask * aim_scale * aim).sum() / denom

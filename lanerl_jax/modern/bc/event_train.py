@@ -14,6 +14,7 @@ import optax
 
 from .event_batches import event_batch, event_windows, load_event_games, ahri_angle_targets, drop_previous_event_history
 from .event_auxiliary import future_targets
+from .event_next import next_event_targets
 from .event_eval import evaluate_games
 from .event_loss import INPUTS, make_event_loss
 from .event_policy import EventPolicy, EventPolicyConfig
@@ -46,6 +47,7 @@ def main():
     p.add_argument('--sample-eval', action='store_true')
     p.add_argument('--ahri-angle', action='store_true')
     p.add_argument('--cast-aim-weight', type=float, default=1.)
+    p.add_argument('--next-event-horizon', type=int, default=0)
     p.add_argument('--auxiliary-weight', type=float, default=0.)
     p.add_argument('--previous-event-dropout', type=float, default=0.)
     p.add_argument('--history', action=argparse.BooleanOptionalAction, default=True)
@@ -63,6 +65,8 @@ def main():
         p.error('dropout requires enabled previous-event history')
     if not np.isfinite(a.auxiliary_weight) or a.auxiliary_weight < 0:
         p.error('auxiliary weight must be finite and nonnegative')
+    if a.next_event_horizon < 0 or (a.next_event_horizon and a.smoothing_radius):
+        p.error('next-event prediction requires nonnegative horizon and no cast smoothing')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('training requires a Slurm GPU allocation')
     a.output.mkdir(parents=True, exist_ok=False)
@@ -72,6 +76,7 @@ def main():
     manifest_hash = hashlib.sha256((a.dataset/'manifest.json').read_bytes()).hexdigest()
     cfg = EventPolicyConfig(conditional_aim=a.conditional_aim, history=a.history,
                             own_cast_history=a.own_cast_history, previous_event_history=a.previous_event_history,
+                            next_event_horizon=a.next_event_horizon,
                             opponent_relative_angle=a.opponent_relative_angle)
     smoothing = {0: (1.,), 1: (.5, 1., .5), 2: (.2, .5, 1., .5, .2)}[a.smoothing_radius]
     # Sampling is stateless by global update, so resume repeats no completed draw.
@@ -90,6 +95,10 @@ def main():
     if a.auxiliary_weight:
         for game in games:
             game['arrays'].update(future_targets(game['arrays']))
+    if a.next_event_horizon:
+        for game in games:
+            arrays = game['arrays']
+            arrays.update(next_event_targets(arrays['button'], arrays['valid'], arrays['t'], a.next_event_horizon))
     if not games:
         raise ValueError('no training perspectives')
     windows = event_windows(games, a.window)

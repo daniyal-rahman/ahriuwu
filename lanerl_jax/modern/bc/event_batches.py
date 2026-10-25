@@ -13,7 +13,8 @@ SCALARS = ('own_id', 'enemy_id', 'patch')
 LABELS = ('button', 'aim_mode', 'aim_valid', 'target_row', 'screen_x', 'screen_y', 'angle',
           'co_move_source', 'co_move_valid', 'co_move_x', 'co_move_y', 'co_move_delta')
 AUXILIARIES = ('own_future', 'own_future_valid', 'enemy_future', 'enemy_future_valid',
-               'own_hp_future', 'own_hp_future_valid')
+               'own_hp_future', 'own_hp_future_valid',
+               'next_button', 'next_delay', 'next_valid', 'next_observed')
 
 
 def load_event_games(root, split=None, smoothing=(1.,), champion=None):

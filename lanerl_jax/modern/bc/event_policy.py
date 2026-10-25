@@ -10,6 +10,7 @@ import jax.numpy as jnp
 from ..rl.policy import _Block, TRUNK, HEAD
 from .event_inputs import ENTITY_DIM, SELF_DIM, GLOBAL_DIM, ABILITY_FIELDS
 from .events import BUTTONS, BUTTON_INDEX as B
+from .event_next import immediate_logits
 
 
 class EventPolicyConfig(NamedTuple):
@@ -39,6 +40,7 @@ class EventPolicyConfig(NamedTuple):
     conditional_aim: bool = True
     history: bool = True
     own_cast_history: bool = True
+    next_event_horizon: int = 0
     previous_event_history: bool = True
     opponent_relative_angle: bool = False
 
@@ -66,6 +68,7 @@ class EventLogits(NamedTuple):
     own_future: jax.Array
     enemy_future: jax.Array
     own_hp_future: jax.Array
+    delay: jax.Array | None = None
 
 
 class EventPolicy(nn.Module):
@@ -87,6 +90,8 @@ class EventPolicy(nn.Module):
         self.core_norm = nn.LayerNorm()
         self.gru = nn.GRUCell(c.core_dim)
         self.button_head = nn.Dense(len(BUTTONS), **HEAD)
+        if c.next_event_horizon:
+            self.delay_head = nn.Dense((len(BUTTONS)-1)*(c.next_event_horizon+1), **HEAD)
         self.button_embedding = nn.Embed(len(BUTTONS), c.button_embed)
         self.condition = nn.Dense(c.target_dim, **TRUNK)
         self.pointer_query = nn.Dense(c.pointer_dim, use_bias=False, **HEAD)
@@ -143,7 +148,13 @@ class EventPolicy(nn.Module):
         carry, recurrent = self.gru(carry, self.core_norm(h))
         return h + recurrent, carry, entity_tokens
 
+    def next_events(self, hidden):
+        delay = self.delay_head(hidden).reshape(hidden.shape[:-1] + (len(BUTTONS)-1, self.cfg.next_event_horizon+1))
+        return self.button_head(hidden), delay
+
     def buttons(self, hidden):
+        if self.cfg.next_event_horizon:
+            return immediate_logits(*self.next_events(hidden))
         return self.button_head(hidden)
 
     def targets(self, hidden, entity_tokens, pad, own_metadata, button, *, positions):
@@ -172,15 +183,20 @@ class EventPolicy(nn.Module):
                  own_metadata, enemy_metadata, patch, carry, *, target_button=None):
         h, carry, tokens = self.encode(entities, pad, self_vec, global_vec, entity_ids, own_id, enemy_id,
                                        own_metadata, enemy_metadata, patch, carry)
-        button = self.buttons(h)
-        chosen = button.argmax(-1) if target_button is None else target_button
+        if self.cfg.next_event_horizon:
+            button, delay = self.next_events(h)
+            emitted = immediate_logits(button, delay)
+        else:
+            button, delay = self.buttons(h), None
+            emitted = button
+        chosen = emitted.argmax(-1) if target_button is None else target_button
         pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen, positions=entities[..., :, 1:3])
         _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']),
                                       positions=entities[..., :, 1:3])
         condition = jnp.concatenate([h, self.button_embedding(chosen)], -1)
         return EventLogits(button, pointer, grid, angle, self.co_move_head(condition), co_grid,
                            self.co_move_order_head(condition), self.own_future_head(h),
-                           self.enemy_future_head(h), self.hp_future_head(h)[..., 0]), carry
+                           self.enemy_future_head(h), self.hp_future_head(h)[..., 0], delay), carry
 
     def initial_carry(self, batch_shape=()):
         return jnp.zeros(tuple(batch_shape) + (self.cfg.core_dim,), jnp.float32)

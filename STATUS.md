@@ -1530,3 +1530,16 @@ fingerprints match. Rate-fitted T1/.7/.5 calibration mean castF1
 .18726/.22897/.25431 across3draws;T.5 frozen. Belowreference4k selection
 score.27364,but not held-out winner evidence. Await registered13123 frozen
 71val;no additional jobs or promotion on these receipts.
+
+**Auxiliary calibrated13123 COMPLETED/0**,71val/4k:Q/W/E/RF1
+.3298/.2872/.2139/.2212,mean.26300 versusreference.27568;attack.4688
+versus.4811. Aux off for reference;no clear action-timing gain despite active
+supervision. Summary calibrated-auxiliary01-summary-13123.json.
+**Next-event/delay experimental path implemented**,cfg/CLI horizon(default0);
+firsttrial20frames,unsmoothed/noaux/nodropout. Next type CE plus conditional
+delayCE;right-censored/no-event/gap masks;current aim labels/support unchanged.
+Immediate emission p(nexttype)*p(delay0|type),remainingcontinue,causal10Hz.
+No future target inputs or scheduled human commands. New optional head~86k
+params;not capacity-matched,baseline head path remainsdefault. Contract inBC.md;
+tests for gap/censoring/probability/teacher independence/delaygradient added,unrun.
+Next fullsuite gate then bounded learner;no policy promotion.
