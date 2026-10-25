@@ -1371,16 +1371,18 @@ provides a concrete teacher-forced versus sampled conditioning implementation.
 Robotics chunking is a hypothesis to test here, not a demonstrated MOBA improvement.
 
 Implemented v2 modules include event labels, compact causal inputs, received-event
-history, button-conditioned pointer/joint-grid policy, losses, fixture batches and
-stateful replay evaluation. Source audit13041 passed24 perspectives; conversion13042
-passed69 tests then failed on a missing delayed anchor in co-movement projection.
-That failure is fixed with a regression test; CPU retry13043 and dependent GPU
-fixed-window gradient/memorization gate13044 are registered. No completed v2
-training or held-out quality result exists yet. Evaluation uses replay-provided
-history even when scoring actual-button targets, so this is offline conditional
-assessment, not closed-loop rollout evidence. Calibration, broad target conversion,
-training orchestration, shuffle control and the staged ablations remain to build.
-See STATUS and the fidelity ledger for subsequent receipts.
+history, button-conditioned pointer/joint-grid policy, losses, batches, bounded
+learner/checkpoint resume and stateful replay evaluation. Source audit13041 passed
+24 perspectives; target conversion13045/finalizer13047 passed828 Ahri/Garen
+perspectives with isolated calibration/validation. Gradient13044 passed basic
+wiring; learner13049 completed training/evaluation but failed its bitwise-like
+resume comparison. Probe13055 verified exact checkpoint fidelity and bounded
+numerical continuation agreement. Strict memorization13063 is outstanding; an
+exclusive batch-throughput benchmark is gated after it. No broad Ahri training
+or accepted held-out quality result exists. Evaluation uses replay-provided history
+even when scoring actual-button targets, so it is offline conditional assessment,
+not closed-loop rollout evidence. Calibration, shuffle control and staged ablations
+remain to build. See STATUS and the fidelity ledger for subsequent receipts.
 
 V2 job restart protocol: short validation jobs use explicit `--no-requeue` and
 `--open-mode=append`. Job13050 demonstrated that Slurm's default requeue can

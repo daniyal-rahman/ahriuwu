@@ -886,3 +886,11 @@ for this fixture, not cross-process bitwise determinism or a proved kernel cause
 No learner logic/loss/tolerance changed to hide a checkpoint mismatch. Original
 13049 final strict assertion remains failed evidence;13055 supplies the separate
 numerical comparison. Strict13063 remains the gate before broad Ahri learning.
+
+**Batch benchmark13067 registered afterok:13063**, sourcef2891e0a, exclusive
+GPU node/24GB/45min, no-requeue/append logs. Separate16-update processes for
+batch8/32/64,window256,burn32 on470 train Ahri perspectives; no validation or
+quality-selection claim. Fresh deep-copied target dataset and code; durable
+checkpoints/throughput on NFS.13066 was intentionally cancelled before execution
+and replaced to include required node exclusivity; do not auto-resubmit13066.
+Await strict13063 and benchmark13067 receipts before selecting baseline budget.
