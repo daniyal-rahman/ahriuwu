@@ -1919,3 +1919,42 @@ reconversions178.26s. v3/source524c508c, all24hashsets/CS+combatmissingness
 independently rechecked;152270validframes/0postburn omissions/0duplicates.
 Canonicalmodern/bc remainsf10e4f42. RegisteredGPU13146is final landing gate;
 no duplicate check or new training launched.
+
+**Ahri staged-control13141 COMPLETED/0**,phase2 4000updates/1910.93s,
+470train/71val. Actual config verifieslr1e-4/weights-only Ahri1000 donor/fresh
+optimizer provenance. RawQ/W/E/RF1 .2390/.1816/.1102/.1442,mean.16873
+versus original4k3e-4schedule.18966;Q/Eaim7.41/11.43deg,move17within2
+16.53%,pointer73.02%. Staging/lowerLR has no automatic benefit;this is the
+matchedrecipecontrol for13142,not an equal-budget comparison to4k reference.
+Summary ahri-staged-control-summary-13141.json. Awaitmixed fine-tune13142
+before transfer conclusions or selecting calibration followups;no new jobs/
+policy promotion on this receipt.
+
+**Transfer fine-tune13142 COMPLETED/0**,4000updates/1874.59s/470train/71val.
+Actual donor contractall/step1000/lr1e-4 verified. Rawstagedcontrol→transfer
+Q/W/E/RF1 .2390/.1816/.1102/.1442→.2354/.1795/.1155/.1395;mean
+.16873→.16748. EnearAP.1769→.2139,attackpointer73.02→74.17%,but
+Eaim11.43→12.77deg;Qaim7.41→7.19,movewithin2 16.53→16.68%.
+No raw timing gain fromthis512-view/1kpretrain recipe;not allchamppretrain
+verdict. Summary transfer-finetune-summary-13142.json.
+**Combined calibrated comparison13148 registered**,source75ecb810,own51cal
+fits perarm andfrozen71val scores,sample0;500pairedmatchbootstrap intervals.
+SingleGPUjob1h30,private deepcopies/dataset/donors/derivedcalprobabilities
+andfitartifacts,20GiBreserve,NFSoutputs,no-requeue/append.13147 intentionally
+cancelled whilePENDING beforeexecution tostage generatedfit inputs locally;
+13148 explicitlyreplaces it. Do not auto-resubmit13147 oncallback.
+Comparestagedrecipes/bestreference aftercalibration,one training/samplingseed
+only;no scaling justification or policy promotion yet. Await13148.
+
+
+## BC integration cleared for landing (2026-10-25)
+
+13146COMPLETED/0 actual results inspected:exact serialization;32stepresume
+maxabs0.0001184493/relativeL2 0.0000298733 within declared1e-3/1e-4bounds.
+Independent random labels11.1468% over12748frames versus11.1111%chance.
+Allcontinue behavioral baseline persists; no competence/policy promotion.
+CPU13145passed120tests/24conversions; source524c508c still matches tested
+lanerl_jax/ops code. Newer modern/bc ec804ca4changes only STATUS/ledger and
+are merged without loss. Fast-forward canonicalmodern/bc after this commit,
+preserving AGENTS/CLAUDE edits. Main consolidation is separate. Scratch cleanup
+verified; no new jobs or worktree removal.

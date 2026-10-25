@@ -26,9 +26,9 @@ Do not start this comparison or change target representations during source revi
 ## Integration and workspace checkpoint (2026-10-25)
 
 Dani authorized landing fixes and reviewing workspace/snapshot hygiene before
-continuing deeper review. Merge current modern/bc into this review branch first,
-retain experimental flags/auxiliary/next-event/calibration/transfer paths, test the
-combined result, then fast-forward modern/bc. No main merge: fetched origin/main
+continuing deeper review. Current modern/bc has been merged into this review branch, retaining experimental
+flags/auxiliary/next-event/calibration/transfer paths; combined CPU/source/GPU
+checks passed. Fast-forward modern/bc to land the preserved combined history. No main merge: fetched origin/main
 is September3 c1ecec9b and modern/bc is941commits ahead, so a main PR would pull
 unreviewed historical scope. Preserve user AGENTS.md/CLAUDE.md worktree edits.
 
@@ -73,14 +73,21 @@ runs all120tests plus24real reconversions and profile; GPU13146afterok13145 runs
 independent random-label and history diagnostics. Immutable inputs:
 `/mnt/nfs/shared/modern-bc/integration-20261025/attempt-2/` with source archive,
 SHA256, source-manifest and scripts. Attempt1/failed13143remain preserved;
-cancelled13144must not be restarted. Production landing is **pending** these
+cancelled13144must not be restarted. Production landing is **cleared** by these
 checks. CPU13145now verified COMPLETED/0:120tests passed46.43s;
 24native reconversions178.26s, v3contract/source524c508c, all24artifact hash sets
 and missingCS/combat reverified.152270valid frames,0postburn omissions/0duplicate
-supervision. GPU13146remains the final registered gate. Targetmodern/bc still
-f10e4f42 at receipt inspection. Recheck modern/bc head before fast-forward; merge/revalidate intervening
-changes rather than reset/cherry-pick away newer code. Preserve AGENTS/CLAUDE
-user edits. No remote publication or main integration claimed yet.
+supervision. GPU13146COMPLETED/0 verified:exact parameter/optimizer serialization,
+32step resume maxabs0.0001184493/relativeL2 0.0000298733 within1e-3/1e-4bounds;
+independent random-label accuracy0.1114685 over12748frames versus1/9chance.
+Scratch13145/13146absent. Script recovered from Slurm's initial /srv cwd warning
+by explicit private-scratch cd; future submissions should set a portable --chdir.
+Actual validation remains allcontinue (73.0468% majority baseline), not competence.
+
+Targetmodern/bc advanced toec804ca4 with only STATUS/ledger changes; merged both
+without changing tested code. Verified source/ops paths remain identical to
+524c508c. Fast-forward landing follows this evidence commit; retain AGENTS/CLAUDE
+user edits. Main consolidation remains separate.
 
 Historical snapshots/data/checkpoints are retained and identified by contract,
 source commit and content hashes. They are never copied over a mutable current
@@ -1187,3 +1194,7 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-TRANSFER-INITIALIZER-TESTS-PASS | 2026-10-25 |13139 actual log98passed/40.09s,weights-only/provenance/architecture/tree/shape checks pass.13140/13141 gatescleared,13142 after13140. No transfer-quality claim/new jobs/promotion. |
 
 | BC-V2-MIXED-PRETRAIN-COMPLETE | 2026-10-25 |13140 passed1000updates/512views/15519windows/664.62s,datasethashverified,NFSdonor c164a6da…. TrainingbuttonNLL1.040→.663,not target/transfer quality.13142 fine-tune dependencycleared,13141control pending;no promotion/new jobs. |
+
+| BC-V2-STAGED-AHRI-CONTROL-RESULT | 2026-10-25 |13141 passedphase2 4k/1910.93s,weights-onlyAhri1k donor/lr1e-4 verified. Rawcastmean.16873,Q/Eaim7.41/11.43deg;stagingnotautomaticimprovement. Matchedcontrolfor13142,not equalbudget original4k. Awaittransfer,no new jobs/promotion. |
+
+| BC-V2-TRANSFER-RAW-RESULT-AND-PAIRED-CALIBRATION | 2026-10-25 |13142 passedphase2:rawcastmean.16748 versusstagedcontrol.16873,EnearAPimproves/aimworsens. No pilot timinggain yet.13148 owncalfits/frozen71val/500pairedbootstrap registered,source75ecb810;13147 intentionallycancelledpending tofix localfitstaging,do not restart. One seed,no promotion/allchampverdict. |
