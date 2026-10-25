@@ -1125,3 +1125,13 @@ mask or engine cooldown added. Summary no-own-age-summary-13084.json.
 same71matches; copies validation/config receipts, verifies1000steps/470train.
 Source8c668da2 report code; no training, same-seed match uncertainty only.
 Await smoothing/weight/relative arms and13091; no complete-policy promotion.
+
+**Smoothing radius1(±0.1s)13085 COMPLETED/0**,1000 matching updates/71val,
+664.42s training. Sampled Q/W/E/R F1 .1449/.1092/.0468/.0959→.1457/.1125/
+.0520/.1010: small changes, no clear practical timing fix from one seed/draw.
+Movement within2 9.304→8.434%, exact move AP40.651→39.731%; Q/E mean per-match
+median angles12.37/27.36→11.99/25.85deg. Original unsmoothed angle remains
+reference; no smoothing promotion. Summary smooth1-summary-13085.json.
+Await±0.2s13086,angle+aim3 13087,relative-angle13090 and paired-report13091.
+No new jobs on this receipt; existing registered work continues, B/calibration
+remain unmodified and no policy-quality or online readiness claim.
