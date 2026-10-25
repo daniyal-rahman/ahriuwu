@@ -802,3 +802,15 @@ at `v2-20261024/dataset-smoke-13043`. Missing-anchor regression passes. Dependen
 GPU13044 is registered; await its actual result. Target-only sharded converter
 implemented, reserving match-wide A-training calibration before full828-example
 Ahri-mid/Garen-top conversion. B remains untouched.
+
+
+**Target conversion13045 registered**, source5956656a,4shards/max2 concurrent,
+CPU2cores/8GB/90min each; finalizer13047 afterok entire array.828 perspectives:
+Ahri470train/51calibration/71val; Garen185/25/26. Frozen plan5f975d01bdcc,
+match-wide deterministic calibration assignment from A train only. Full latest
+BC suite in shard0; raw decoder hashes/parity/shape/target masks per perspective;
+source/code/catalog/reference deep copies into private staging and20GiB reserve.
+Complete manifest exposed only after every shard passes. ETA35–45min conversion
+from119s/24 sample, excluding contention/queue. No B decoding, no new supervision.
+Bounded v2 learner implemented with exact global-step sampling/resume budget,
+checkpoint-on-signal and raw stateful validation; still unrun, no quality claim.

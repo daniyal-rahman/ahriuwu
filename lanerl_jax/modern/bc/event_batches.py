@@ -16,7 +16,7 @@ AUXILIARIES = ('own_future', 'own_future_valid', 'enemy_future', 'enemy_future_v
                'own_hp_future', 'own_hp_future_valid')
 
 
-def load_event_games(root, split=None, smoothing=(1.,)):
+def load_event_games(root, split=None, smoothing=(1.,), champion=None):
     root = Path(root)
     manifest = json.loads((root / 'manifest.json').read_text())
     if not manifest.get('passed') or manifest.get('contract') != CONTRACT:
@@ -24,6 +24,8 @@ def load_event_games(root, split=None, smoothing=(1.,)):
     games = []
     for row in manifest['games']:
         if split is not None and row['split'] != split:
+            continue
+        if champion is not None and row['champion'] != champion:
             continue
         prefix = root / 'games' / row['game']
         metadata = json.loads(Path(str(prefix) + '.json').read_text())

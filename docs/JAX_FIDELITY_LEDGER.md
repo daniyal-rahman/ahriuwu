@@ -830,3 +830,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 
 | BC-V2-EVAL-FOUNDATIONS | 2026-10-24 | Stateful shared-policy replay evaluator and event/target metrics implemented; six focused CPU tests pass4.88s. Mask gaps prevent false tolerant matches; AP ties handled; padding/burn masks verified. Evaluation retains replay-conditioned receipt history, so not closed-loop evidence. Await13043/13044 registered gates; model evaluator unrun. |
 | BC-V2-CONVERT-PASS | 2026-10-24 |13043 passed70tests/24perspectives/158037valid frames,119.44s conversion; complete immutable fixture manifest. New sharded target converter and deterministic whole-match calibration reservation prepared. Await GPU13044; no v2 quality claim. |
+
+| BC-V2-TARGET-CONVERT-QUEUED | 2026-10-24 |13045 array4/max2,source5956656a; finalizer13047 afterok.828target perspectives, Ahri470/51/71 andGaren185/25/26 train/calibration/val, frozenplan5f975d01bdcc, match-wide isolation. Full suite shard0, per-game decoder/parity/mask gates. New bounded learner/evaluator unrun; await13044 gradient result. |
