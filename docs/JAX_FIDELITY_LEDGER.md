@@ -930,3 +930,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-AUXILIARY-CALIBRATION-FIT | 2026-10-25 |13121/13122 passed51cal/4k/aux.1,checkpoint033ae259…/actualmanifest consistent. Rate-fitted T1/.7/.5 castF1.18726/.22897/.25431,T.5 frozen;selection-set only. Await13123,no new jobs/promotion. |
 
 | BC-V2-AUXILIARY-VAL-AND-NEXT-EVENT-PREP | 2026-10-25 |13123 passed71val:calcastmean.263 versus.276reference,aux remainsoff. Implemented optional nexttype/conditionaldelay head and targets,causal immediate marginal,no future inputs,currentaim support preserved. Newhead/label factorization jointly changes,tests unrun;next gate/trial,no promotion/B/RL. |
+
+| BC-V2-NEXT-EVENT-QUEUED | 2026-10-25 |13124 fullsuite→13125 4k next-event horizon20 trial registered,source3f25ce66. Unsmooth/noaux/nodropout,causal shared evaluator,temporal labels+emission+delayhead jointly change. Data/draws/aim support fixed;tests/quality pending,no promotion. |

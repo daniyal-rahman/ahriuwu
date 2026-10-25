@@ -1543,3 +1543,11 @@ No future target inputs or scheduled human commands. New optional head~86k
 params;not capacity-matched,baseline head path remainsdefault. Contract inBC.md;
 tests for gap/censoring/probability/teacher independence/delaygradient added,unrun.
 Next fullsuite gate then bounded learner;no policy promotion.
+
+**Next-event CPUgate13124→afterok learner13125 registered**,source3f25ce66.
+Fullsuite then4k/b64/seed0/window256/burn32/Ahriangle/relative,next horizon20,
+no smoothing/aux/dropout. Same training data/window draws/schedule/aim support
+as4k reference;labels/emissionfactorization/newdelayhead jointly changed.
+Finalsharedcausalgreedy+sample71val;training logs next-known/observedevent
+counts and delaylossmass. CPU15min/GPU1h,privatecopies/reserve,NFS,no-requeue/
+append. Tests/learnedquality pending;no policy promotion.
