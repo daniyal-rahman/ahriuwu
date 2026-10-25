@@ -1679,3 +1679,12 @@ callbacks,no policy promotion.
 shape rejection.13140pretrain and13141control afterok gates cleared;13142
 remains dependent on13140 success. No learned transfer result yet;await
 registered callbacks,no new jobs or policy promotion.
+
+**Mixed pretraining13140 COMPLETED/0**,1000updates/512trainperspectives/
+15519windows,664.62s,6.903Mparams. Actual allchampion training config/dataset
+manifest hash verified;latestcheckpoint82849052bytes,SHA c164a6da… persisted.
+First100→last100 trainaverages buttonNLL1.0401→.66284,aimNLL7.449→6.636,
+buttonaccuracy67.01→72.07%;trainingdiagnostics only,no targetquality or transfer
+claim. No validation requested or written. Afterok13142 Ahri fine-tune gate
+cleared;13141matchedcontrol alreadyregistered. Await both finalAhri readouts,
+no new jobs or policy promotion.
