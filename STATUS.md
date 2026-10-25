@@ -958,3 +958,13 @@ shared observations too: old v2fixtures contain unsupported inputs. Earlier
 13058..13061 snapshots remain useful event-fix diagnostics, not final v3data.
 Larger open issues: discarded own absolute pools/haste/AS/execution memory and
 strict fixture lacking AhriQ/R/per-target success. No broad training promotion.
+
+
+Source repair validation13068 registered: frozen1ee090a0/archive
+`source-qualified.tar.gz` with SHA256 receipt,2CPU/4GB/15min. Runs full BC tests,
+rejects old shared observations, rebuilds shared observations and event-v3data
+for24native perspectives, verifies parity/CS+combat missingness/artifact hashes
+and profiles window coverage. Output `fixture-qualified/` and
+`validate-qualified-13068.out` under review-fixes-20261024. Await callback;
+no v3production integration or training-quality claim. Original event-fix
+validation13059..13061 remains independently frozen and has not been cancelled.
