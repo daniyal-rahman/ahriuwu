@@ -1374,3 +1374,10 @@ Fixed first71 sorted train subset only,not full train or a causal overfit estima
 held-out timing still improved but gains mix and generalization gap is emerging.
 Summary train-gap8000-summary-13108.json. Await13109fit/13110frozenval before
 more training; no new jobs or policy promotion.
+
+**8k calibration fit13109 COMPLETED/0**,51unique calibration IDs,step8000,
+checkpoint e969520f…/actual manifest fingerprints match collection. Rate-fitted
+T1/.7/.5 calibration mean castF1 .22149/.25642/.26778 over3draws;T.5 frozen.
+Best calibration score below4k .27364,although rawT1 is higher;selection-set
+difference alone does not establish a checkpoint winner. Await frozen71-val
+13110;no more duration/new jobs/policy promotion on this receipt.
