@@ -1337,3 +1337,17 @@ calibration castF1 .19013/.24042/.27364 averaged3 draws;T.5 frozen again.
 These are selection-set scores,not held-out improvement or policy promotion.
 Frozen71-val scorer13106 dependency cleared; bounded8000 learner13107
 already registered. Await callbacks,no new jobs on these receipts.
+
+**8000-step run13107 COMPLETED/0**,3539.94s training(59min),medianupdate
+.3854s,470train/71val. Raw val4k→8k Q/W/E/RF1 .2829/.2044/.1281/.1432→
+.3216/.2283/.1690/.1417,macro.18966→.21513. AttackF1.4442→.4717;teacher
+attackpointer75.64→76.63%,move within2 17.70→17.81%. Teacher Q/E mean match
+median6.67/10.67→6.45/10.65deg. Near-frameAPQ/W slightlyup,E.213→.207,
+R.285→.237: raw event gains do not establish uniformly better ranking.
+Fresh8k versus4k cosine schedules,one training/sampling seed;no simple
+duration-only causal claim or policy promotion. Summary duration8000-summary-13107.json.
+**13108→13109→13110 registered**,testedcefee640: collect51cal plus fixed
+first71train diagnostic at8k,fit ownT/bias,scorefrozen71val. No retraining/B/RL;
+private deep copies/reserve,NFS,no-requeue/append,1h/20min/1h. Await8k train-gap
+and calibrated4k13106/8k13110 results before more duration; do not blindly
+double training while ranking gains mix.
