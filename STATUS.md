@@ -1112,3 +1112,16 @@ Await validation/model receipts plus13084–13087; no complete-policy promotion.
 Relative-coordinate learner job ID13090. **Tests13089 COMPLETED/0:**
 83 passed38.62s. Dependency afterok13089 cleared; no learned relative
 head quality result yet. This receipt is a validation result, not model promotion.
+
+**Own-age removal13084 COMPLETED/0**,same1000updates/71val,656.23s training.
+Own ages on→off: exact-frame macro Q AP6.254→5.387%, E2.313→2.019%; sampled
+Q F1.1449→.1355,R.0959→.0694. E sampled F1 rises.0468→.0528 despite worse
+ranking; one draw/seed does not establish an E improvement. Q/E aim mean match
+median12.37/27.36→13.15/28.05deg. Retain own-age features provisionally; this
+isolates explicit four ages, not previous-event/GRU/enemy history. No availability
+mask or engine cooldown added. Summary no-own-age-summary-13084.json.
+**Paired ablation report13091 registered**,CPU1/2GB/20min,afterok13085/13086/
+13087/13090.500 match-bootstrap draws per arm against fixed angle reference on
+same71matches; copies validation/config receipts, verifies1000steps/470train.
+Source8c668da2 report code; no training, same-seed match uncertainty only.
+Await smoothing/weight/relative arms and13091; no complete-policy promotion.
