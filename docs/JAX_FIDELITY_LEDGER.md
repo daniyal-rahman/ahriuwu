@@ -866,3 +866,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-SEPARATE-CALIBRATION-QUEUED | 2026-10-25 |13092 tests→13093 smooth2 frozen51cal collect→13094 fit temperature/rate biases by3-seed calibration castF1→13095 frozen71val assessment. Sourcecefee640, fingerprints, no validation fitting/retraining/future-input/cooldown masks. Candidate only; await registered results and remaining angle/weight comparisons. |
 
 | BC-V2-CALIBRATION-TESTS-PASS | 2026-10-25 |13092 actual log confirms84tests/39.12s,COMPLETED/0. Collection13093 dependency cleared;13094 fit and13095 frozen validation remain gated. No fitted-emitter or model-quality result yet; await registered callbacks, no duplicate work/promotion. |
+
+| BC-V2-ANGLE-AIM3-RESULT | 2026-10-25 |13087 completed1000updates/655.46s/71val. Q/E mean per-match median aim12.37/27.36→8.79/22.37deg,within10 42.52/23.70→56.00/31.45%. Sampled Q/W/E/RF1.1546/.1055/.0466/.0840, timing mixed; movementwithin2 9.304→9.685%. Component candidate only, one training/sampling seed; paired13091 and relative13090 pending. No policy promotion/new jobs. |

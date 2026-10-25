@@ -1166,3 +1166,14 @@ B untouched. Await13087/13090/13091 plus13092–13095; no policy promotion.
 calibration collection13093; fitting13094 and frozen71-val assessment13095
 remain dependent on upstream success. No calibration-fit or calibrated-policy
 quality result yet. Await registered callbacks; no duplicate jobs or promotion.
+
+**Angle +3x cast-aim13087 COMPLETED/0**,1000updates/470train/71val,
+655.46s training, same seed/draws as angle reference. Q/E teacher aim mean
+per-match median12.37/27.36→8.79/22.37deg; within10 42.52/23.70→56.00/31.45%.
+Sampled Q/W/E/R eventF1 .1449/.1092/.0468/.0959→.1546/.1055/.0466/.0840: aim
+improves but timing remains weak/mixed. Move within2 9.304→9.685%,attackpointer
+69.05→69.11%; sampled attackF1 .3648→.3601. Keep target-loss weighting as
+a component candidate, no complete-policy promotion. Summary artifact
+angle-aim3-summary-13087.json; paired intervals13091 remain gated on relative
+arm13090. Await registered calibration13093–13095 and remaining comparisons;
+no additional jobs needed on this receipt.
