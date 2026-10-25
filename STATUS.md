@@ -772,3 +772,8 @@ projection. Partial directory has no completed manifest and cannot be loaded.
 Fix preserves raw source/order timing and masks unknown/out-of-scope movement aim.
 Regression test added; recurrent fixture batch loader implemented. No v2 training
 has run. Retry uses a fresh source snapshot and output directory.
+
+**V2 retry13043 registered**, sourceb9dc57e7, CPU2cores/8GB/1h; repeats full
+suite and24-perspective conversion after the missing-anchor fix, with fresh
+private staging and outputs. Gradient smoke implementation being prepared;
+no GPU allocation or training started yet.
