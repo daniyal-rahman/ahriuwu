@@ -777,3 +777,10 @@ has run. Retry uses a fresh source snapshot and output directory.
 suite and24-perspective conversion after the missing-anchor fix, with fresh
 private staging and outputs. Gradient smoke implementation being prepared;
 no GPU allocation or training started yet.
+
+**V2 GPU smoke13044 registered afterok:13043**, source6d109f91, gpup1GPU/
+20GB/30min. Full-size conditional model, two fixed training windows,200 real
+Adam updates; checks finite nonzero gradients, parameter movement and30% loss
+reduction, saves checkpoint/results on NFS and cleans private staging. This is
+only a memorization/wiring gate; held-out quality and shuffled-label control
+remain separate. Event evaluation now being built while dependency runs.

@@ -826,3 +826,4 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 
 | BC-V2-CONVERT-MISSING-ANCHOR | 2026-10-24 |13042 passed69tests then failed on second raw perspective: co-movement screen projection used NaN delayed own position. Preserve source/timing, mask aim for invalid scope/missing anchor; regression added. Partial dataset has no complete manifest. V2 gradient/training unrun; fresh conversion retry next. |
 | BC-V2-CONVERT-RETRY | 2026-10-24 | CPU13043 registered, sourceb9dc57e7, fixed missing co-movement anchor. Full suite plus24 source-audited examples, fresh outputs; no model training yet. |
+| BC-V2-GRADIENT-SMOKE-QUEUED | 2026-10-24 | GPU13044 registered afterok13043; source6d109f91, full model/two fixed64-step windows/200updates, finite gradient and30% loss reduction gate. Checkpoint/results NFS, private immutable source/data staging. No generalization claim. |
