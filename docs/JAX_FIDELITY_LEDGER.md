@@ -74,7 +74,11 @@ independent random-label and history diagnostics. Immutable inputs:
 `/mnt/nfs/shared/modern-bc/integration-20261025/attempt-2/` with source archive,
 SHA256, source-manifest and scripts. Attempt1/failed13143remain preserved;
 cancelled13144must not be restarted. Production landing is **pending** these
-checks. Recheck modern/bc head before fast-forward; merge/revalidate intervening
+checks. CPU13145now verified COMPLETED/0:120tests passed46.43s;
+24native reconversions178.26s, v3contract/source524c508c, all24artifact hash sets
+and missingCS/combat reverified.152270valid frames,0postburn omissions/0duplicate
+supervision. GPU13146remains the final registered gate. Targetmodern/bc still
+f10e4f42 at receipt inspection. Recheck modern/bc head before fast-forward; merge/revalidate intervening
 changes rather than reset/cherry-pick away newer code. Preserve AGENTS/CLAUDE
 user edits. No remote publication or main integration claimed yet.
 

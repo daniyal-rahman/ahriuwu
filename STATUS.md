@@ -1912,3 +1912,10 @@ passed6.24s. Landingmodern/bc pending actual gates; recheck targethead and prese
 AGENTS/CLAUDE edits. No main PR/push claimed. Worktree/snapshot disposition is
 recorded in the running review document; no dirty/app-bound tree or immutable
 evidence removed. Attempt1/13143failure and cancelled13144preserved; no autoretry.
+
+
+CPU integration13145 COMPLETED/0 verified:120tests passed46.43s,24native
+reconversions178.26s. v3/source524c508c, all24hashsets/CS+combatmissingness
+independently rechecked;152270validframes/0postburn omissions/0duplicates.
+Canonicalmodern/bc remainsf10e4f42. RegisteredGPU13146is final landing gate;
+no duplicate check or new training launched.
