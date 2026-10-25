@@ -1503,3 +1503,9 @@ andheadcount unchanged. Finalgreedy/sample71val actionmetrics;auxiliary target
 coverage/count/lossmass logged during training. CPU15min/GPU1h,privatecopies/
 20GiBreserve,NFS,no-requeue/append. Both tests/quality pending;awaitcallbacks,
 no policy promotion.
+
+**Auxiliary test gate13119 COMPLETED/0:** actual NFS log90passed/38.50s.
+New regressions verify current-anchor future positions,whole-horizon masks for
+gaps/deaths/visibility/identity/jumps,missingHP/shortsequences,and auxiliary
+loss scaling/HP gradient. Afterok13120 gate cleared;learned action quality
+unmeasured. Await registered learner callback,no new jobs/policy promotion.

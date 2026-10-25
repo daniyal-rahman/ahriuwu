@@ -922,3 +922,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-DROPOUT-VAL-AND-AUXILIARY-PREP | 2026-10-25 |13118 passed71val:calcastmean.263 versusref.276,Rregresses,Q/Eaimimproves;keep robustness candidate/reference distinct. Optional future replay-position/HP targets added,whole-horizon visibility/death/gap/jump masks,existingheads,no INPUTS changes. Tests unrun,lambda.1 isolated trial next. No sim/closed-loop/promotion. |
 
 | BC-V2-AUXILIARY-QUEUED | 2026-10-25 |13119 fullsuite gate→13120 matched4k lambda.1 future-state trial,source7836e18a. Dropout0 isolates auxiliary terms,existingheads/inputschema. Coverage/count/lossmass logged;tests/quality pending,private staging/NFS/no-requeue,no promotion. |
+
+| BC-V2-AUXILIARY-TESTS-PASS | 2026-10-25 |13119 actual log90passed/38.50s,including future-anchor/mask and loss-gradient regressions.13120 dependency cleared;no learned auxiliary quality result yet,no new jobs/promotion. |
