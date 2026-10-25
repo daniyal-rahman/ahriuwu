@@ -960,3 +960,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-MIXED-PRETRAIN-COMPLETE | 2026-10-25 |13140 passed1000updates/512views/15519windows/664.62s,datasethashverified,NFSdonor c164a6da…. TrainingbuttonNLL1.040→.663,not target/transfer quality.13142 fine-tune dependencycleared,13141control pending;no promotion/new jobs. |
 
 | BC-V2-STAGED-AHRI-CONTROL-RESULT | 2026-10-25 |13141 passedphase2 4k/1910.93s,weights-onlyAhri1k donor/lr1e-4 verified. Rawcastmean.16873,Q/Eaim7.41/11.43deg;stagingnotautomaticimprovement. Matchedcontrolfor13142,not equalbudget original4k. Awaittransfer,no new jobs/promotion. |
+
+| BC-V2-TRANSFER-RAW-RESULT-AND-PAIRED-CALIBRATION | 2026-10-25 |13142 passedphase2:rawcastmean.16748 versusstagedcontrol.16873,EnearAPimproves/aimworsens. No pilot timinggain yet.13148 owncalfits/frozen71val/500pairedbootstrap registered,source75ecb810;13147 intentionallycancelledpending tofix localfitstaging,do not restart. One seed,no promotion/allchampverdict. |

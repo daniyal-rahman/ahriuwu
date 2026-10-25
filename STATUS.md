@@ -1698,3 +1698,19 @@ matchedrecipecontrol for13142,not an equal-budget comparison to4k reference.
 Summary ahri-staged-control-summary-13141.json. Awaitmixed fine-tune13142
 before transfer conclusions or selecting calibration followups;no new jobs/
 policy promotion on this receipt.
+
+**Transfer fine-tune13142 COMPLETED/0**,4000updates/1874.59s/470train/71val.
+Actual donor contractall/step1000/lr1e-4 verified. Rawstagedcontrol→transfer
+Q/W/E/RF1 .2390/.1816/.1102/.1442→.2354/.1795/.1155/.1395;mean
+.16873→.16748. EnearAP.1769→.2139,attackpointer73.02→74.17%,but
+Eaim11.43→12.77deg;Qaim7.41→7.19,movewithin2 16.53→16.68%.
+No raw timing gain fromthis512-view/1kpretrain recipe;not allchamppretrain
+verdict. Summary transfer-finetune-summary-13142.json.
+**Combined calibrated comparison13148 registered**,source75ecb810,own51cal
+fits perarm andfrozen71val scores,sample0;500pairedmatchbootstrap intervals.
+SingleGPUjob1h30,private deepcopies/dataset/donors/derivedcalprobabilities
+andfitartifacts,20GiBreserve,NFSoutputs,no-requeue/append.13147 intentionally
+cancelled whilePENDING beforeexecution tostage generatedfit inputs locally;
+13148 explicitlyreplaces it. Do not auto-resubmit13147 oncallback.
+Comparestagedrecipes/bestreference aftercalibration,one training/samplingseed
+only;no scaling justification or policy promotion yet. Await13148.
