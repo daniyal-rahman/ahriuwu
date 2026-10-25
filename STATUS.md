@@ -1245,3 +1245,13 @@ T/bias with unchanged criterion, then score71val sample0. Own calibration artifa
 no reuse of13094 biases; no retraining or B exposure. GPU1h/CPU20min/GPU1h,
 private deep copies+20GiB reserve,NFS outputs,no-requeue/append. Await callbacks;
 no complete-policy promotion.
+
+**Combined calibration13097/13098 COMPLETED/0.** Actual collection metadata
+confirms51cal perspectives,step1000,relative-angle flag and smooth2 contract.
+Fit checkpoint SHA4a623acb… agrees with collection; dataset manifest hash
+verified against source;51unique IDs and51report rows. Independent fitted
+biases select T.5: mean calibration QWER eventF1 T1/.7/.5 =
+.11291/.14291/.17038 over3 draws. This is selection-set evidence only; no
+held-out improvement claim or direct ranking against separately fitted smooth2.
+Frozen71-val job13099 dependency cleared; await registered callback. No new
+jobs/policy promotion; calibration artifact emitter-calibration-13098.json.
