@@ -1231,3 +1231,17 @@ validation set, but one sampling/training seed, no paired interval yet and still
 far below castF1.5 target. Keep emitter as component candidate; no full-policy
 promotion/closed-loop claim. Await registered relative+smooth2 learner13096;
 its checkpoint requires its own calibration fit, not reuse of these biases.
+
+**Combined relative+smooth2 13096 COMPLETED/0**,1000updates/470train/71val,
+659.07s training. Versus smooth2 alone, teacher Q/E mean match median
+12.47/26.94→8.90/14.28deg; within10 42.87/26.38→54.82/52.05%. Movement
+within2 9.202→10.213%,attackpointer68.94→68.62%. Raw sampled Q/W/E/RF1
+.1845/.1260/.0709/.0922→.1783/.1296/.0650/.1088: largely retains smoothing
+gains versus original angle reference but not all individual smooth2 scores.
+Summary relative-smooth2-summary-13096.json; one training/sampling seed.
+**Checkpoint-specific calibration chain13097→13098→13099 registered**, tested
+sourcecefee640, immutable donor13096/latest. Collect same51cal only, fit frozen
+T/bias with unchanged criterion, then score71val sample0. Own calibration artifact,
+no reuse of13094 biases; no retraining or B exposure. GPU1h/CPU20min/GPU1h,
+private deep copies+20GiB reserve,NFS outputs,no-requeue/append. Await callbacks;
+no complete-policy promotion.
