@@ -1968,3 +1968,9 @@ AGENTS/CLAUDE diffs verified; receipt under integration-20261025/landing-receipt
 Review and canonical branches preserve both histories. Historicalv1/v2data are
 notv3compatible; no dataset/checkpoint promoted. Workspace disposition retains
 uncommitted/unique/app-bound work; no unsafe branch deletion/prune or main merge.
+
+
+Canonicalmodern/bc published toorigin/modern/bc with normal push/upstream
+tracking; no force push/main merge/PR. Integration and workspace audit step
+complete. Continue independent decoder/source-trace review from the single
+running document; action-space A/B remains deferred.

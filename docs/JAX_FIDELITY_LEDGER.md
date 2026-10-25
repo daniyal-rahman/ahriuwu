@@ -89,6 +89,7 @@ without changing tested code. Verified source/ops paths remain identical to
 524c508c. **Landed on modern/bc at ee344016** by fast-forward from ec804ca4.
 [landing-receipt.json](/mnt/nfs/shared/modern-bc/integration-20261025/landing-receipt.json)
 confirms tested source-code equality and byte-identical AGENTS/CLAUDE user edits.
+Published canonical branch to `origin/modern/bc` with normal push and upstream tracking.
 Review and canonical branches now share both histories; no old experiment was
 replaced by an older snapshot. Main consolidation remains separate.
 
