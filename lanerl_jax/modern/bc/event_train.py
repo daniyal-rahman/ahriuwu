@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from .event_batches import event_batch, event_windows, load_event_games, ahri_angle_targets
+from .event_batches import event_batch, event_windows, load_event_games, ahri_angle_targets, drop_previous_event_history
 from .event_eval import evaluate_games
 from .event_loss import INPUTS, make_event_loss
 from .event_policy import EventPolicy, EventPolicyConfig
@@ -45,6 +45,7 @@ def main():
     p.add_argument('--sample-eval', action='store_true')
     p.add_argument('--ahri-angle', action='store_true')
     p.add_argument('--cast-aim-weight', type=float, default=1.)
+    p.add_argument('--previous-event-dropout', type=float, default=0.)
     p.add_argument('--history', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--evaluate', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--eval-limit', type=int, default=0)
@@ -54,6 +55,10 @@ def main():
         p.error('invalid update/window/batch budget')
     if not np.isfinite(a.cast_aim_weight) or a.cast_aim_weight <= 0:
         p.error('cast aim weight must be finite and positive')
+    if not np.isfinite(a.previous_event_dropout) or not 0 <= a.previous_event_dropout <= 1:
+        p.error('previous-event dropout must be in [0,1]')
+    if a.previous_event_dropout and not a.previous_event_history:
+        p.error('dropout requires enabled previous-event history')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('training requires a Slurm GPU allocation')
     a.output.mkdir(parents=True, exist_ok=False)
@@ -70,6 +75,8 @@ def main():
                     burn=a.burn, seed=a.seed, lr=a.lr, warmup=a.warmup, dataset_sha256=manifest_hash,
                     champion=a.champion, smoothing=list(smoothing), co_move_weight=0., auxiliary_weight=0.,
                     ahri_angle=a.ahri_angle, cast_aim_weight=a.cast_aim_weight)
+    if a.previous_event_dropout:
+        contract['previous_event_dropout'] = a.previous_event_dropout
     contract_json = json.dumps(contract, sort_keys=True)
     (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     started = time.monotonic()
@@ -91,7 +98,10 @@ def main():
     def batch_at(step):
         rng = np.random.default_rng(np.random.SeedSequence([a.seed, step]))
         items = windows[rng.integers(len(windows), size=a.batch_size)]
-        return jax.tree.map(jnp.asarray, event_batch(games, list(map(tuple, items)), a.window, a.burn))
+        batch = event_batch(games, list(map(tuple, items)), a.window, a.burn)
+        history_rng = np.random.default_rng(np.random.SeedSequence([a.seed, step, 137]))
+        batch = drop_previous_event_history(batch, history_rng, a.previous_event_dropout)
+        return jax.tree.map(jnp.asarray, batch)
 
     policy = EventPolicy(cfg)
     batch = batch_at(0)

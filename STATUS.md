@@ -1410,3 +1410,18 @@ no policy promotion.
 own/enemy cast-history sensitivity. Learner13112 afterok gate cleared; quality
 result pending. This establishes feature isolation,not robustness to policy
 history or closed-loop play. Await registered callback,no new jobs/promotion.
+
+**No-previous-event13112 COMPLETED/0**,4000updates/1902.36s/71val,
+6.903Mparams matched. Raw reference→removed Q/W/E/RF1 .2829/.2044/.1281/
+.1432→.2248/.1591/.1066/.1165;mean.18966→.15174. NearAPallcasts lower,
+move within2 17.70→6.55%,pointer75.64→74.18%;Q/E teacher aim6.67/10.67→
+5.17/10.04deg. History useful;does not establish leakage or deployment robustness.
+Uncalibrated comparison only,one seed. Summary no-previous-event-summary-13112.json.
+**Grouped previous-event dropout implemented**,CLI probability default0;
+experiment.3 samples one independent Bernoulli per training window and masks
+self28:40/entity24 through burn-in and supervised rows. Separate per-step RNG
+stream preserves window draws;own/enemy cast timers and labels unchanged.
+Evaluation retains normal history,no dropout;does not synthesize policy errors.
+Contract records nonzero probability for exact-resume gate. Regression checks
+reproducibility/group consistency/cast preservation/input immutability;unrun.
+Next fullsuite gate then matched4k dropout trial;no policy promotion.

@@ -33,3 +33,23 @@ def test_cast_aim_weight_changes_only_cast_target_loss(monkeypatch):
     np.testing.assert_allclose(b-a, np.log(6), rtol=1e-5)
     np.testing.assert_allclose(ai['button_nll'], bi['button_nll'])
     np.testing.assert_allclose(ai['noncast_aim_loss_mass'], bi['noncast_aim_loss_mass'])
+
+
+def test_previous_event_dropout_is_grouped_reproducible_and_preserves_cast_history():
+    from lanerl_jax.modern.bc.event_batches import drop_previous_event_history
+    batch = dict(self=np.ones((64, 8, 40), np.float32),
+                 entities=np.ones((64, 8, 32, 25), np.float32),
+                 button=np.arange(512).reshape(64, 8))
+    assert drop_previous_event_history(batch, np.random.default_rng(1), 0.) is batch
+    a = drop_previous_event_history(batch, np.random.default_rng(1), .3)
+    b = drop_previous_event_history(batch, np.random.default_rng(1), .3)
+    np.testing.assert_array_equal(a['self'], b['self'])
+    selected = np.isnan(a['self'][:, 0, 28])
+    assert selected.any() and not selected.all()
+    assert np.isnan(a['self'][selected, ..., 28:]).all()
+    assert np.isnan(a['entities'][selected, ..., 24:]).all()
+    np.testing.assert_array_equal(a['self'][..., :28], batch['self'][..., :28])
+    np.testing.assert_array_equal(a['entities'][..., :24], batch['entities'][..., :24])
+    np.testing.assert_array_equal(a['self'][~selected], batch['self'][~selected])
+    assert a['button'] is batch['button']
+    assert np.isfinite(batch['self']).all() and np.isfinite(batch['entities']).all()

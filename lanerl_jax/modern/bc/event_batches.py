@@ -87,3 +87,18 @@ def ahri_angle_targets(games):
                     np.isin(arrays['button'], [B['q'], B['e']]) & np.isfinite(arrays['angle']))
         arrays['aim_mode'][selected] = ANGLE_TARGET
     return games
+
+
+def drop_previous_event_history(batch, rng, probability):
+    """Hide one whole command-history group per window, including burn-in."""
+    if not np.isfinite(probability) or not 0 <= probability <= 1:
+        raise ValueError('previous-event dropout must be in [0,1]')
+    if probability == 0:
+        return batch
+    selected = rng.random(batch['self'].shape[0]) < probability
+    result = dict(batch)
+    result['self'] = batch['self'].copy()
+    result['entities'] = batch['entities'].copy()
+    result['self'][selected, ..., 28:] = np.nan
+    result['entities'][selected, ..., 24:] = np.nan
+    return result
