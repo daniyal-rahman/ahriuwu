@@ -859,3 +859,11 @@ established; do not call exact resume validated or relax solely to pass. Added
 GPU probe: byte-exact checkpoint roundtrip, optimizer count16, two continuations
 from the same checkpoint, relative/global and end-loss comparisons with explicit
 numerical bounds. No broad baseline started. Strict13050 remains registered.
+
+**Resume numerical probe13055 registered**, source5fd69a8f, GPU20GB/20min.
+Stages immutable13049 donor checkpoint/results and24-perspective fixture into
+private scratch. Checks exact parameter/optimizer serialization roundtrip,
+optimizer step16, two separate16→32 continuations, and original control/resume
+comparisons. Declared bounds maxabs1e-3/relativeL2 1e-4/end-loss spread1e-3;
+results remain diagnostic, not bitwise-determinism proof. Await13055 and strict
+memorization13050 callbacks. Dataset828 remains finalized; broader training gated.
