@@ -1591,3 +1591,10 @@ metadata records reset protocol. Regressionadded/unrun. Next CPUgate then
 frozen4k reference with256-frame resets against existing fullstate readout,
 same T1/sample0/data. Counterfactual evaluation only,not statecarry training
 or deployment proof. No policy promotion.
+
+**13130 CPUgate→13131 frozen memoryreset256 registered**,sourcee0322297.
+Reference donor13102/latest4000,same71val/rawT1/sample0,resetGRU every256
+frames while keeping draw stream/history inputs unchanged;no retraining or
+calibration. Compare to saved fullstate13103/val-4000;export predictions for
+early-versus-late window analysis if needed. CPU15min/GPU1h,privatecopies/
+reserve,NFS,no-requeue/append. Tests/quality pending;awaitcallbacks,no promotion.

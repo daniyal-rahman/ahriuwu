@@ -940,3 +940,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-NEXT-EVENT-CALIBRATION-FIT | 2026-10-25 |13127/13128 passed51cal/4k/horizon20,checkpoint9f53e19b…/manifest consistent. Immediate-rate-fitted T1/.7/.5 castF1.16848/.20172/.21086,T.5 frozen. Selection-only,13129 pending,no switch/new jobs/promotion. |
 
 | BC-V2-NEXT-EVENT-VAL-AND-MEMORY-PREP | 2026-10-25 |13129 passed71val:calcastmean.202 versus.276ref,allcastF1lower;rejectthisconfiguration. Added optional GRU-only periodic evalreset with continuous emitterRNG/defaultfullstate;regression unrun,next frozen256reset diagnostic. No statecarry training/closed-loop/promotion. |
+
+| BC-V2-MEMORY-RESET-QUEUED | 2026-10-25 |13130 fullsuite→13131 frozen4k GRUreset256 registered,sourcee0322297,same71val/T1/sample0,PRNG/historyinputs preserved. Compare savedfullstate13103,not statecarry training. Tests/quality pending,private staging/NFS/no-requeue,no promotion. |
