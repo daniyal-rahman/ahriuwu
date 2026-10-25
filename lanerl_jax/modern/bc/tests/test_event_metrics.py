@@ -18,3 +18,15 @@ def test_event_matching_cannot_cross_invalid_observation_gap():
     metrics = sequence_metrics(arrays, predictions, burn=0)
     assert metrics['classes']['q']['received'] == metrics['classes']['q']['predicted'] == 1
     assert metrics['classes']['q']['true_positive'] == 0
+
+
+def test_joint_target_quality_counts_missed_buttons_as_failures():
+    arrays = dict(t=np.arange(2)*.1, button=np.array([3, 3]), valid=np.ones(2, bool),
+                  aim_valid=np.ones(2, bool), aim_mode=np.full(2, 2),
+                  screen_x=np.array([5, 5]), screen_y=np.array([3, 3]))
+    predictions = dict(button=np.array([3, 0]), probabilities=np.eye(9)[[3, 0]],
+                       actual_grid=np.full(2, 3*96+5), teacher_grid=np.full(2, 3*96+5))
+    result = sequence_metrics(arrays, predictions, burn=0)
+    actual = result['targets_by_button']['actual_point']['q']
+    assert actual['count'] == 1 and actual['eligible'] == 2
+    assert actual['within2'] == 1. and actual['joint_success'] == .5

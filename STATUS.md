@@ -825,3 +825,14 @@ for longer bounded fixed-window check. No held-out policy quality claim.
 resume at16 and compare final weights to uninterrupted control, then one full
 held-out fixture replay through stateful evaluator. GPU20GB/30min/private staging.
 Target conversion13045 and finalizer13047 remain registered; await callbacks.
+
+**Strict fixed-window13050 registered**, sourceb8b8f957,1000 updates on the
+same two fixture windows, button accuracy>98% and NLL<0.05 required in addition
+to the prior finite-gradient/loss-drop gate. This tests the remaining strict
+memorization requirement rather than reinterpreting200-step wiring as success.
+Per-button target metrics now include joint success over all eligible targets,
+so missed buttons count as failures; correct-button conditional accuracy remains
+separate. Three focused metric tests passed, including this denominator case.
+Active registered work: target conversion13045/finalizer13047, learner/resume/
+eval smoke13049 and strict memorization13050. Await receipts; no broad Ahri
+training or accepted quality result yet. Existing unrelated edits untouched.

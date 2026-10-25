@@ -60,29 +60,41 @@ def sequence_metrics(arrays, predictions, *, burn=32, tolerance=.5):
             near_frame_ap=average_precision(near[valid], probabilities[valid, b]))
     result = dict(valid_frames=int(valid.sum()), minutes=minutes, classes=classes,
                   button_accuracy=float(np.mean(emitted[valid] == button[valid])) if valid.any() else None)
-    targets = {}
+    def target_metrics(prefix, mode, eligible):
+        mask = eligible & ((emitted == button) if prefix == 'actual' else True)
+        count, total = int(mask.sum()), int(eligible.sum())
+        item = dict(count=count, eligible=total)
+        if not count:
+            if prefix == 'actual' and total:
+                item['joint_success'] = 0.
+            return item
+        if mode == UNIT_TARGET:
+            correct = predictions[prefix+'_pointer'][mask] == arrays['target_row'][mask]
+            item['accuracy'] = float(correct.mean())
+        elif mode == POINT_TARGET:
+            cell = predictions[prefix+'_grid'][mask]
+            dx, dy = cell % 96 - arrays['screen_x'][mask], cell // 96 - arrays['screen_y'][mask]
+            error = np.hypot(dx, dy)
+            correct = (np.abs(dx) <= 2) & (np.abs(dy) <= 2)
+            item.update(median_cells=float(np.median(error)), p90_cells=float(np.quantile(error, .9)),
+                        within2=float(correct.mean()))
+        else:
+            angle = (predictions[prefix+'_angle'][mask] + .5) * (2*np.pi/72) - np.pi
+            error = np.abs((angle - arrays['angle'][mask] + np.pi) % (2*np.pi) - np.pi) * 180/np.pi
+            correct = error <= 10.
+            item.update(median_degrees=float(np.median(error)), p90_degrees=float(np.quantile(error, .9)))
+        if prefix == 'actual':
+            item['joint_success'] = float(correct.sum())/total
+        return item
+
+    result['targets'], result['targets_by_button'] = {}, {}
     for prefix in ('actual', 'teacher'):
         for name, mode in [('unit', UNIT_TARGET), ('point', POINT_TARGET), ('angle', ANGLE_TARGET)]:
-            mask = valid & arrays['aim_valid'] & (arrays['aim_mode'] == mode)
-            if prefix == 'actual':
-                mask &= emitted == button
-            count = int(mask.sum())
-            item = dict(count=count)
-            if count:
-                if mode == UNIT_TARGET:
-                    correct = predictions[prefix+'_pointer'][mask] == arrays['target_row'][mask]
-                    item['accuracy'] = float(correct.mean())
-                elif mode == POINT_TARGET:
-                    cell = predictions[prefix+'_grid'][mask]
-                    dx, dy = cell % 96 - arrays['screen_x'][mask], cell // 96 - arrays['screen_y'][mask]
-                    error = np.hypot(dx, dy)
-                    item.update(median_cells=float(np.median(error)), p90_cells=float(np.quantile(error, .9)),
-                                within2=float(((np.abs(dx) <= 2) & (np.abs(dy) <= 2)).mean()))
-                else:
-                    angle = (predictions[prefix+'_angle'][mask] + .5) * (2*np.pi/72) - np.pi
-                    error = np.abs((angle - arrays['angle'][mask] + np.pi) % (2*np.pi) - np.pi) * 180/np.pi
-                    item.update(median_degrees=float(np.median(error)), p90_degrees=float(np.quantile(error, .9)))
-            targets[prefix+'_'+name] = item
-    result['targets'] = targets
+            eligible = valid & arrays['aim_valid'] & (arrays['aim_mode'] == mode)
+            key = prefix+'_'+name
+            result['targets'][key] = target_metrics(prefix, mode, eligible)
+            result['targets_by_button'][key] = {
+                bname: target_metrics(prefix, mode, eligible & (button == b))
+                for b, bname in enumerate(BUTTONS) if np.any(eligible & (button == b))}
     result['limits'] = 'replay-conditioned observations; actual target metrics conditional on exact correct button; teacher targets diagnostic'
     return result
