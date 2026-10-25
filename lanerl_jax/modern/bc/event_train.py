@@ -38,6 +38,9 @@ def main():
     p.add_argument('--warmup', type=int, default=100)
     p.add_argument('--save-every', type=int, default=250)
     p.add_argument('--conditional-aim', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--own-cast-history', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--smoothing-radius', type=int, choices=(0, 1, 2), default=0)
+    p.add_argument('--sample-eval', action='store_true')
     p.add_argument('--ahri-angle', action='store_true')
     p.add_argument('--cast-aim-weight', type=float, default=1.)
     p.add_argument('--history', action=argparse.BooleanOptionalAction, default=True)
@@ -56,16 +59,18 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1):
         signal.signal(sig, lambda signum, frame: stopping.append(signum))
     manifest_hash = hashlib.sha256((a.dataset/'manifest.json').read_bytes()).hexdigest()
-    cfg = EventPolicyConfig(conditional_aim=a.conditional_aim, history=a.history)
+    cfg = EventPolicyConfig(conditional_aim=a.conditional_aim, history=a.history,
+                            own_cast_history=a.own_cast_history)
+    smoothing = {0: (1.,), 1: (.5, 1., .5), 2: (.2, .5, 1., .5, .2)}[a.smoothing_radius]
     # Sampling is stateless by global update, so resume repeats no completed draw.
     contract = dict(config=cfg._asdict(), steps=a.steps, batch_size=a.batch_size, window=a.window,
                     burn=a.burn, seed=a.seed, lr=a.lr, warmup=a.warmup, dataset_sha256=manifest_hash,
-                    champion=a.champion, smoothing=[1.], co_move_weight=0., auxiliary_weight=0.,
+                    champion=a.champion, smoothing=list(smoothing), co_move_weight=0., auxiliary_weight=0.,
                     ahri_angle=a.ahri_angle, cast_aim_weight=a.cast_aim_weight)
     contract_json = json.dumps(contract, sort_keys=True)
     (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     started = time.monotonic()
-    games = load_event_games(a.dataset, split='train', champion=a.champion)
+    games = load_event_games(a.dataset, split='train', champion=a.champion, smoothing=smoothing)
     if a.ahri_angle:
         ahri_angle_targets(games)
     if not games:
@@ -148,6 +153,9 @@ def main():
             games = games[:a.eval_limit]
         reports = evaluate_games(params, policy, games)
         (a.output/'validation.json').write_text(json.dumps(reports, indent=2))
+        if a.sample_eval:
+            sampled = evaluate_games(params, policy, games, seed=a.seed)
+            (a.output/'validation-sampled.json').write_text(json.dumps(sampled, indent=2))
     print(json.dumps(result), flush=True)
     if stopping:
         raise SystemExit(143)

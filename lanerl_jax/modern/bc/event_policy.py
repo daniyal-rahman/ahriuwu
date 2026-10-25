@@ -38,6 +38,7 @@ class EventPolicyConfig(NamedTuple):
     grid_y: int = 54
     conditional_aim: bool = True
     history: bool = True
+    own_cast_history: bool = True
 
 
 class EventLogits(NamedTuple):
@@ -93,6 +94,8 @@ class EventPolicy(nn.Module):
             # Keep identical parameter shapes in the history ablation.
             entities = entities.at[..., 20:].set(jnp.nan)
             self_vec = self_vec.at[..., 24:].set(jnp.nan)
+        if not c.own_cast_history:
+            self_vec = self_vec.at[..., 24:28].set(jnp.nan)
         em = ~jnp.isfinite(entities)
         values = jnp.where(em, 0., entities)
         tokens = self.entity(values) + self.entity_missing(em.astype(jnp.float32))

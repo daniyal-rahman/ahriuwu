@@ -1029,3 +1029,16 @@ matching score survives shuffling. Null intervals describe this permutation
 control, not match-bootstrap/training-seed uncertainty. One sampled emitter seed;
 no action-target, availability or closed-loop quality inference. No promotion.
 Await registered angle13078 and cast-aim13079 results; no new jobs on this receipt.
+
+**Angle ablation13078 COMPLETED/0:**1000 matching updates/71val,657.17s training.
+Same original valid Q/E aim support: teacher mean per-match median angle error
+Q34.78→12.37deg,E87.49→27.36deg; within10 Q27.82→42.52%,E12.41→23.70%.
+Movement within2 9.932→9.304% and median10.888→11.078cells, a small regression;
+timing macro QAP6.355→6.254%,E2.073→2.313%. Clear parameterization benefit,
+not whole-policy promotion or seed-robustness proof. Summary angle-summary-13078.
+**Sampled angle assessment13082 registered**, same73fe070d source/frozen angle
+checkpoint,71val/T1/seed0; no fitting. Cast-aim13079 still pending result.
+Next independent timing controls implemented: own-cast ages-only toggle (retain
+previous event/enemy history), and mass-preserving smoothing radius0/1/2. Optional
+sampled evaluation added after greedy eval for future learners. Tests added for
+age isolation/shape compatibility; not yet Slurm validated or trained.
