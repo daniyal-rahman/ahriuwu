@@ -1557,3 +1557,18 @@ Censoring/gap handling,immediate probability conservation,teacher-aim-button
 independence and correct-next-type delay gradients passed. Afterok13125 gate
 cleared;learned action quality unmeasured. Awaitregistered learner callback,
 no new jobs/policy promotion.
+
+**Next-event20 learner13125 COMPLETED/0**,4000updates/1939.95s/71val,
+6989318params(+86184),nextheadactive. Raw reference→next Q/W/E/RF1
+.2829/.2044/.1281/.1432→.2555/.1934/.1068/.1247;mean.18966→.17008.
+Near-frameAPallcasts lower,but exact-frameAP Q/W/E/R .0894/.0623/.0269/
+.0455→.1137/.0854/.0542/.0698. Label smoothing differs by design;raw event
+scores/ranking do not establish calibrated winner. TeacherQ/Eaim6.97/11.94deg,
+movewithin2 15.35%,pointer74.94%. Last100 mean delaylossmass1.5709,typeNLL
+.4398,known11788/observed10717 targetrows perbatch: substantial active delay
+supervision. Summary next-event20-summary-13125.json.
+**13127→13128→13129 registered**,source3f25ce66,own51cal collect/fit/frozen
+71val immediate-distribution scoring fornext donor13125. Calibrate emitted
+probabilities,not next-type logits;sameT/rate protocol,fingerprintgate,no val
+fitting. GPU1h/CPU20min/GPU1h,privatecopies/reserve,NFS,no-requeue/append.
+Awaitcallbacks,no baseline switch/policy promotion.

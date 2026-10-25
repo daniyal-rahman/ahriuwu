@@ -934,3 +934,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-NEXT-EVENT-QUEUED | 2026-10-25 |13124 fullsuite→13125 4k next-event horizon20 trial registered,source3f25ce66. Unsmooth/noaux/nodropout,causal shared evaluator,temporal labels+emission+delayhead jointly change. Data/draws/aim support fixed;tests/quality pending,no promotion. |
 
 | BC-V2-NEXT-EVENT-TESTS-PASS | 2026-10-25 |13124 actual log95passed/40.26s;temporal target masks,causal marginal probability,teacher independence and conditional-delay gradient checks pass.13125 dependency cleared,no learned-quality claim/new jobs/promotion. |
+
+| BC-V2-NEXT-EVENT-RESULT-AND-CALIBRATION | 2026-10-25 |13125 passed4k/71val/6.989Mparams:rawcastmean.170 versus.190ref,nearAPworse,exactAPallcastsbetter(E.027→.054). Delaylossactive1.571;labels/smoothing differ,not established winner.13127/13128/13129 immediate-probability calibration chain registered,source3f25ce66;no baseline switch/promotion. |
