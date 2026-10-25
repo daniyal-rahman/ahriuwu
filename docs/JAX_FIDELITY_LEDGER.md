@@ -28,7 +28,7 @@ Do not start this comparison or change target representations during source revi
 Dani authorized landing fixes and reviewing workspace/snapshot hygiene before
 continuing deeper review. Current modern/bc has been merged into this review branch, retaining experimental
 flags/auxiliary/next-event/calibration/transfer paths; combined CPU/source/GPU
-checks passed. Fast-forward modern/bc to land the preserved combined history. No main merge: fetched origin/main
+checks passed. Canonical modern/bc now contains the preserved combined history. No main merge: fetched origin/main
 is September3 c1ecec9b and modern/bc is941commits ahead, so a main PR would pull
 unreviewed historical scope. Preserve user AGENTS.md/CLAUDE.md worktree edits.
 
@@ -86,8 +86,11 @@ Actual validation remains allcontinue (73.0468% majority baseline), not competen
 
 Targetmodern/bc advanced toec804ca4 with only STATUS/ledger changes; merged both
 without changing tested code. Verified source/ops paths remain identical to
-524c508c. Fast-forward landing follows this evidence commit; retain AGENTS/CLAUDE
-user edits. Main consolidation remains separate.
+524c508c. **Landed on modern/bc at ee344016** by fast-forward from ec804ca4.
+[landing-receipt.json](/mnt/nfs/shared/modern-bc/integration-20261025/landing-receipt.json)
+confirms tested source-code equality and byte-identical AGENTS/CLAUDE user edits.
+Review and canonical branches now share both histories; no old experiment was
+replaced by an older snapshot. Main consolidation remains separate.
 
 Historical snapshots/data/checkpoints are retained and identified by contract,
 source commit and content hashes. They are never copied over a mutable current

@@ -1958,3 +1958,13 @@ lanerl_jax/ops code. Newer modern/bc ec804ca4changes only STATUS/ledger and
 are merged without loss. Fast-forward canonicalmodern/bc after this commit,
 preserving AGENTS/CLAUDE edits. Main consolidation is separate. Scratch cleanup
 verified; no new jobs or worktree removal.
+
+
+## Review fixes landed on modern/bc (2026-10-25)
+
+Canonicalmodern/bc fast-forwarded ec804ca4→ee344016 after combined CPU/source/GPU
+gates passed. Exact tested-code equality to524c508c and byte-identical user
+AGENTS/CLAUDE diffs verified; receipt under integration-20261025/landing-receipt.json.
+Review and canonical branches preserve both histories. Historicalv1/v2data are
+notv3compatible; no dataset/checkpoint promoted. Workspace disposition retains
+uncommitted/unique/app-bound work; no unsafe branch deletion/prune or main merge.
