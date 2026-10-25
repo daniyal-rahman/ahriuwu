@@ -991,3 +991,19 @@ target success. History-off/stale probes also emit onlycontinue; NLL raw0.75901,
 off0.76173,stale0.75975. These32updates validate wiring/numerics, not competence
 or history usefulness. No broad baseline/promotion from this result. Source-v3
 repair validation13071 remains separately registered/pending receipt.
+
+
+## Source-v3 validation13071 passed (2026-10-24)
+
+Actual output inspected:94tests passed40.63s;24raw reconversions completed
+165.15s, contractreplay-lane-events-v3/source1ee090a0. All24old shared
+observations rejected, rebuilt shared observations matched, and finalized hashes
+reverified independently. Every rebuilt CS/combat input isNaN.0post-initial-burn
+omissions/0duplicate supervision. Scratch cleanup verified.
+
+Scope filtering changes valid153965→152270(-1695,1.10%); GarenE438→366
+(-16.44%), AhriE138→132 and AhriR60→59. This is measured differential coverage,
+not proof which reconstruction failure dominates each lost cast. Raw receipts
+remain preserved. Source repair passes its integration gate but does not solve
+state-dependent missingness, own-stat/history omissions or memorization gate
+coverage. No full-v3dataset rebuild/GPU validation or production integration yet.
