@@ -850,3 +850,12 @@ Ahri84553/85455, Garen23084/23767; Garen R296/305. Stop has zero received labels
 so no learned-stop claim. Not all13source-audit diagnostics are complete.
 At receipt handling,13049 RUNNING52s and13050 PENDING; await registered callbacks.
 No broad Ahri baseline launched before learner/strict gates. B untouched.
+
+**Learner smoke13049 FAILED at final comparison**, not during training/eval.
+Uninterrupted32 steps and resumed16→32 both completed; one full held-out replay
+scored6791 valid frames. Max parameter difference7.426e-5 exceeded1e-5 assertion;
+max logged loss difference7.564e-5, first resumed loss differs9.54e-7. Cause not
+established; do not call exact resume validated or relax solely to pass. Added
+GPU probe: byte-exact checkpoint roundtrip, optimizer count16, two continuations
+from the same checkpoint, relative/global and end-loss comparisons with explicit
+numerical bounds. No broad baseline started. Strict13050 remains registered.
