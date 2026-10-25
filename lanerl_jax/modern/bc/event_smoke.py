@@ -60,7 +60,7 @@ def main():
     start_step = 0
     if a.resume:
         restored = serialization.msgpack_restore(a.resume.read_bytes())
-        if restored['config'] != policy.cfg._asdict():
+        if EventPolicyConfig(**restored['config']) != policy.cfg:
             raise ValueError('memorization resume model changed')
         donor = json.loads((a.resume.parent/'results.json').read_text())
         if donor['windows'] != windows:
