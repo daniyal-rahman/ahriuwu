@@ -1619,3 +1619,12 @@ v2-garen-timing-control-13132. SelfcastQWE/unitR simpler-kit diagnostic,not
 equal-data Ahri comparison or fullquality gate (Garen count below300).
 CPU20min/GPU1h,privatecopies/reserve,NFS,no-requeue/append;awaitcallbacks,
 no policy promotion.
+
+**Memory boundaryreport13133 COMPLETED/0.** On first50 supervisedrows
+phase32:82,full/reset rawcastmeanF1 .19345/.19475;later82:256 .18572/.18580.
+Per-cast near-frameAP also nearly unchanged within each group. First32rows
+aftereveryreset excluded forboth,matching trainingburn-in;this does not assess
+startup rows without burn-in. No hidden large supervised-boundary penalty in
+this check;deprioritize statecarry training as immediate timing fix. Report
+memory-boundary-13133.json. Garencontrol13132 remainsregistered;awaitcallback,
+no new jobs or policy promotion.
