@@ -877,3 +877,12 @@ fresh job-private staging/output, explicit no-requeue and append logs. No model
 changes or larger budget.13055 was RUNNING first attempt(Restarts=0); disabled
 requeue for this owned diagnostic as well. No polling loop; await both receipts.
 BC.md records explicit short-job restart policy; broader training remains gated.
+
+**Resume probe13055 COMPLETED/0:**checkpoint parameter/optimizer roundtrip
+exact, both optimizer counters16. Two same-process continuation replicas agree
+bitwise. Original control/resume versus probe: maxabs<=1.1275e-4, relativeL2
+<=2.799e-5; final-loss spread7.153e-6. Accept bounded numerical resume fidelity
+for this fixture, not cross-process bitwise determinism or a proved kernel cause.
+No learner logic/loss/tolerance changed to hide a checkpoint mismatch. Original
+13049 final strict assertion remains failed evidence;13055 supplies the separate
+numerical comparison. Strict13063 remains the gate before broad Ahri learning.
