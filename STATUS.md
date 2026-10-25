@@ -905,3 +905,18 @@ remain required. Desktop is drained/not responding with reason boot to Windows.
 Own pending13056/13057 used superseded snapshots; their watches were forgotten and
 jobs cancelled by ID. A consolidated final snapshot replaces them; no other
 agent's job was stopped. Production branch integration waits for actual checks.
+
+
+**Consolidated review validation queued:** code196698a8 (fix128b9357 plus
+current BC diagnostics), immutable archive SHA256 recorded in
+`review-fixes-20261024/source-final.sha256` under `/mnt/nfs/shared/modern-bc/`.
+13058 runs all91 collected tests,24 real conversions, expanded reused-input parity,
+artifact manifests and corrected-window profiling.13059 (4shards/max2) rebuilds
+all828 target perspectives afterok13058;13060 finalizes/hashes/profiles afterok
+entire13059. GPU13061 afterok13058 checks32-step learner/resume/full-replay
+metrics, exact checkpoint roundtrip, bounded continuation numerical differences,
+independent random-label control and absent/stale history diagnostics. Each job
+uses private staging, explicit limits and registered callbacks. All remain queued
+behind desktop's drained Windows state; do not infer test success or promote the
+new data/code before inspecting receipts.31 local lightweight regressions passed;
+no new GPU/model quality result. No review job is currently running.
