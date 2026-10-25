@@ -1579,3 +1579,15 @@ consistent. Rate-fitted T1/.7/.5 immediate-distribution calibration castF1
 .16848/.20172/.21086 over3draws;T.5 frozen. Belowreference selection.27364,
 but wait13129 frozen71val before final experiment verdict. No val fitting,
 new jobs,baseline switch or policy promotion on these receipts.
+
+**Next-event calibrated13129 COMPLETED/0**,71val/4k:Q/W/E/RF1
+.2964/.2315/.1420/.1394,mean.20229 versusreference.27568;attack.4845
+versus.4811,move.8187 versus.8349. Reject this next-event20 configuration
+for reference;not a general rejection of eventprediction. Summary
+calibrated-next-event20-summary-13129.json.
+**Memory reset diagnostic implemented**,optional assessor reset-every multiple
+of128,default0(fullstate),GRU-only resets preserve emitterPRNG across chunks;
+metadata records reset protocol. Regressionadded/unrun. Next CPUgate then
+frozen4k reference with256-frame resets against existing fullstate readout,
+same T1/sample0/data. Counterfactual evaluation only,not statecarry training
+or deployment proof. No policy promotion.

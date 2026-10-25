@@ -39,7 +39,9 @@ def make_predict(policy, *, sampled=False, temperature=1.):
     return predict
 
 
-def predict_game(params, policy, predict, game, *, chunk=128, bias=None, seed=None):
+def predict_game(params, policy, predict, game, *, chunk=128, bias=None, seed=None, reset_every=None):
+    if reset_every is not None and (reset_every < chunk or reset_every % chunk):
+        raise ValueError('memory reset interval must be a positive multiple of chunk length')
     if bias is None:
         bias = np.zeros(9, np.float32)
     carry = policy.initial_carry((1,))
@@ -49,20 +51,22 @@ def predict_game(params, policy, predict, game, *, chunk=128, bias=None, seed=No
     summaries = []
     n = len(game['arrays']['button'])
     for start in range(0, n, chunk):
+        if reset_every is not None and start and start % reset_every == 0:
+            carry = policy.initial_carry((1,))
         batch = jax.tree.map(jnp.asarray, event_batch([game], [(0, start)], window=chunk, burn=0))
         (carry, key), summary = predict(params, carry, batch, jnp.asarray(bias), key)
         summaries.append(jax.tree.map(lambda x: np.asarray(x)[0, :min(chunk, n-start)], summary))
     return {k: np.concatenate([s[k] for s in summaries]) for k in summaries[0]}
 
 
-def evaluate_games(params, policy, games, *, chunk=128, bias=None, seed=None, prediction_dir=None, temperature=1.):
+def evaluate_games(params, policy, games, *, chunk=128, bias=None, seed=None, prediction_dir=None, temperature=1., reset_every=None):
     predict = make_predict(policy, sampled=seed is not None, temperature=temperature)
     if prediction_dir is not None:
         prediction_dir = Path(prediction_dir)
         prediction_dir.mkdir(parents=True, exist_ok=False)
     reports = []
     for game in games:
-        predictions = predict_game(params, policy, predict, game, chunk=chunk, bias=bias, seed=seed)
+        predictions = predict_game(params, policy, predict, game, chunk=chunk, bias=bias, seed=seed, reset_every=reset_every)
         if prediction_dir is not None:
             arrays = game['arrays']
             np.savez_compressed(prediction_dir/(game['row']['game']+'.npz'), **predictions,

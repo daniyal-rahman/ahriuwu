@@ -21,8 +21,11 @@ def main():
     p.add_argument('--split', choices=('train', 'calibration', 'val'), default='val')
     p.add_argument('--calibration', type=Path)
     p.add_argument('--sample-seed', type=int)
+    p.add_argument('--reset-every', type=int, default=0)
     p.add_argument('--limit', type=int, default=0)
     a = p.parse_args()
+    if a.reset_every < 0 or a.reset_every % 128:
+        p.error('reset-every must be zero or a positive multiple of128')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('assessment requires a Slurm GPU allocation')
     checkpoint_bytes = a.checkpoint.read_bytes()
@@ -47,14 +50,15 @@ def main():
         bias, temperature = np.asarray(calibration['bias'], np.float32), float(calibration['temperature'])
     a.output.mkdir(parents=True, exist_ok=False)
     reports = evaluate_games(jax.device_put(saved['params']), policy, games, seed=a.sample_seed,
-                             prediction_dir=a.output/'predictions', bias=bias, temperature=temperature)
+                             prediction_dir=a.output/'predictions', bias=bias, temperature=temperature,
+                             reset_every=a.reset_every or None)
     (a.output/'validation.json').write_text(json.dumps(reports, indent=2))
     (a.output/'results.json').write_text(json.dumps(dict(passed=True, split=a.split,
         checkpoint=str(a.checkpoint), checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
         dataset_manifest_sha256=hashlib.sha256((a.dataset/'manifest.json').read_bytes()).hexdigest(),
         model_contract=contract, step=saved['step'], sample_seed=a.sample_seed, temperature=temperature,
         calibration_sha256=hashlib.sha256(a.calibration.read_bytes()).hexdigest() if a.calibration else None,
-        perspectives=len(reports), emitter='greedy' if a.sample_seed is None else 'categorical',
+        perspectives=len(reports), reset_every=a.reset_every, emitter='greedy' if a.sample_seed is None else 'categorical',
         limits='offline replay-conditioned history, not closed-loop play; any calibration frozen on separate calibration matches'), indent=2))
 
 

@@ -41,3 +41,23 @@ def test_sampled_targets_follow_emitted_button_and_rng_survives_chunking():
     np.testing.assert_array_equal(full['teacher_grid'], 2)
     assert set(np.asarray(full['button']).ravel()) == {1, 3}
     np.testing.assert_array_equal(state[0], end[0])
+
+
+def test_periodic_memory_reset_preserves_emitter_rng_stream(monkeypatch):
+    from types import SimpleNamespace
+    from lanerl_jax.modern.bc import event_eval as module
+    monkeypatch.setattr(module, 'event_batch', lambda *args, **kwargs: dict(button=np.zeros((1, 2))))
+    game = dict(row=dict(game='fixed-game'), arrays=dict(button=np.zeros(6)))
+    policy = SimpleNamespace(initial_carry=lambda shape: np.zeros((1, 1)))
+    keys = []
+    def predict(params, carry, batch, bias, key):
+        key, draw = jax.random.split(key)
+        keys.append(np.asarray(jax.random.key_data(draw)))
+        return (carry+2, key), dict(button=np.full((1, 2), float(carry[0, 0])))
+    a = module.predict_game({}, policy, predict, game, chunk=2, seed=0)
+    first = keys.copy()
+    keys.clear()
+    b = module.predict_game({}, policy, predict, game, chunk=2, seed=0, reset_every=4)
+    np.testing.assert_array_equal(a['button'], [0, 0, 2, 2, 4, 4])
+    np.testing.assert_array_equal(b['button'], [0, 0, 2, 2, 0, 0])
+    np.testing.assert_array_equal(keys, first)
