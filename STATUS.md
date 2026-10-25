@@ -1893,3 +1893,13 @@ rejects mixed source/contract shards; checkpoint records dataset contract.
 Fetched origin/main remains September3 c1ecec9b,941commits behindmodern/bc;
 main merge is outside this bounded integration.41worktrees/23archived/13dirty
 recorded; uncommitted changes and historical snapshots preserved.
+
+
+Combined validation13143:117passed/3failed44.56s. Failures are isolated mocked
+loss fixtures omitting newly required entity/pad/ownidentity fields; repaired
+fixtures preserve original numeric/gradient assertions and keep production loss
+strict. Dependent unstarted GPU13144 watch forgotten/job cancelled intentionally
+by ID; no automatic retry of that snapshot. Replacement checks use a fresh
+immutable attempt directory. Worktree disposition classifies5dirty archived,
+18clean archived,8dirty nonarchived,6app-bound unmerged,2app-bound fully contained
+and2canonical/independent clean checkouts; preserve app bindings and unique work.

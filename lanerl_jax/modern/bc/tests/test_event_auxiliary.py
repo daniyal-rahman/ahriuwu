@@ -85,6 +85,8 @@ def test_auxiliary_loss_has_expected_scale_and_hp_gradient(monkeypatch):
                  angle=jnp.zeros((1, 2)), own_future=zeros, enemy_future=zeros,
                  own_future_valid=jnp.ones((1, 2), bool), enemy_future_valid=jnp.ones((1, 2), bool),
                  own_hp_future=jnp.full((1, 2), .8), own_hp_future_valid=jnp.ones((1, 2), bool))
+    batch.update(entities=jnp.zeros((1, 2, 32, 25)), pad=jnp.ones((1, 2, 32), bool),
+                 own_id=jnp.zeros((1, 2), jnp.int32))
     params = dict(hp=jnp.asarray(0.))
     base, _ = loss_module.make_event_loss(policy)(params, batch)
     auxiliary = loss_module.make_event_loss(policy, auxiliary_weight=.1)

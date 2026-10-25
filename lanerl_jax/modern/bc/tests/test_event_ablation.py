@@ -28,6 +28,8 @@ def test_cast_aim_weight_changes_only_cast_target_loss(monkeypatch):
                  aim_valid=jnp.ones((1, 2), bool), aim_mode=jnp.full((1, 2), 2),
                  screen_x=jnp.zeros((1, 2), jnp.int32), screen_y=jnp.zeros((1, 2), jnp.int32),
                  target_row=jnp.zeros((1, 2), jnp.int32), angle=jnp.zeros((1, 2)))
+    batch.update(entities=jnp.zeros((1, 2, 32, 25)), pad=jnp.ones((1, 2, 32), bool),
+                 own_id=jnp.zeros((1, 2), jnp.int32))
     a, ai = L.make_event_loss(policy)({}, batch)
     b, bi = L.make_event_loss(policy, cast_aim_weight=3.)({}, batch)
     np.testing.assert_allclose(b-a, np.log(6), rtol=1e-5)

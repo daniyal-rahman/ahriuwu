@@ -56,6 +56,8 @@ def test_next_event_loss_trains_delay_for_next_type_not_current_aim_button(monke
                  aim_mode=zero, screen_x=zero, screen_y=zero, target_row=zero, angle=zero,
                  next_button=jnp.full((1, 2), 3), next_delay=jnp.ones((1, 2), jnp.int32),
                  next_valid=jnp.ones((1, 2), bool), next_observed=jnp.ones((1, 2), bool))
+    batch.update(entities=jnp.zeros((1, 2, 32, 25)), pad=jnp.ones((1, 2, 32), bool),
+                 own_id=jnp.zeros((1, 2), jnp.int32))
     params = dict(delay=jnp.zeros((1, 2, 8, 2)))
     loss = module.make_event_loss(policy)
     value, info = loss(params, batch)

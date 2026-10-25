@@ -47,7 +47,22 @@ Merge resolution retains both sets of evidence/docs/tests. The decoder source
 binding defect now fails closed for top-level and transitive cached local modules;
 use a fresh process to switch decoder snapshots.12focused source/emitter tests
 passed4.26s. Full combined tests/raw reconversion/GPU checks remain required
-before landing. No old job inputs or checkpoints rewritten.
+before landing. Initial13143passed117tests but3mocked loss fixtures lacked newly
+required entity inputs; fixing fixtures without relaxing eligibility. GPU13144
+never started and was intentionally forgotten/cancelled after dependency failure.
+Fresh attempt inputs will preserve this failed receipt. No old job inputs or
+checkpoints rewritten.
+
+Workspace disposition:
+[worktree-disposition.json](/mnt/nfs/shared/modern-bc/review-20261025/worktree-disposition.json).
+Of23already archived,5are dirty.8nonarchived are dirty,6clean app-bound branches
+have independent commits,2clean app-bound snapshots are fully contained in
+canonical domain branches,2clean checkouts are current review/rewards branches.
+The two contained snapshots are direct-handoff decoding (contained in decoder)
+and old sim-port (contained in modern/bc). They are app-managed paths, so moving
+them blindly would leave stale app workspace bindings. No deletion/prune or
+history rewrite; preserve branches and unique changes. Cross-domain main
+consolidation needs its own review, not a blanket rebase.
 
 ## Historical checkpoint before integration
 
