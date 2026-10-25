@@ -1310,3 +1310,22 @@ not evidence of generalization or improved cast timing. No inline validation
 was requested. Registered13103 dependency cleared for fixed1000/2000/4000
 train71/val71 assessment; await callback before choosing further training or
 changing event formulation. No new jobs/policy promotion on this receipt.
+
+**Train/val curve13103 COMPLETED/0**,six completed assessments,71 fixed
+training perspectives and71val at1000/2000/4000. Within4000-step schedule,
+raw valQ/W/E/RF1 at1000 .230/.153/.081/.110→4000 .283/.204/.128/.143;
+macro.1434→.1896. Train4000 .286/.219/.153/.139 (macro.1994),small observed
+gap; training subset is first71 sorted matches,not all470 or matched players.
+ValQ/E near-frameAP .341/.147→.376/.213,teacher aim8.51/13.61→6.67/10.67deg.
+AttackF1 .382→.444,move .810→.832. Useful held-out learning continues; no
+evidence here that severe overfitting or dataset size already sets the ceiling.
+No oracle cooldowns/rewards/new data. Summary duration-curve-summary-13103.json.
+**13104→13105→13106 registered**,separate51cal collection/fit/frozen71val score
+for4000-step donor13102 using testedcefee640; own fingerprints/biases.
+**13107 registered**,relative+smooth2 seed0 fresh8000-step schedule,b64,save2000,
+finalgreedy+sample71val,source8c668da2,1h30limit. This is a new training-duration/
+schedule experiment,not an exact resume or isolated duration-only comparison.
+Measured.384s/update suggests51min updates plus startup/evaluation/queue,not
+a guaranteed end-to-end ETA. Private deep copies/reserve,NFS outputs,no-requeue/
+append. Await callbacks; do not force next-event redesign before convergence
+readouts. No policy promotion; leakage/history/deploy gates remain outstanding.
