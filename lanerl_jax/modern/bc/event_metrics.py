@@ -83,6 +83,21 @@ def sequence_metrics(arrays, predictions, *, burn=32, tolerance=.5):
             error = np.abs((angle - arrays['angle'][mask] + np.pi) % (2*np.pi) - np.pi) * 180/np.pi
             correct = error <= 10.
             item.update(median_degrees=float(np.median(error)), p90_degrees=float(np.quantile(error, .9)))
+        if mode == POINT_TARGET and 'angle' in arrays:
+            from ..screen import screen_to_lane
+            ds, dn = screen_to_lane((cell % 96 + .5)/96, (cell // 96 + .5)/54)
+            predicted_angle = np.arctan2(np.asarray(dn), np.asarray(ds))
+            actual_angle = arrays['angle'][mask]
+            known = np.isfinite(actual_angle)
+            if known.any():
+                angle_error = np.abs((predicted_angle[known] - actual_angle[known] + np.pi) % (2*np.pi) - np.pi)*180/np.pi
+                item['direction_count'] = int(known.sum())
+                item['median_degrees'] = float(np.median(angle_error))
+                item['p90_degrees'] = float(np.quantile(angle_error, .9))
+                item['within10'] = float((angle_error <= 10).mean())
+        if mode == ANGLE_TARGET:
+            item['direction_count'] = count
+            item['within10'] = float(correct.mean())
         if prefix == 'actual':
             item['joint_success'] = float(correct.sum())/total
         return item

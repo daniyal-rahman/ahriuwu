@@ -958,3 +958,7 @@ recovery yet). Added sampled emitter with RNG carried across chunks and targets
 conditioned on sampled buttons, plus checkpoint assessor/prediction export.
 Tests added for weighting isolation, label/input preservation and sampled-target/
 chunk invariance. Not Slurm validated yet; no new ablation training launched.
+Grid-target evaluation now also converts predicted cells through the shared static
+camera projection to direction error against saved replay angles. This supplies
+angular metrics for a fair grid-versus-angle comparison; no simulator rollout or
+new state source. Direction support is reported explicitly; inputs unchanged.

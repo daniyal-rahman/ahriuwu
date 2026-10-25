@@ -28,8 +28,8 @@ def summarize(reports):
                 target_rows = [r['metrics'].get('targets_by_button', {}).get(prefix+'_'+mode, {}).get(button)
                                for r in reports]
                 target_rows = [r for r in target_rows if r is not None]
-                for metric in ('accuracy', 'within2', 'joint_success'):
-                    weighted = [(r[metric], r['eligible'] if metric == 'joint_success' else r['count'])
+                for metric in ('accuracy', 'within2', 'within10', 'joint_success'):
+                    weighted = [(r[metric], r['eligible'] if metric == 'joint_success' else r.get('direction_count', r['count']) if metric == 'within10' else r['count'])
                                 for r in target_rows if metric in r]
                     denom = sum(w for _, w in weighted)
                     if denom:
