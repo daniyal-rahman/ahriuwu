@@ -746,3 +746,21 @@ reserve,20GiB per-game reserve, EXIT cleanup; results on NFS under
 `/mnt/nfs/shared/modern-bc/v2-20261024`. This is a sampled source gate, not all13
 complete audit requirements. SSH desktop check timed out; Slurm accepted the job,
 so no claim about old13034 staging cleanup or this job's runtime progress yet.
+
+**V2 source audit13041 COMPLETED/0:**61 tests and544 frozen decoder hashes pass;
+24 role-matched perspectives reproduce original lagged entity/padding observations.
+Ahri Q423/E138/R62 all have received points; W430 all self. Garen Q394/W120/E443
+all self; R14/14 targets in delayed rows. Raw cast+path bins268/1050Ahri and
+378/959Garen are26%/39%, so v2 must preserve sub-frame records and co-movement
+rather than silently discard them; these are server paths, not proven clicks.
+B inventory matches23879 verified files to metadata;2637 matches containAhri,
+2477Garen. Whole-match reservation proposal stored in audit output, no outcomes
+used for selection or B decoding. No claim all13audit gates are complete.
+
+Desktop Linux and slurmd are now reachable; stale drained/Windows state cleared
+without an agent scheduler change. New v2 implementation in progress: event-only
+labels with independent button/aim masks, causal previous-receipt/stable-target
+history, visible-caster memory and compact inputs; button-conditioned pointer/
+joint-grid policy with co-movement/aux outputs, baseline unweighted losses.
+None is wired into a completed v2 training run. Next gate is full tests plus
+24-perspective sidecar construction and actual GPU loss/update smoke.

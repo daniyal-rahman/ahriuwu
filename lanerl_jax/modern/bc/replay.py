@@ -119,6 +119,7 @@ class ReplayGame(NamedTuple):
     cooldown_events: List[Tuple[float, int, float, float, int]]  # received countdowns (t, slot, remaining, duration, mode); [] if not read
     turret_xy: Dict[Tuple[int, int, str], Tuple[float, float]]   # {(team, lane, tier): (x, y)}
     turret_id: Dict[Tuple[int, int, str], int]
+    champion_casts: tuple = ()             # (receipt time, caster id, QWER slot); visibility applied by v2
 
     def index(self, unit_id: int) -> int:
         return next(i for i, u in enumerate(self.units) if u.id == unit_id)
@@ -384,6 +385,10 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
     actions, opponent_casts = _actions(fields, me, opponent)
     cooldown_events, cooldown_audit = _cooldown_events(fields, me)
     provenance.update(cooldown_fields_read=bool(cooldown_events), cooldown_source_audit=cooldown_audit)
+    cast_rows, cast_times, cast_ids = fields.rows("event.ability_cast_received_proxy", "champion")
+    champion_casts = tuple((float(tm), int(uid), int(fields.value("event.ability_cast_received_proxy", row)["slot"]))
+                           for row, tm, uid in zip(cast_rows, cast_times, cast_ids)
+                           if int(fields.value("event.ability_cast_received_proxy", row)["slot"]) in range(4))
     return ReplayGame(
         game=game_dir.name, provenance=provenance, me=me, opponent=opponent, opponent_name=opp_row["name"],
         summoners=summoners, summoner_slot=summoner_slot, units=units, t=t, x=x, y=y, hp=hp, max_hp=max_hp, alive=alive, level=level,
@@ -395,7 +400,7 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
         spell_rank=spell_rank, champion_stats=champion_stats,
         last_champion_combat=_champion_combat(fields, me, enemy_champions, t),
         actions=actions, opponent_casts=opponent_casts, cooldown_events=cooldown_events, turret_xy=turret_xy,
-        turret_id=turret_id)
+        turret_id=turret_id, champion_casts=champion_casts)
 
 
 def _combat_stats(fields: _Fields, champion: int, t) -> np.ndarray:
