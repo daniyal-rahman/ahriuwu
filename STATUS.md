@@ -1052,3 +1052,17 @@ cast before window/burn masks), no extra aim weight. Both greedy and categorical
 T1/seed0 eval on71val;51calibration/B untouched. Same immutable code/data private
 staging, no-requeue/append,24GB/1h each. No result/promotion claimed; await13083,
 13084–13086 plus13079 cast-weight and13082 sampled-angle receipts.
+
+**Cast-aim3 grid13079 COMPLETED/0**,1000updates/71val,665.26s training.
+Q within2cells1.570→6.062%,angular mean match median34.78→19.13deg; E within2
+1.410→1.551%,angle87.49→78.16deg. Movement within2 essentially unchanged
+9.932→9.900%; Q/E exact-frame AP6.355→6.461%/2.073→2.164%, W/R mixed.
+Target weighting helps Q grid learning but not enough, and angle-only12.37/27.36deg
+remains better. No complete-policy promotion. Summary cast-aim3-summary-13079.
+**Timing tests13083 COMPLETED/0:**79passed37.31s, own-age-only mask/parameter
+shape and other-history retention validated;13084–13086 gates cleared.
+**Angle+aim3 interaction13087 registered**, same2d36adc8 source/data/1000updates/
+b64/seed0, angle candidate plus only3x cast-aim weight, no smoothing or history
+removal, both greedy/sampled eval. This tests weighting on the improved target
+parameterization; angle-only remains the reference. Private staging/no-requeue/
+append/24GB/1h. Await13082 sampled angle,13084–13087; calibration and B unused.
