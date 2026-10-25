@@ -920,3 +920,23 @@ uses private staging, explicit limits and registered callbacks. All remain queue
 behind desktop's drained Windows state; do not infer test success or promote the
 new data/code before inspecting receipts.31 local lightweight regressions passed;
 no new GPU/model quality result. No review job is currently running.
+
+
+## Continued system review (2026-10-24)
+
+New findings are BC-SYSTEM-001..006 in the fidelity ledger. Lightweight synthetic
+reproductions confirm: useful own haste/attack-speed and absolute HP/mana are
+lost before policy input; repeated auto execution does not update execution
+memory; CS promotes unqualified damage roles and can use post-observation
+receipts; positions can resume predeath paths after respawn and ignore per-result
+acceptance flags. Current strict two-window fixture has no AhriQ/R and can miss
+both sole aimed E/R casts while passing aggregate button thresholds. These new
+issues remain open; existing event fixes do not certify them resolved.
+Metadata-only audit found no gaps/quarantine in any of802target matches, rejecting
+that as a current-corpus explanation. CPU13062 is registered to measure actual
+source frequencies/availability. Desktop remains drained in Windows, so13062 and
+prior13058..13061 are queued. No new training or policy-quality claim; frozen
+validation jobs are unchanged. Diagnostic tool: `ops/modern/bc_system_audit.py`;
+local evidence: `review-fixes-20261024/system-synthetic-expanded.json` under
+`/mnt/nfs/shared/modern-bc/`. Pending source results must guide the next repairs
+before any source-fidelity or competent-play sign-off.
