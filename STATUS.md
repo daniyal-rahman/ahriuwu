@@ -784,3 +784,14 @@ Adam updates; checks finite nonzero gradients, parameter movement and30% loss
 reduction, saves checkpoint/results on NFS and cleans private staging. This is
 only a memorization/wiring gate; held-out quality and shuffled-label control
 remain separate. Event evaluation now being built while dependency runs.
+
+
+Stateful replay evaluator implemented with shared policy encode/target methods:
+actual-button versus teacher-button target readouts remain explicitly separate;
+full-perspective carry with128-step chunks, no future labels fed into state.
+Event matching is restricted to contiguous valid segments. Exact/near-frame AP
+is named as a frame diagnostic, not event AP. Six focused CPU tests passed4.88s
+for missing-anchor handling, file identity, padding/burn-in/incomplete manifests,
+AP ties and matching across invalid gaps. Real model evaluation remains unrun.
+Await registered13043 conversion and afterok13044 gradient receipts; no broader
+v2 training or quality result yet. Unrelated AGENTS/CLAUDE edits untouched.

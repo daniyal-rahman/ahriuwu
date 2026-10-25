@@ -1370,8 +1370,14 @@ provides target attention/action masks/control-dependency motivation.
 provides a concrete teacher-forced versus sampled conditioning implementation.
 Robotics chunking is a hypothesis to test here, not a demonstrated MOBA improvement.
 
-Implemented foundations:9-event vocabulary, mass-preserving optional smoothing,
-ordered one-to-one event matching, raw metadata inventory without defaults, and
-regression tests. They are not wired into the legacy trainer. Validation is pending
-Slurm; raw-target audit and v2 learner remain to build. This distinction belongs
-in every progress update until actual v2 training runs.
+Implemented v2 modules include event labels, compact causal inputs, received-event
+history, button-conditioned pointer/joint-grid policy, losses, fixture batches and
+stateful replay evaluation. Source audit13041 passed24 perspectives; conversion13042
+passed69 tests then failed on a missing delayed anchor in co-movement projection.
+That failure is fixed with a regression test; CPU retry13043 and dependent GPU
+fixed-window gradient/memorization gate13044 are registered. No completed v2
+training or held-out quality result exists yet. Evaluation uses replay-provided
+history even when scoring actual-button targets, so this is offline conditional
+assessment, not closed-loop rollout evidence. Calibration, broad target conversion,
+training orchestration, shuffle control and the staged ablations remain to build.
+See STATUS and the fidelity ledger for subsequent receipts.
