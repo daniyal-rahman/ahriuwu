@@ -1452,3 +1452,18 @@ mask;compare saved normal assessments,checkpoint/effective config recorded.
 Own/enemy cast timers preserved,no retraining/calibration or synthesized policy
 errors. Missing-history sensitivity only,not closed-loop deployment. Private
 deep-copy staging/reserve,NFS,no-requeue/append;awaitcallback,no promotion.
+
+**Frozen missing-history sensitivity13115 COMPLETED/0**,71val/sample0,
+both4k checkpoints. Normal→masked rawcastmeanF1 reference.18966→.07641
+(59.7%drop),dropout.18297→.15274(16.5%drop). Reference Q/E aim6.67/10.67→
+16.53/18.81deg;dropout6.13/9.93→5.87/9.94deg. Reference movewithin2
+17.70→2.12%,dropout17.17→6.11%;movement still depends strongly on history.
+Mask removes previouscommand/target group,retainscasttimers. No policy errors
+synthesized,no closed-loop or seed-robustness claim;one training/sampling seed.
+Artifact history-perturbation-13115/summary.json records original/effective
+configs and checkpoint hashes. Keep dropout as robustness candidate,not yet
+chosen checkpoint or deploy-ready policy.
+**13116→13117→13118 registered**,source2dfd229e (supports new config),own
+51cal collect/fit/frozen71val score fordropout donor13114. Normal history at
+calibration/eval;no reuse ofreference biases. GPU1h/CPU20min/GPU1h,private
+deepcopies/reserve,NFS,no-requeue/append. Awaitcallbacks;no promotion.

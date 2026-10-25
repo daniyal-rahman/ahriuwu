@@ -914,3 +914,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-GROUPED-DROPOUT-TESTS-PASS | 2026-10-25 |13113 actual log86passed/37.78s;mask grouping/reproducibility/cast preservation/input immutability validated.13114 dependency cleared;no learned-quality/deploy evidence yet,no new jobs/promotion. |
 
 | BC-V2-DROPOUT-RESULT-AND-SENSITIVITY | 2026-10-25 |13114 passed4k/71val:raw castmeanF1.183 versus.190 reference,Q/Eaim6.13/9.93deg,movewithin2 17.17%. Most normal-history performance retained,robustness unknown.13115 frozen previous-event mask assessment both4k checkpoints registered,source2dfd229e/worker d766e5b8de76,checkpoint/effectiveconfig provenance. No simulated errors/closed-loop or promotion. |
+
+| BC-V2-HISTORY-SENSITIVITY-RESULT | 2026-10-25 |13115 passed71val both4k:missinghistory castmeanF1 reference.190→.076,dropout.183→.153;dropout Q/Eaimstable,moveaccuracy17.17→6.11% remains sensitive. Missing-group robustness only,not policy-error/closed-loop/seed proof.13116/13117/13118 own dropout calibration chain registered,source2dfd229e;candidate only,no promotion. |
