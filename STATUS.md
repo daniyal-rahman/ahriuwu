@@ -1012,3 +1012,10 @@ matched-event target scoring. Summary `v2-20261024/emitter-summary-13077.json`.
 Timing-null CLI added to preserve predicted counts per contiguous valid segment
 while permuting times, so high dense movement F1 can be compared to frequency-only
 chance. Not yet run.13078/13079 remain registered; no promotion.
+
+**Timing-null13081 registered**, sourceedc27926,CPU1/2GB/15min,32 within-valid-
+segment permutations of frozen13077 sampled buttons. Per-segment per-button
+counts asserted equal; output timing-null-13081.json on NFS. This compares temporal
+alignment to a frequency/context baseline, not action-target quality, independent
+training seeds or closed-loop competence. Private copied predictions/code and
+20GiB reserve; no new model training. Await13081 and aim ablations13078/13079.
