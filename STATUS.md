@@ -1673,3 +1673,9 @@ metadata-completeness proof;no 80/20 mixed fine-tune yet. Calibration remains
 separate/reserved for ownfits afterresults. Source/data/donor deepcopies,NFS
 checkpoints,20GiBreserve,CPU15min/GPU1h each,no-requeue/append. Awaitgate/run
 callbacks,no policy promotion.
+
+**Transfer initializer testgate13139 COMPLETED/0:** actual NFS log98passed/
+40.09s,including weights-only loading/donorprovenance and architecture/tree/
+shape rejection.13140pretrain and13141control afterok gates cleared;13142
+remains dependent on13140 success. No learned transfer result yet;await
+registered callbacks,no new jobs or policy promotion.

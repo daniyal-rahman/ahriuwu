@@ -954,3 +954,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-TRANSFER-DATA-PASS-AND-INITIALIZER | 2026-10-25 |13134all4/13137 passed512views/499matches/3.391Mvalidframes,.368GBNPZ,finalmanifestverified. Addedalltrain mode/strictweights-onlyinitializer+provenance/freshoptimizer,resumecontractpreserved;tests unrun. Planmixed1000→Ahri4000 versusAhri1000→Ahri4000 samephaseLR. Conversiononly,no transfer quality/promotion. |
 
 | BC-V2-TRANSFER-RECIPE-QUEUED | 2026-10-25 |13139 tests→13140 mixed512pretrain1k;13141 Ahri1kdonor13096→4kcontrol;13142 mixed1k→4kafter13140. Source75ecb810,phase2lr1e-4/freshoptimizer/same470train/71val,5000totalstepsboth. No80/20 finetune/allchamp proof/calfit yet. Private snapshots/NFS/no-requeue;tests/quality pending,no promotion. |
+
+| BC-V2-TRANSFER-INITIALIZER-TESTS-PASS | 2026-10-25 |13139 actual log98passed/40.09s,weights-only/provenance/architecture/tree/shape checks pass.13140/13141 gatescleared,13142 after13140. No transfer-quality claim/new jobs/promotion. |
