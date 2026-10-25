@@ -1066,3 +1066,13 @@ b64/seed0, angle candidate plus only3x cast-aim weight, no smoothing or history
 removal, both greedy/sampled eval. This tests weighting on the improved target
 parameterization; angle-only remains the reference. Private staging/no-requeue/
 append/24GB/1h. Await13082 sampled angle,13084–13087; calibration and B unused.
+
+**Sampled angle13082 COMPLETED/0**,71val/T1/seed0: Q eventF1.1449 versus grid.1498,
+E.0468 versus.0532,movement.8020vs.8064; no timing rescue. On exact correct-button
+frames, Q angle within10 is26/49, E0/1: tiny E support makes0% uninformative.
+Implemented matched-event direction agreement using separate predicted/received
+frame indices and stable contiguous-valid matching; no hit-rate claim. Added
+visible-opponent direction heuristic as diagnostic only, never BC supervision.
+Assessor now persists checkpoint hash and model contract for future provenance.
+New matching/angle-wrap/gap regression tests pending execution. No promotion;
+13084–13087 timing/weighting interactions remain registered.

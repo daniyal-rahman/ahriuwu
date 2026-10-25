@@ -1,5 +1,6 @@
 """Assess a saved event learner without retraining or tuning on scored matches."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,7 +23,8 @@ def main():
     a = p.parse_args()
     if jax.default_backend() != 'gpu':
         raise RuntimeError('assessment requires a Slurm GPU allocation')
-    saved = msgpack_restore(a.checkpoint.read_bytes())
+    checkpoint_bytes = a.checkpoint.read_bytes()
+    saved = msgpack_restore(checkpoint_bytes)
     contract = json.loads(saved['contract_json'])
     policy = EventPolicy(EventPolicyConfig(**contract['config']))
     games = load_event_games(a.dataset, split=a.split, champion=contract['champion'])
@@ -36,7 +38,9 @@ def main():
                              prediction_dir=a.output/'predictions')
     (a.output/'validation.json').write_text(json.dumps(reports, indent=2))
     (a.output/'results.json').write_text(json.dumps(dict(passed=True, split=a.split,
-        checkpoint=str(a.checkpoint), step=saved['step'], sample_seed=a.sample_seed,
+        checkpoint=str(a.checkpoint), checkpoint_sha256=hashlib.sha256(checkpoint_bytes).hexdigest(),
+        dataset_manifest_sha256=hashlib.sha256((a.dataset/'manifest.json').read_bytes()).hexdigest(),
+        model_contract=contract, step=saved['step'], sample_seed=a.sample_seed,
         perspectives=len(reports), emitter='greedy' if a.sample_seed is None else 'categorical-temperature1',
         limits='offline replay-conditioned history, not closed-loop play; no calibration fitted here'), indent=2))
 
