@@ -1475,3 +1475,22 @@ actual dataset manifest fingerprints match. Rate-fitted T1/.7/.5 mean castF1
 reference4k .27364,selection-set only;normal-performance cost versus missing-
 history benefit remains a tradeoff,not an established winner. Await13118
 frozen71val;no new jobs or policy promotion on these receipts.
+
+**Dropout calibrated13118 COMPLETED/0**,71val/4k. Reference→dropout Q/W/E/RF1
+.3456/.2885/.2318/.2368→.3484/.2732/.2423/.1898,mean.27568→.26344.
+Pointer76.20%,Q/Eaim6.13/9.93deg. Keep both4k checkpoints:reference stronger
+normalcastmean,dropout more tolerant of missinghistory;no overall winner or
+deploy promotion. Summary calibrated-dropout03-summary-13118.json.
+**Future-state auxiliary experiment implemented**,optionalweight(default0),
+existing heads/losses now get replay-derived own-position+2s,visible opponent
+position+1s,ownHP+3s targets from cached delayed observation rows. Targets never
+enter INPUTS. Position grid24x14 spans±3000 lane-units relative toCURRENT own
+anchor. Entire horizons masked on invalidscope/death/cadencegaps/nonfinite
+positions;enemy additionallyrequirescontinuousvisible sameunit/positiveHP.
+Conservative adjacentposition jump>1500units masks discontinuities (heuristic,
+also excludes some long dashes). HP requiresfinite[0,1]acrosshorizon. Horizons
+are observation-relative (timestamps lag decisions100ms);not target-timeoracle
+inputs. Static normalization constants only,no sim supervision/data regeneration.
+Tests for anchors/gaps/deaths/visibility/identity/missingHP and loss scale/gradient
+added,unrun. Next CPUgate then matched4k lambda.1 on reference(no dropout) to
+isolate auxiliary effect. No policy promotion.

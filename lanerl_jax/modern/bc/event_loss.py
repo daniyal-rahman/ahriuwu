@@ -84,7 +84,10 @@ def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.,
             delta = lg.own_hp_future - jnp.nan_to_num(batch['own_hp_future'])
             huber = jnp.where(jnp.abs(delta) <= .1, .5 * delta ** 2, .1 * (jnp.abs(delta) - .05))
             aux += batch['own_hp_future_valid'] * huber
-            total += auxiliary_weight * (w * aux).sum() / denom
+            info['auxiliary_loss_mass'] = auxiliary_weight * (w * aux).sum() / denom
+            for name in ('own_future', 'enemy_future', 'own_hp_future'):
+                info[name+'_count'] = (w * batch[name+'_valid']).sum()
+            total += info['auxiliary_loss_mass']
         info['loss'] = total
         return total, info
     return loss
