@@ -894,3 +894,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-4000-CALIBRATION-FIT | 2026-10-25 |13104/13105 passed51cal,step4000,checkpoint4b3f302f…/manifest consistent. Rate-fitted T1/.7/.5 calibration castF1.19013/.24042/.27364;T.5 frozen. Selection-set only;13106 val gate cleared,13107 bounded8k registered. No promotion/new jobs. |
 
 | BC-V2-8000-RESULT-AND-CALIBRATION | 2026-10-25 |13107 completed8k/3539.94s,raw valcastmeanF1.190→.215,Q/W/E improve,Rflat;aim6.45/10.65deg,attackF1.472. E/RnearAP regresses,so no uniform ranking/policy claim.13108 calibration51+train71 diagnostic→13109 fit→13110 frozenval registered;wait4k/8k calibrated and train-gap evidence before further duration. |
+
+| BC-V2-CALIBRATED-4000-VAL | 2026-10-25 |13106 passed71val/frozenfit4k:Q/W/E/RF1.346/.289/.232/.237,mean.276 versus1k.176;attackF1.481,move.835. Rates.954/.933/.955/.854,teacher aim6.67/10.67deg. Stronger offline candidate,still belowcastF1.5;exactjointR0,not hit/closed-loop proof. Await8k13108–13110,no new jobs/promotion. |

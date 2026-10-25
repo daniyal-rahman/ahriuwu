@@ -1351,3 +1351,15 @@ first71train diagnostic at8k,fit ownT/bias,scorefrozen71val. No retraining/B/RL;
 private deep copies/reserve,NFS,no-requeue/append,1h/20min/1h. Await8k train-gap
 and calibrated4k13106/8k13110 results before more duration; do not blindly
 double training while ranking gains mix.
+
+**Calibrated4k validation13106 COMPLETED/0**,actual metadata71val/step4000,
+checkpoint consistent with13105 frozen fit. Calibrated1k→4k Q/W/E/R eventF1
+.2298/.1690/.1033/.2028→.3456/.2885/.2318/.2368;macro.17621→.27568.
+Cast emitted ratiosQ/W/E/R.954/.933/.955/.854×human. AttackF1.3889→.4811,
+moveF1.7986→.8349;teacherpointer68.62→75.64%,movewithin2 10.21→17.70%,
+Q/E mean match median8.90/14.28→6.67/10.67deg. Exact-frame joint-known Q/E
+angle success5.28%/.846%,not hit rates or tolerant joint correctness;R grid
+joint exact0 persists. Better checkpoint candidate but castF1 still below.5,
+replay-conditioned history/closed-loop gap remains. Summary calibrated4000-summary-13106.json.
+Compare calibrated8k13110 and train71 readout13108 before more duration;
+13108–13110 remain registered. No new jobs/policy promotion on this receipt.
