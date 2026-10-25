@@ -976,3 +976,18 @@ tests: CPU placement lacked `/scratch` (mktemp failure). Replacement13071 is
 registered with explicit `--nodelist=desktop`, same immutable1ee090a0source,
 limits and validation script; no test failure or code change inferred. Await
 13071 callback; do not resubmit13068 again.
+
+
+## GPU event-fix diagnostic13061 inspected (2026-10-24)
+
+COMPLETED/0, source196698a8/event-v2; checkpoint parameter/optimizer roundtrip
+exact,32step control/resume maxabs1.16847e-4/relativeL2 1.50532e-5 within declared
+1e-3/1e-4bounds (not bitwise resumed training). Independent random-label
+validation11.2714% over12962frames vs11.1111%chance. Scratch cleanup verified.
+
+Behavior remains trivial: all12962validation predictions arecontinue;73.3143%
+accuracy equals9503continue labels/12962.0move/attack/QWER recall and0actual joint
+target success. History-off/stale probes also emit onlycontinue; NLL raw0.75901,
+off0.76173,stale0.75975. These32updates validate wiring/numerics, not competence
+or history usefulness. No broad baseline/promotion from this result. Source-v3
+repair validation13071 remains separately registered/pending receipt.
