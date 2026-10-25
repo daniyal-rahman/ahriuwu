@@ -962,3 +962,17 @@ Grid-target evaluation now also converts predicted cells through the shared stat
 camera projection to direction error against saved replay angles. This supplies
 angular metrics for a fair grid-versus-angle comparison; no simulator rollout or
 new state source. Direction support is reported explicitly; inputs unchanged.
+
+**Ablation/emitter validation13076 registered**, source73fe070d, CPU2/8GB/15min,
+full suite including new label/loss isolation and sampled-target chunk/RNG tests.
+Three GPU jobs gated afterok13076, same immutable source/private staging:
+**13077** re-assesses frozen baseline greedy plus categorical T1/seed0 on71val,
+exports prediction summaries and direction metrics, no fitting or retraining.
+**13078** Ahri Q/E angle-head ablation, original valid-label support unchanged.
+**13079** original grid with3x cast-aim loss only, button loss unchanged.
+Both learning arms match baseline1000updates/b64/window256/burn32/seed0/schedule;
+no angle+weight combination yet.51calibration and B untouched. No promotion.
+All no-requeue/append, logs/checkpoints NFS; runtime training measured11min for
+first baseline including startup, plus evaluation/queue. Paired13075 remains
+registered, no result inspected yet. Baseline summary saved to
+`v2-20261024/baseline-summary-13074.json`; await registered callbacks.
