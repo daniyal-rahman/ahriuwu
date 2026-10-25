@@ -1598,3 +1598,8 @@ frames while keeping draw stream/history inputs unchanged;no retraining or
 calibration. Compare to saved fullstate13103/val-4000;export predictions for
 early-versus-late window analysis if needed. CPU15min/GPU1h,privatecopies/
 reserve,NFS,no-requeue/append. Tests/quality pending;awaitcallbacks,no promotion.
+
+**Memory-reset testgate13130 COMPLETED/0:** actual NFS log96passed/40.28s,
+including GRU-reset boundary and unchanged emitterPRNG sequence regression.
+Afterok13131 evaluation gate cleared;memory-effect quality result pending.
+Awaitregistered callback,no new jobs or policy promotion.

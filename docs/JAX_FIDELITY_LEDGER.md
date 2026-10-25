@@ -942,3 +942,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-NEXT-EVENT-VAL-AND-MEMORY-PREP | 2026-10-25 |13129 passed71val:calcastmean.202 versus.276ref,allcastF1lower;rejectthisconfiguration. Added optional GRU-only periodic evalreset with continuous emitterRNG/defaultfullstate;regression unrun,next frozen256reset diagnostic. No statecarry training/closed-loop/promotion. |
 
 | BC-V2-MEMORY-RESET-QUEUED | 2026-10-25 |13130 fullsuite→13131 frozen4k GRUreset256 registered,sourcee0322297,same71val/T1/sample0,PRNG/historyinputs preserved. Compare savedfullstate13103,not statecarry training. Tests/quality pending,private staging/NFS/no-requeue,no promotion. |
+
+| BC-V2-MEMORY-RESET-TESTS-PASS | 2026-10-25 |13130 actual log96passed/40.28s,resetboundary/RNGstream regressionpasses.13131 dependencycleared,no memory-quality claim/new jobs/promotion. |
