@@ -1050,3 +1050,12 @@ of a wrong import in a historical job. Existing newer XPSrecordings located;
 Jayce transfer receipt acceptance not_evaluated. Next finish integration matrix
 and independently audit a short recorded sequence. No jobs/clientactions or
 production edits; evidence under shared/modern-bc/review-20261025.
+
+
+Initial integration matrix completed against frozenf10e4f42. Eight key functions
+are AST-identical to initial5a369951review, including eventorder, sourcepositions,
+damageattribution, windows, loader, labels and history; pointer and memorization
+functions changed but the specific old mask/gate defects remain by inspection.
+Running document contains evidence and avoids calling this a regression. Newer
+experiments must be preserved/reviewed when integrating corrections. Next evidence
+selection/source-trace work uses existing XPSrecordings, no new capture job yet.

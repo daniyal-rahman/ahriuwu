@@ -15,8 +15,8 @@ Do not start this comparison or change target representations during source revi
 
 | Step | State | Evidence required to advance |
 |---|---|---|
-| 1. Reconcile current code, prior fixes, active paths and evidence | In progress | Immutable ref inventory, pipeline map, fix-integration matrix |
-| 2. Independently validate decoder/reconstruction | Next | Source-qualified semantics plus synchronized recording comparisons; errors/missingness by event/state |
+| 1. Reconcile current code, prior fixes, active paths and evidence | Initial inventory complete | Immutable ref inventory, pipeline map, fix-integration matrix |
+| 2. Independently validate decoder/reconstruction | In progress: evidence selection | Source-qualified semantics plus synchronized recording comparisons; errors/missingness by event/state |
 | 3. Trace source through tensorization | Planned | Named field provenance, receipt cutoffs, identity/coordinate/mask checks and human-readable example traces |
 | 4. Audit trainer/evaluator and research claims | Planned | Mask/normalization/sampling/reset/resume checks; covered tiny-set memorization and nontrivial heldout behavior |
 | 5. Review simulator rules and JAX semantics | Planned | Independent mechanic evidence, phase/reset/capacity checks, eager/compiled/batched consistency |
@@ -40,6 +40,27 @@ Do not start this comparison or change target representations during source revi
   the helper does not bind imports to the requested source; it does not prove an
   existing frozen job imported incorrect modules. Repair must account for the
   loader's transitive local imports, not merely change sys.path order.
+
+## Fix-integration matrix at the pinned production baseline
+
+Function AST comparisons bind unchanged logic to the initial reviewed source
+5a369951; dependency/behavior claims still use the specific tests/receipts below.
+Evidence: [integration-functions.json](/mnt/nfs/shared/modern-bc/review-20261025/integration-functions.json).
+
+| Area | Current production evidence | Isolated review status |
+|---|---|---|
+| Native event order/motion provenance | `_actions` unchanged from initial review | Fixed; raw audit and regressions passed |
+| Position qualification/lifetime | `_read_lane_units` unchanged | Conservative source-v3fix;24raw conversions/94tests passed |
+| CS/damage attribution | `_damage_notices`/`_last_hits` unchanged | Source-v3missingness/cutoff fix validated on24perspectives |
+| Supervision windows | `event_windows` unchanged; trainer still calls without burn-aware stride | Overlapping windows verified on828perspectives;0postburn omissions/duplicates |
+| Event/history consistency | `label_events`/`previous_received_events` unchanged | Shared interpretation/ambiguity/death history fixed and tested |
+| Artifact/split enforcement | `load_event_games` unchanged | Hash/identity/match-split checks implemented and tested |
+| Pointer eligibility | `targets` changed for angle experiment but still masks padding only | Qualified attack/GarenR eligibility implemented and tested |
+| Strict memorization acceptance | Selector/aggregate strict gates manually rechecked; no per-button target-success requirement | Still open; old tiny fixture not evidence of all-mode learning |
+
+This is an integration gap, not evidence the other branch regressed a merged fix.
+New experiment code requires reconciliation when carrying fixes forward; do not
+blindly replace the newer policy/trainer with an older reviewed snapshot.
 
 ## Pipeline map being verified
 
@@ -69,8 +90,9 @@ Do not start this comparison or change target representations during source revi
 
 ## Recording evidence and next concrete actions
 
-1. Finish a fix-integration matrix against the pinned production baseline; inspect
-   newer next-event/history/angle experiments separately from the old reviewed paths.
+1. Initial fix-integration matrix completed above. Next prepare a compatible
+   integration of reviewed corrections alongside newer next-event/history/angle
+   experiments; the newer experiments have not themselves been cleared.
 2. Verify existing recording receipts before new XPS capture. Newer coupled clips
    under `/mnt/nfs/datasets/lol_replay_probes/20261014-xps/coverage-ten-001/`
    have per-image brackets/camera records. Jayce receipt names NA1-5650853252,
