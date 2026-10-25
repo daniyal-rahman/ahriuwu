@@ -1100,3 +1100,15 @@ paired-opponent direction, global fallback if absent. No heuristic labels or
 forced targeting, no extra parameters, replay observations unchanged. Tests for
 rotation/probability support and missing-opponent equivalence added, unrun.
 No promotion; pending13084–13087 remain separate controlled experiments.
+
+**Relative-coordinate tests13089 registered**,source8c668da2,CPU2/4GB/15min,
+full suite including mass/full-support rotation, absent-opponent equality and
+sampled-target compatibility. **Relative-angle learner registered afterok13089**:
+angle-only reference plus full-circle observed-opponent-relative coordinates,
+same1000/b64/seed0/draws/schedule, no smoothing/weight/history changes, greedy+
+sampled71val assessment. No extra trainable parameters, no new source features
+or labels; eligible target support unchanged. No-requeue/append/private copies.
+Await validation/model receipts plus13084–13087; no complete-policy promotion.
+Relative-coordinate learner job ID13090. **Tests13089 COMPLETED/0:**
+83 passed38.62s. Dependency afterok13089 cleared; no learned relative
+head quality result yet. This receipt is a validation result, not model promotion.
