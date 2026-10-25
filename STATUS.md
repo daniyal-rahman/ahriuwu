@@ -1660,3 +1660,16 @@ Planned recipe:otherchamp512 pretrain1000→Ahri4000 at1e-4 versus existing
 Ahri-only1000donor13096→Ahri4000 atsame1e-4. Bothrecipe total5000updates;
 metadata is qualifiedrawmode/CDonly,not completeabilitydescriptors. No
 pretraining run/transfer benefit or policy promotion claimed yet.
+
+**Transfer initializer gate13139 and pilot chain registered**,source75ecb810.
+13140 afteroktests:512otherchampviews/alltrain,1000/b64/seed0/smooth2/relative,
+noeval;donor only,not target-quality claim.13141 afteroktests:Ahri phase2 from
+existingAhri1000donor13096;13142 afterok13140:Ahri phase2 frommixed1000.
+Bothphase2 use4000/b64/seed0/window256/burn32/lr1e-4/freshoptimizer/same
+targetdata470train/71val/normalhistory/noaux/nodropout;bothrecipe5000total
+updates. Sameinitial phase1LRschedule and existingmatchedcontrol reused;
+phase1data/windowdraw distribution differs intentionally. Not all172champ or
+metadata-completeness proof;no 80/20 mixed fine-tune yet. Calibration remains
+separate/reserved for ownfits afterresults. Source/data/donor deepcopies,NFS
+checkpoints,20GiBreserve,CPU15min/GPU1h each,no-requeue/append. Awaitgate/run
+callbacks,no policy promotion.
