@@ -832,3 +832,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-CONVERT-PASS | 2026-10-24 |13043 passed70tests/24perspectives/158037valid frames,119.44s conversion; complete immutable fixture manifest. New sharded target converter and deterministic whole-match calibration reservation prepared. Await GPU13044; no v2 quality claim. |
 
 | BC-V2-TARGET-CONVERT-QUEUED | 2026-10-24 |13045 array4/max2,source5956656a; finalizer13047 afterok.828target perspectives, Ahri470/51/71 andGaren185/25/26 train/calibration/val, frozenplan5f975d01bdcc, match-wide isolation. Full suite shard0, per-game decoder/parity/mask gates. New bounded learner/evaluator unrun; await13044 gradient result. |
+
+| BC-V2-GRADIENT-PASS | 2026-10-24 |13044 passed finite gradients/updates and loss4.5477→1.5281 at200/177.87s,6.903Mparams; aim7.7206→2.8845. Button67.89%,NLL0.6548 is not strict memorization. Longer strict gate added.13049 registered32-step learner/control-vs-resume at16/full-replay evaluator smoke. No held-out quality claim. |

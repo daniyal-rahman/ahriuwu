@@ -814,3 +814,14 @@ Complete manifest exposed only after every shard passes. ETA35–45min conversio
 from119s/24 sample, excluding contention/queue. No B decoding, no new supervision.
 Bounded v2 learner implemented with exact global-step sampling/resume budget,
 checkpoint-on-signal and raw stateful validation; still unrun, no quality claim.
+
+
+**V2 gradient13044 COMPLETED/0:**6,903,134 parameters,200 actual GPU updates,
+177.87s. Loss4.5477→1.5281, aim CE7.7206→2.8845, finite nonzero gradients,
+parameter delta5.1869. Button accuracy67.89%, NLL0.6548: passes basic wiring
+but does not yet establish strict memorization. Added strict98%/0.05 button gate
+for longer bounded fixed-window check. No held-out policy quality claim.
+**Learner/resume/eval smoke13049 registered**, source6f114254,32 total steps,
+resume at16 and compare final weights to uninterrupted control, then one full
+held-out fixture replay through stateful evaluator. GPU20GB/30min/private staging.
+Target conversion13045 and finalizer13047 remain registered; await callbacks.

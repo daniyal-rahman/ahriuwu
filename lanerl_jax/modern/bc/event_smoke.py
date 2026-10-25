@@ -23,6 +23,7 @@ def main():
     p.add_argument('--dataset', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--steps', type=int, default=200)
+    p.add_argument('--strict', action='store_true', help='require button memorization, beyond gradient wiring')
     a = p.parse_args()
     if a.steps < 1:
         p.error('steps must be positive')
@@ -91,7 +92,9 @@ def main():
     temp.replace(a.output / 'checkpoint.msgpack')
     # This is a wiring/memorization gate, not a held-out quality or leakage result.
     passed = not stopping and float(final) < .7 * initial and delta > 0 and rows[0]['grad_norm'] > 0
-    report = dict(passed=passed, status='interrupted' if stopping else 'complete', steps=step,
+    if a.strict:
+        passed = passed and float(final_info['button_nll']) < .05 and float(final_info['button_accuracy']) > .98
+    report = dict(passed=passed, strict=a.strict, status='interrupted' if stopping else 'complete', steps=step,
                   initial_loss=initial, final_loss=float(final), parameter_delta=delta, parameters=n_params,
                   initial={k: float(v) for k, v in initial_info.items()},
                   final={k: float(v) for k, v in final_info.items()}, curve=rows,
