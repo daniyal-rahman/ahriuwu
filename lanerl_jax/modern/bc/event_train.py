@@ -26,6 +26,25 @@ def save(path, value):
     temp.replace(path)
 
 
+def initialize_parameters(path, cfg, template):
+    """Transfer weights only; a new phase always starts a fresh optimizer."""
+    raw = path.read_bytes()
+    saved = serialization.msgpack_restore(raw)
+    previous = json.loads(saved['contract_json'])
+    if EventPolicyConfig(**previous['config']) != cfg:
+        raise ValueError('initialization changes the policy architecture')
+    expected = serialization.to_state_dict(template)
+    if jax.tree.structure(expected) != jax.tree.structure(saved['params']):
+        raise ValueError('initialization parameter structure mismatch')
+    if any(np.shape(a) != np.shape(b) for a, b in
+           zip(jax.tree.leaves(expected), jax.tree.leaves(saved['params']))):
+        raise ValueError('initialization parameter shapes mismatch')
+    params = serialization.from_state_dict(template, saved['params'])
+    return params, dict(checkpoint_sha256=hashlib.sha256(raw).hexdigest(),
+                        step=int(saved['step']), source_contract=previous,
+                        optimizer='fresh; donor optimizer state is not loaded')
+
+
 def main():
     p = argparse.ArgumentParser(__doc__)
     p.add_argument('--dataset', type=Path, required=True)
@@ -54,6 +73,7 @@ def main():
     p.add_argument('--evaluate', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--eval-limit', type=int, default=0)
     p.add_argument('--resume', type=Path)
+    p.add_argument('--initialize-from', type=Path)
     a = p.parse_args()
     if a.steps < 2 or min(a.batch_size, a.save_every, a.window) <= 0 or not 0 <= a.burn < a.window:
         p.error('invalid update/window/batch budget')
@@ -67,6 +87,10 @@ def main():
         p.error('auxiliary weight must be finite and nonnegative')
     if a.next_event_horizon < 0 or (a.next_event_horizon and a.smoothing_radius):
         p.error('next-event prediction requires nonnegative horizon and no cast smoothing')
+    if a.resume and a.initialize_from:
+        p.error('resume and initialize-from are mutually exclusive')
+    if a.champion == 'all' and a.evaluate:
+        p.error('mixed pretraining requires --no-evaluate; assess target fine-tuning separately')
     if jax.default_backend() != 'gpu':
         raise RuntimeError('training requires a Slurm GPU allocation')
     a.output.mkdir(parents=True, exist_ok=False)
@@ -86,10 +110,8 @@ def main():
                     ahri_angle=a.ahri_angle, cast_aim_weight=a.cast_aim_weight)
     if a.previous_event_dropout:
         contract['previous_event_dropout'] = a.previous_event_dropout
-    contract_json = json.dumps(contract, sort_keys=True)
-    (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     started = time.monotonic()
-    games = load_event_games(a.dataset, split='train', champion=a.champion, smoothing=smoothing)
+    games = load_event_games(a.dataset, split='train', champion=None if a.champion == 'all' else a.champion, smoothing=smoothing)
     if a.ahri_angle:
         ahri_angle_targets(games)
     if a.auxiliary_weight:
@@ -123,6 +145,14 @@ def main():
     batch = batch_at(0)
     params = policy.init(jax.random.key(a.seed), *(batch[k][:, 0] for k in INPUTS),
                          policy.initial_carry((a.batch_size,)), target_button=batch['button'][:, 0])
+    if a.initialize_from:
+        params, contract['initialization'] = initialize_parameters(a.initialize_from, cfg, params)
+    if a.resume:
+        resumed_contract = json.loads(serialization.msgpack_restore(a.resume.read_bytes())['contract_json'])
+        if 'initialization' in resumed_contract:
+            contract['initialization'] = resumed_contract['initialization']
+    contract_json = json.dumps(contract, sort_keys=True)
+    (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     warmup = min(a.warmup, max(a.steps//10, 1))
     schedule = optax.warmup_cosine_decay_schedule(0., a.lr, warmup, a.steps, end_value=.1*a.lr)
     tx = optax.chain(optax.clip_by_global_norm(.5), optax.adam(schedule, eps=1e-5))

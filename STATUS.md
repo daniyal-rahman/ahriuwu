@@ -1646,3 +1646,17 @@ onNFS. Metadata remains qualifiedrawmode/cooldown references,not completed
 fullabilityannotations. Pilot limitsconversion/memorybeforeallchamp expansion.
 All-champion training/warmstart path still unimplemented;conversion is not
 pretraining. Await conversion gates;then build pretrain→Ahri recipe comparison.
+
+**Transfer conversion13134 all4 +finalizer13137 COMPLETED/0**,each128views,
+721–758s/shard.512perspectives/499matches,3391158validframes,.36768GBNPZ;
+allplannedfiles/shardhashes verified and finalmanifest512 confirmed. Dataset
+transfer-pilot-events-f2c00b915126,onlyAtrain/non-globalcal;B untouched.
+**Mixed pretraining/weights-only initialization implemented**,championall requires
+noeval and loads alltrainperspectives;target-only fine-tuning remainsnormal.
+Initializer validates normalizedsavedcfg/tree/shapes,loadsparams only,records
+donorhash/step/sourcecontract;freshoptimizer/schedule. Resume retains donor
+provenance while enforcingremainingcontractexactly. Tests added/unrun.
+Planned recipe:otherchamp512 pretrain1000→Ahri4000 at1e-4 versus existing
+Ahri-only1000donor13096→Ahri4000 atsame1e-4. Bothrecipe total5000updates;
+metadata is qualifiedrawmode/CDonly,not completeabilitydescriptors. No
+pretraining run/transfer benefit or policy promotion claimed yet.
