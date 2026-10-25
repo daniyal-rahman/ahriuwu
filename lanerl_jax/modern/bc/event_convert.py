@@ -12,7 +12,7 @@ import time
 import numpy as np
 
 from . import replay as R, convert as C
-from .event_dataset import CONTRACT, convert_events, save_events
+from .event_dataset import CONTRACT, convert_events, save_events, artifact_hashes
 from .event_inputs import ENTITY_DIM, SELF_DIM, GLOBAL_DIM
 
 
@@ -54,7 +54,8 @@ def main():
             for suffix in ('.npz', '.json', '.events.json.gz'):
                 assert (a.output/'games'/(name+suffix)).is_file()
         write_json(a.output/'manifest.json', dict(passed=True, contract=CONTRACT, plan_sha256=digest,
-            games=rows, reports=reports, shards=parts, limits='target-only replay events; no policy-quality gate'))
+            games=rows, reports=reports, shards=parts,
+            artifacts={name: artifact_hashes(a.output/'games'/name) for name in names}, limits='target-only replay events; no policy-quality gate'))
         print('FINALIZED', a.output, len(rows), flush=True)
         return
     if any(x is None for x in (a.reference, a.catalogs, a.decoder, a.decoder_hashes, a.scratch)):

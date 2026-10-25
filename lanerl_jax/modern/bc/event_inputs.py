@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .events import BUTTON_INDEX as B
+from .events import BUTTON_INDEX as B, modeled_events
 from .history import received_cast_ages
 
 
@@ -22,24 +22,11 @@ def encode_ages(seconds):
     return np.log1p(np.minimum(seconds, 600.)) / np.log1p(600.)
 
 
-def previous_received_events(t, actions, own_xy, slot_ids, axis, normal, scale=3000.):
+def previous_received_events(t, actions, own_xy, slot_ids, axis, normal, scale=3000., reset_times=()):
     """Previous modeled receipt at/before each observation's timestamp, not current label."""
     t, own_xy, slot_ids = np.asarray(t), np.asarray(own_xy), np.asarray(slot_ids)
-    events, active = [], None
-    for a in actions:
-        b = None
-        if a.kind == 'path' and a.n_waypoints > 1:
-            b, active = B['move'], None
-        elif a.kind == 'attack':
-            if a.target != active:
-                b = B['attack']
-            active = a.target
-        elif a.kind == 'cast' and a.slot in range(4):
-            b = B['q'] + a.slot
-        elif a.kind == 'cast' and a.slot == 13:
-            b, active = B['recall'], None
-        if b is not None:
-            events.append((a.t, b, a.target, a.point))
+    events = [(actions[i].t, b, actions[i].target, actions[i].point)
+              for i, b in modeled_events(actions)]
     features = np.full((len(t), len(B) + 3), np.nan, np.float32)
     target_match = np.zeros_like(slot_ids, np.float32)
     if not events:
@@ -48,8 +35,12 @@ def previous_received_events(t, actions, own_xy, slot_ids, axis, normal, scale=3
     if not np.isfinite(times).all() or (np.diff(times) < 0).any():
         raise ValueError('received events must be finite and ordered')
     index = np.searchsorted(times, t, side='right') - 1
+    reset_times = np.asarray(reset_times, np.float64)
+    reset_index = np.searchsorted(reset_times, t, side='right') - 1
     for k in np.flatnonzero(index >= 0):
         tc, b, target, point = events[index[k]]
+        if b is None or (reset_index[k] >= 0 and tc < reset_times[reset_index[k]]):
+            continue
         features[k, :len(B)] = 0.
         features[k, b] = 1.
         features[k, -1] = encode_ages(t[k] - tc)

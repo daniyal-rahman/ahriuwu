@@ -5,7 +5,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from .events import BUTTON_INDEX as B
+from .events import BUTTON_INDEX as B, modeled_events
 from .labels import screen_cell
 
 NO_TARGET, UNIT_TARGET, POINT_TARGET, ANGLE_TARGET = range(4)
@@ -48,35 +48,23 @@ def label_events(t, actions, own_observed_xy, slot_ids, axis, normal, valid, me)
     clipped = np.zeros(len(t), bool)
     source = np.full(len(t), -1, np.int64)
     selected, bins = {}, {}
-    active_attack = None
-    if any(actions[i].t < actions[i - 1].t for i in range(1, len(actions))):
-        raise ValueError("action receipts must be time ordered")
-    for i, action in enumerate(actions):
+    for i, event_button in modeled_events(actions):
+        action = actions[i]
         if not np.isfinite(action.t):
             raise ValueError("nonfinite action receipt")
         k = int(np.floor((action.t - t[0]) / .1 + 1e-9))
-        kind, rank, b = None, -1, 0
-        if action.kind == "path":
-            if action.n_waypoints > 1:
-                active_attack = None
-                kind, rank, b = "move", 0, B["move"]
-        elif action.kind == "attack":
-            if action.target != active_attack:
-                kind, rank, b = "attack", 1, B["attack"]
-            active_attack = action.target
-        elif action.kind == "cast":
-            if action.slot in range(4):
-                kind, rank, b = "cast", 3, B["q"] + action.slot
-            elif action.slot == 13:
-                kind, rank, b = "recall", 3, B["recall"]
-                active_attack = None
-            else:
-                kind, rank = "unsupported", 2
-        if not 0 <= k < len(t) or kind is None:
+        kind = 'move' if action.kind == 'path' else action.kind
+        if event_button == B['recall']:
+            kind = 'recall'
+        rank = {'path': 0, 'attack': 1, 'cast': 3}[action.kind]
+        if event_button is None:
+            kind = 'unsupported'
+            rank = 2 if action.kind == 'cast' else rank
+        if not 0 <= k < len(t):
             continue
         bins.setdefault(k, []).append(kind)
         if k not in selected or rank >= selected[k][0]:
-            selected[k] = (rank, i, b, kind)
+            selected[k] = (rank, i, event_button or 0, kind)
     for k, (_, i, b, kind) in selected.items():
         a = actions[i]
         source[k], button[k] = i, b

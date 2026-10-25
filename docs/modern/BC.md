@@ -1381,3 +1381,36 @@ history even when scoring actual-button targets, so this is offline conditional
 assessment, not closed-loop rollout evidence. Calibration, broad target conversion,
 training orchestration, shuffle control and the staged ablations remain to build.
 See STATUS and the fidelity ledger for subsequent receipts.
+
+
+### Review corrections: event contract v2 (2026-10-24)
+
+`replay-lane-events-v2` retains native update/event indices and motion flags.
+Equal-clock records follow native update order. Special/flagged motion and
+one-point paths are ambiguous input evidence, not move/stop keys. They invalidate
+that frame's movement supervision and previous-event memory; a subsequent
+same-target attack execution remains ambiguous until a qualified order or target
+change. Labels/history share this interpretation. Death clears previous-order
+history and recurrent carry; confirmed cast ages remain receipt evidence.
+
+Default training windows overlap by burn length, so each frame after the first
+burn interval has exactly one supervised window. Sampling stays stateless by
+update; checkpoints bind the new sampling contract. The converter verifies reused
+self/global fields as well as entity/padding parity. Final manifests bind hashes
+of NPZ, metadata and raw event files; loaders verify identities and match splits.
+Old event-v1 sidecars/checkpoints need explicit reconversion/new-run provenance.
+
+Known attack candidates are enemy champions/minions/turrets; Garen R candidates
+are enemy champions (received-target evidence from source audit13041). Unknown
+ability eligibility stays permissive. Empty known-pointer sets suppress that
+button at emission, while missing targets still preserve training button labels.
+Grid cells under the canonical minimap are excluded; Gaussian targets renormalize
+over executable cells. Co-movement order uses native order at equal times without
+inventing a receipt-time delta.
+
+Target coverage/clipping is reported beside conditional accuracy. Exact-frame
+joint scores remain diagnostics; tolerant event matches also score stable unit
+identity or world-projected points across the two delayed camera anchors. This
+repairs metric consistency without asserting that clipped point targets are
+accurate labels or promoting an unqualified directional spell mode. Ordinary
+re-clicks are not collapsed by the review correction.

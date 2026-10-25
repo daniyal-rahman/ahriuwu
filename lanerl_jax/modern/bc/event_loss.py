@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from .event_labels import UNIT_TARGET, POINT_TARGET, ANGLE_TARGET
 from .events import BUTTON_INDEX as B, BUTTONS
 from .targets import gaussian_target
+from .event_targets import pointer_candidates, grid_candidates
 
 
 INPUTS = ('entities', 'pad', 'self', 'global_', 'entity_ids', 'own_id', 'enemy_id',
@@ -29,7 +30,9 @@ def make_event_forward(policy):
 def grid_ce(logits, x, y, sigma=1., nx=96, ny=54):
     qx, qy = gaussian_target(x, nx, sigma), gaussian_target(y, ny, sigma)
     lp = jax.nn.log_softmax(logits, -1).reshape(logits.shape[:-1] + (ny, nx))
-    return -jnp.einsum('...y,...x,...yx->...', qy, qx, lp)
+    target = qy[..., :, None] * qx[..., None, :] * grid_candidates(nx, ny)
+    target /= jnp.maximum(target.sum((-2, -1), keepdims=True), 1e-30)
+    return -(target * lp).sum((-2, -1))
 
 
 def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.):
@@ -53,6 +56,9 @@ def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.)
                         jnp.where(batch['aim_mode'] == ANGLE_TARGET, angle, point))
         w = batch['weight']
         target_w = w * batch['aim_valid'] * (batch['aim_mode'] != 0)
+        candidates = pointer_candidates(batch['entities'], batch['pad'], batch['own_id'], batch['button'])
+        legal = jnp.take_along_axis(candidates, jnp.maximum(batch['target_row'], 0)[..., None], -1)[..., 0]
+        target_w *= (batch['aim_mode'] != UNIT_TARGET) | ((batch['target_row'] >= 0) & legal)
         denom = jnp.maximum(w.sum(), 1.)
         total = (w * button).sum() / denom + (target_w * aim).sum() / denom
         info = dict(button_nll=(w * button).sum() / denom,
@@ -69,7 +75,7 @@ def make_event_loss(policy, *, co_move_weight=0., auxiliary_weight=0., sigma=1.)
             extra = ce(lg.co_move, positive.astype(jnp.int32))
             extra += batch['co_move_valid'] * grid_ce(lg.co_move_grid, batch['co_move_x'], batch['co_move_y'], sigma,
                                                       policy.cfg.grid_x, policy.cfg.grid_y)
-            extra += batch['co_move_valid'] * ce(lg.co_move_order, (batch['co_move_delta'] >= 0).astype(jnp.int32))
+            extra += batch['co_move_valid'] * batch['co_move_order_valid'] * ce(lg.co_move_order, batch['co_move_after'].astype(jnp.int32))
             total += co_move_weight * (cw * extra).sum() / denom
         if auxiliary_weight:
             aux = jnp.zeros_like(w)

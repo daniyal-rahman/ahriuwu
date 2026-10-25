@@ -44,3 +44,9 @@ def test_event_contract_refuses_nonfinite_unordered_and_invalid_targets():
         smooth_cast_targets(np.array([99]), [True])
     with pytest.raises(ValueError):
         smooth_cast_targets(np.array([0]), [True], (1, 1))
+
+
+def test_smoothing_does_not_cross_an_invalid_interval():
+    from lanerl_jax.modern.bc.events import smooth_cast_targets, BUTTON_INDEX as B
+    out = smooth_cast_targets(np.array([B['q'], 0, 0]), np.array([True, False, True]))
+    assert out[0, B['q']] == 1. and out[2, B['q']] == 0.

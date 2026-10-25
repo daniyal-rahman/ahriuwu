@@ -56,14 +56,14 @@ def main():
     # Sampling is stateless by global update, so resume repeats no completed draw.
     contract = dict(config=cfg._asdict(), steps=a.steps, batch_size=a.batch_size, window=a.window,
                     burn=a.burn, seed=a.seed, lr=a.lr, warmup=a.warmup, dataset_sha256=manifest_hash,
-                    champion=a.champion, smoothing=[1.], co_move_weight=0., auxiliary_weight=0.)
+                    champion=a.champion, smoothing=[1.], co_move_weight=0., auxiliary_weight=0., sampling='overlapping-burn-v2')
     contract_json = json.dumps(contract, sort_keys=True)
     (a.output/'config.json').write_text(json.dumps(contract, indent=2))
     started = time.monotonic()
     games = load_event_games(a.dataset, split='train', champion=a.champion)
     if not games:
         raise ValueError('no training perspectives')
-    windows = event_windows(games, a.window)
+    windows = event_windows(games, a.window, burn=a.burn)
     eligible = []
     for gi, start in windows:
         valid = games[gi]['arrays']['valid'][start+a.burn:start+a.window]

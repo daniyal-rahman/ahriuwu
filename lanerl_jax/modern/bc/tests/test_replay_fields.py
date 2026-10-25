@@ -71,3 +71,24 @@ def test_slot4plus_origin_vector_is_not_a_cast_target():
         assert _cast_point(dict(d, target_point_world_xz=[700., 800.])) == (700., 800.)
     assert _cast_point(dict(slot=0, targeting_mode=None,
                            wire_vectors_xyz={"0x2c": [500., 0., 600.]})) == (500., 600.)
+
+
+def test_actions_preserve_native_cross_field_order_and_special_motion():
+    from lanerl_jax.modern.bc.replay import _actions
+    class Fields:
+        def __init__(self):
+            self.native = dict(fields={n: dict(update_index=[order], event_index=[order + 100]) for n, order in
+                [('movement.received_path', 20), ('event.basic_attack_execution_proxy', 30),
+                 ('event.ability_cast_received_proxy', 10)]})
+        def rows(self, name, family):
+            return [0], [.2], [1]
+        def value(self, name, row):
+            if name == 'movement.received_path':
+                return dict(waypoints_xz=[[0., 0.], [100., 0.]], flags=4, special_motion_parameters={'speed': 1000})
+            if name == 'event.basic_attack_execution_proxy':
+                return dict(target_id=2)
+            return dict(slot=0, targeting_mode='self')
+    actions, _ = _actions(Fields(), 1, 2)
+    assert [a.kind for a in actions] == ['cast', 'path', 'attack']
+    assert [a.source_order for a in actions] == [10, 20, 30]
+    assert actions[1].special_motion and actions[1].source_event == 120

@@ -86,6 +86,10 @@ class Action(NamedTuple):
     slot: int = -1                            # cast slot (0-3 Q/W/E/R, 4-5 summoners, 12 trinket, 13 recall)
     n_waypoints: int = 0
     mode: Optional[str] = None                # a cast's targeting mode as the decoder read it (None unknown)
+    source_order: int = -1
+    source_event: int = -1
+    motion_flags: int = 0
+    special_motion: bool = False
 
 
 class ReplayGame(NamedTuple):
@@ -544,12 +548,19 @@ def _actions(fields: _Fields, me: int, opponent: int):
     for row, tm, uid in zip(rows, times, ids):
         if uid == me:
             w = fields.value("movement.received_path", row)["waypoints_xz"]
-            actions.append(Action(float(tm), "path", point=tuple(w[-1]), n_waypoints=len(w)))
+            v = fields.value("movement.received_path", row)
+            f = fields.native["fields"]["movement.received_path"]
+            actions.append(Action(float(tm), "path", point=tuple(w[-1]), n_waypoints=len(w),
+                                  source_order=int(f["update_index"][row]), source_event=int(f["event_index"][row]),
+                                  motion_flags=int(v.get("flags", 0)),
+                                  special_motion=v.get("special_motion_parameters") is not None))
     rows, times, ids = fields.rows("event.basic_attack_execution_proxy", "champion")
     for row, tm, uid in zip(rows, times, ids):
         if uid == me:
             d = fields.value("event.basic_attack_execution_proxy", row)
-            actions.append(Action(float(tm), "attack", target=d["target_id"]))
+            f = fields.native["fields"]["event.basic_attack_execution_proxy"]
+            actions.append(Action(float(tm), "attack", target=d["target_id"],
+                                  source_order=int(f["update_index"][row]), source_event=int(f["event_index"][row])))
     rows, times, ids = fields.rows("event.ability_cast_received_proxy", "champion")
     for row, tm, uid in zip(rows, times, ids):
         if uid not in (me, opponent):
@@ -557,8 +568,10 @@ def _actions(fields: _Fields, me: int, opponent: int):
         d = fields.value("event.ability_cast_received_proxy", row)
         if uid == me:
             actions.append(Action(float(tm), "cast", target=d.get("target_id"), point=_cast_point(d),
-                                  slot=d["slot"], mode=d.get("targeting_mode")))
+                                  slot=d["slot"], mode=d.get("targeting_mode"),
+                                  source_order=int(fields.native["fields"]["event.ability_cast_received_proxy"]["update_index"][row]),
+                                  source_event=int(fields.native["fields"]["event.ability_cast_received_proxy"]["event_index"][row])))
         else:
             opponent_casts.append((float(tm), d["slot"]))
-    actions.sort(key=lambda a: a.t)
+    actions.sort(key=lambda a: (a.t, a.source_order))
     return actions, opponent_casts

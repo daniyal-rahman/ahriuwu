@@ -9,6 +9,49 @@ BUTTON_INDEX = {name: i for i, name in enumerate(BUTTONS)}
 CASTS = tuple(BUTTON_INDEX[name] for name in ("q", "w", "e", "r"))
 
 
+def ordinary_move(action):
+    return (action.kind == 'path' and action.n_waypoints > 1
+            and not getattr(action, 'special_motion', False) and not (getattr(action, 'motion_flags', 0) & 0xff01))
+
+
+def modeled_events(actions):
+    """Shared receipt interpretation; None invalidates history/supervision, not a stop key.
+
+    After a one-point/special path a same-target execution cannot distinguish an
+    uninterrupted attack from a new input. Preserve that ambiguity until an order
+    or a changed target supplies evidence (BC.md section15).
+    """
+    active, interrupted = None, False
+    previous = None
+    for i, a in enumerate(actions):
+        key = (a.t, a.source_order)
+        if previous is not None and key < previous:
+            raise ValueError('action receipts must retain native time/order')
+        previous = key
+        if a.kind == 'path':
+            if ordinary_move(a):
+                active, interrupted = None, False
+                yield i, BUTTON_INDEX['move']
+            else:
+                interrupted = True
+                yield i, None
+        elif a.kind == 'attack':
+            if a.target is None or (interrupted and a.target == active):
+                yield i, None
+            elif a.target != active:
+                interrupted = False
+                yield i, BUTTON_INDEX['attack']
+            active = a.target
+        elif a.kind == 'cast':
+            if a.slot in range(4):
+                yield i, BUTTON_INDEX['q'] + a.slot
+            elif a.slot == 13:
+                active, interrupted = None, False
+                yield i, BUTTON_INDEX['recall']
+            else:
+                yield i, None
+
+
 def smooth_cast_targets(button, valid, kernel=(0.2, 0.5, 1.0, 0.5, 0.2)):
     """Move one unit of each cast's mass into neighboring continue frames.
 
@@ -30,12 +73,13 @@ def smooth_cast_targets(button, valid, kernel=(0.2, 0.5, 1.0, 0.5, 0.2)):
     if not len(events):
         return target.astype(np.float32)
     radius = len(kernel) // 2
+    segment = np.cumsum(~valid)
     owner = np.full(len(button), -1, np.int64)
     distance = np.full(len(button), radius + 1, np.int64)
     for event in events:
         rows = np.arange(max(0, event - radius), min(len(button), event + radius + 1))
         delta = np.abs(rows - event)
-        allowed = valid[rows] & ((button[rows] == 0) | (rows == event))
+        allowed = valid[rows] & (segment[rows] == segment[event]) & ((button[rows] == 0) | (rows == event))
         use = allowed & (delta < distance[rows]) & (kernel[rows - event + radius] > 0)
         owner[rows[use]], distance[rows[use]] = event, delta[use]
     for event in events:

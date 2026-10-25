@@ -857,3 +857,20 @@ Repro tool: `ops/modern/bc_quality_profile.py`; scripts, JSON and logs at
 `/mnt/nfs/shared/modern-bc/review-20261024/`. All three review jobs completed;
 private staging cleanup verified. Other agent's learner/memorization work is
 independent; its current state belongs to its receipts, not this review snapshot.
+
+
+## BC review fixes in validation (2026-10-24)
+
+Dani requested re-verification, fixes and a broader bug search. Confirmed fixes
+cover native receipt order/provenance, ambiguous special-motion supervision,
+overlapping burn windows and qualified pointer masks. Additional fixes cover
+minimap grid eligibility/normalized targets, death-state/history reset, smoothing
+across invalid gaps, finalized artifact integrity and tolerant event+target metrics.
+Clipped-target masking itself is deliberate; coverage reporting is fixed. Re-click
+collapse remains an experiment, not a presumed repair. Event contract becomes v2;
+old v1 sidecars are rejected rather than silently reused.31 lightweight targeted
+tests passed locally; full suite,24-perspective reconversion and GPU validation
+remain required. Desktop is drained/not responding with reason boot to Windows.
+Own pending13056/13057 used superseded snapshots; their watches were forgotten and
+jobs cancelled by ID. A consolidated final snapshot replaces them; no other
+agent's job was stopped. Production branch integration waits for actual checks.

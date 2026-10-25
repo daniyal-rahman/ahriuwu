@@ -29,3 +29,21 @@ def test_hidden_enemy_cast_is_not_revealed_when_caster_later_appears():
     result = visible_cast_ages(g, selected, visible, np.arange(3))
     assert np.isnan(result[:, 0, 0]).all()
     assert np.isnan(result[:2, 0, 1]).all() and np.isfinite(result[2, 0, 1])
+
+
+def test_same_clock_latest_native_path_wins_history_and_special_clears_it():
+    actions = [Action(.05, 'cast', slot=0, source_order=10),
+               Action(.05, 'path', point=(200., 0.), n_waypoints=2, source_order=11),
+               Action(.15, 'path', point=(300., 0.), n_waypoints=2, special_motion=True)]
+    f, target = previous_received_events(np.array([0., .1, .2]), actions, np.zeros((3, 2)),
+        np.full((3, 32), -1), np.array([1., 0.]), np.array([0., 1.]))
+    assert f[1, B['move']] == 1
+    assert np.isnan(f[2]).all() and not target[2].any()
+
+
+def test_death_invalidates_previous_order_but_not_future_receipts():
+    actions = [Action(.05, 'path', point=(200., 0.), n_waypoints=2),
+               Action(.25, 'cast', slot=0)]
+    f, _ = previous_received_events(np.arange(4)*.1, actions, np.zeros((4, 2)), np.full((4, 32), -1),
+        np.array([1., 0.]), np.array([0., 1.]), reset_times=[.15])
+    assert f[1, B['move']] == 1 and np.isnan(f[2]).all() and f[3, B['q']] == 1

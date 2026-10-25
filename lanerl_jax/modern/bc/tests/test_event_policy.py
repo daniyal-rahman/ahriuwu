@@ -20,3 +20,17 @@ def test_conditional_target_heads_do_not_leak_the_human_button_into_state():
     np.testing.assert_array_equal(ca, cb)
     assert not np.allclose(a.grid, b.grid)
     assert np.isfinite(a.grid).all() and (np.asarray(a.pointer)[3:] < -1000).all()
+
+
+def test_death_resets_recurrent_carry():
+    c = EventPolicyConfig(d_model=8, n_heads=2, n_layers=1, ffn_dim=16, ctx_dim=8,
+                          mlp_hidden=16, mlp_layers=1, core_dim=8, target_dim=8, pointer_dim=4)
+    policy = EventPolicy(c)
+    from lanerl_jax.modern.bc.event_inputs import SELF_FIELDS
+    sv = jnp.zeros(c.self_dim).at[SELF_FIELDS.index('dead')].set(1)
+    args = (jnp.zeros((32, c.entity_dim)), jnp.ones(32, bool), sv, jnp.zeros(c.global_dim),
+            jnp.zeros(32, jnp.int32), jnp.array(1), jnp.array(2),
+            jnp.full((4, c.metadata_dim), jnp.nan), jnp.full((4, c.metadata_dim), jnp.nan), jnp.array(0))
+    params = policy.init(jax.random.key(0), *args, jnp.ones(c.core_dim))
+    _, carry = policy.apply(params, *args, jnp.ones(c.core_dim))
+    np.testing.assert_array_equal(carry, np.zeros(c.core_dim))

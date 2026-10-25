@@ -40,3 +40,24 @@ def test_cast_priority_self_no_cursor_and_unsupported_not_false_continue():
     assert result.button[2] == B['w'] and not result.aim_valid[2]
     assert result.collisions['cast_move_bins'] == 1
     assert not result.valid[4]
+
+
+def test_special_motion_is_not_supervised_as_a_move_or_continue():
+    a = [Action(.2, 'path', point=(300., 0.), n_waypoints=2, special_motion=True)]
+    result = labels(a)
+    assert not result.valid[2] and not result.aim_valid[2]
+    # A qualified cast in the same bin still keeps its button supervision.
+    result = labels(a + [Action(.21, 'cast', slot=0, mode='self')])
+    assert result.valid[2] and result.button[2] == B['q']
+
+
+def test_single_point_path_keeps_attack_restart_ambiguous():
+    result = labels([Action(.1, 'attack', target=99), Action(.2, 'path', n_waypoints=1),
+                     Action(.4, 'attack', target=99), Action(.5, 'attack', target=100)])
+    assert not result.valid[2] and not result.valid[4]
+    assert result.valid[5] and result.button[5] == B['attack']
+
+
+def test_recall_has_no_target_requirement():
+    result = labels([Action(.2, 'cast', slot=13)])
+    assert result.button[2] == B['recall'] and result.aim_mode[2] == 0

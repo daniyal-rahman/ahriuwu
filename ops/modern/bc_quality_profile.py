@@ -12,6 +12,7 @@ from lanerl_jax.modern.bc.event_labels import label_events
 from lanerl_jax.modern.bc.event_inputs import previous_received_events, SELF_FIELDS
 from lanerl_jax.modern.bc.events import BUTTON_INDEX as B
 from lanerl_jax.modern.bc.replay import Action, _actions
+from lanerl_jax.modern.bc.event_batches import event_windows
 
 
 def quantiles(values):
@@ -29,6 +30,9 @@ def regressions():
     history, _ = previous_received_events(t, actions, xy, ids, axis, normal)
     # Reproduce current behavior; this is evidence, not an assertion of correctness.
     class FakeFields:
+        native = {'fields': {name: {'update_index': [order], 'event_index': [order]} for name, order in
+                  [('movement.received_path', 20), ('event.basic_attack_execution_proxy', 30),
+                   ('event.ability_cast_received_proxy', 10)]}}
         def rows(self, name, family=None):
             return [0], [1.], [1]
         def value(self, name, row):
@@ -62,8 +66,15 @@ def profile(root):
         c['total_metadata_values'] = int(a['own_metadata'].size)
         valid, button = a['valid'], a['button']
         c['frames'], c['valid'] = len(valid), int(valid.sum())
-        blind = (np.arange(len(valid)) % 256) < 32
+        legacy_blind = (np.arange(len(valid)) % 256) < 32
+        coverage = np.zeros(len(valid), np.int32)
+        for _, start in event_windows([dict(arrays=a)], 256, burn=32):
+            coverage[start+32:min(start+256, len(valid))] += 1
+        blind = coverage == 0
         c['valid_never_trained_default_windows'] = int((valid & blind).sum())
+        c['legacy_fixed_window_omissions'] = int((valid & legacy_blind).sum())
+        c['post_initial_burn_omissions'] = int((valid & blind & (np.arange(len(valid)) >= 32)).sum())
+        c['duplicate_supervision_frames'] = int((valid & (coverage > 1)).sum())
         for name, b in B.items():
             mask = valid & (button == b)
             c[name] = int(mask.sum())

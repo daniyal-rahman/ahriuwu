@@ -6,6 +6,7 @@ import numpy as np
 from .event_batches import event_batch
 from .event_loss import INPUTS
 from .event_metrics import sequence_metrics
+from .event_targets import pointer_candidates, emission_logits
 
 
 def make_predict(policy):
@@ -18,13 +19,19 @@ def make_predict(policy):
             x, human_button = values[:-1], values[-1]
             hidden, carry, tokens = policy.apply(params, *x, carry, method=policy.encode)
             logits = policy.apply(params, hidden, method=policy.buttons) + bias
+            logits = emission_logits(logits, x[0], x[1], x[5])
             button = logits.argmax(-1)
-            actual = policy.apply(params, hidden, tokens, x[1], x[7], button, method=policy.targets)
-            teacher = policy.apply(params, hidden, tokens, x[1], x[7], human_button, method=policy.targets)
+            actual = policy.apply(params, hidden, tokens, x[1], x[7], button, pointer_candidates(x[0], x[1], x[5], button), method=policy.targets)
+            teacher = policy.apply(params, hidden, tokens, x[1], x[7], human_button, pointer_candidates(x[0], x[1], x[5], human_button), method=policy.targets)
             summary = dict(probabilities=jax.nn.softmax(logits), button=button)
             for prefix, heads in [('actual', actual), ('teacher', teacher)]:
                 for name, head in zip(('pointer', 'grid', 'angle'), heads):
-                    summary[prefix+'_'+name] = head.argmax(-1)
+                    choice = head.argmax(-1)
+                    if name == 'pointer':
+                        selected_button = button if prefix == 'actual' else human_button
+                        any_candidate = pointer_candidates(x[0], x[1], x[5], selected_button).any(-1)
+                        choice = jnp.where(any_candidate, choice, -1)
+                    summary[prefix+'_'+name] = choice
             return carry, summary
         carry, summary = jax.lax.scan(step, carry, inputs + (teacher,))
         return carry, jax.tree.map(lambda x: jnp.swapaxes(x, 0, 1), summary)

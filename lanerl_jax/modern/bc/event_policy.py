@@ -8,7 +8,8 @@ import jax
 import jax.numpy as jnp
 
 from ..rl.policy import _Block, TRUNK, HEAD
-from .event_inputs import ENTITY_DIM, SELF_DIM, GLOBAL_DIM, ABILITY_FIELDS
+from .event_inputs import ENTITY_DIM, SELF_DIM, GLOBAL_DIM, ABILITY_FIELDS, SELF_FIELDS
+from .event_targets import pointer_candidates, emission_logits, grid_candidates
 from .events import BUTTONS, BUTTON_INDEX as B
 
 
@@ -120,13 +121,16 @@ class EventPolicy(nn.Module):
         for layer in self.mlp:
             h = nn.relu(layer(h))
         h = self.core_projection(h)
+        dead = self_vec[..., SELF_FIELDS.index('dead')] > .5
+        carry = jnp.where(dead[..., None], 0., carry)
         carry, recurrent = self.gru(carry, self.core_norm(h))
+        carry = jnp.where(dead[..., None], 0., carry)
         return h + recurrent, carry, entity_tokens
 
     def buttons(self, hidden):
         return self.button_head(hidden)
 
-    def targets(self, hidden, entity_tokens, pad, own_metadata, button):
+    def targets(self, hidden, entity_tokens, pad, own_metadata, button, eligible):
         c = self.cfg
         selected = jnp.take_along_axis(own_metadata, jnp.clip(button - B['q'], 0, 3)[..., None, None], -2)[..., 0, :]
         cast = (button >= B['q']) & (button <= B['r'])
@@ -137,17 +141,20 @@ class EventPolicy(nn.Module):
         query = nn.relu(self.condition(jnp.concatenate([hidden, embedding, selected], -1)))
         pointer = jnp.einsum('...d,...nd->...n', self.pointer_query(query),
                              self.pointer_key(entity_tokens)) / c.pointer_dim ** .5
-        pointer = jnp.where(pad, -1e4, pointer)
-        return pointer, self.grid_head(query), self.angle_head(query)
+        pointer = jnp.where(pad | ~eligible, -1e4, pointer)
+        grid = jnp.where(grid_candidates(c.grid_x, c.grid_y).reshape(-1), self.grid_head(query), -1e4)
+        return pointer, grid, self.angle_head(query)
 
     def __call__(self, entities, pad, self_vec, global_vec, entity_ids, own_id, enemy_id,
                  own_metadata, enemy_metadata, patch, carry, *, target_button=None):
         h, carry, tokens = self.encode(entities, pad, self_vec, global_vec, entity_ids, own_id, enemy_id,
                                        own_metadata, enemy_metadata, patch, carry)
         button = self.buttons(h)
+        if target_button is None:
+            button = emission_logits(button, entities, pad, own_id)
         chosen = button.argmax(-1) if target_button is None else target_button
-        pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen)
-        _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']))
+        pointer, grid, angle = self.targets(h, tokens, pad, own_metadata, chosen, pointer_candidates(entities, pad, own_id, chosen))
+        _, co_grid, _ = self.targets(h, tokens, pad, own_metadata, jnp.full_like(chosen, B['move']), ~pad)
         condition = jnp.concatenate([h, self.button_embedding(chosen)], -1)
         return EventLogits(button, pointer, grid, angle, self.co_move_head(condition), co_grid,
                            self.co_move_order_head(condition), self.own_future_head(h),
