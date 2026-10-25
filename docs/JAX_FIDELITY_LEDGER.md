@@ -904,3 +904,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | BC-V2-8000-CALIBRATED-PLATEAU | 2026-10-25 |13110 passed71val:mean castF1.264 versus4k.276;E/attack improve,R regresses. Keep4k reference,stop duration extension. Added previous-event-only toggle preserving cast ages/default behavior/parameter shapes,regression unrun. Audit replay history dependence before next architecture change;not leakage/closed-loop proof. |
 
 | BC-V2-PREVIOUS-EVENT-ABLATION-QUEUED | 2026-10-25 |13111 fullsuite gate→13112 matched4k previous-event-only removal,source21e2b806. Cast ages retained,seed0/schedule/draws/support same;no test or quality result yet. Inference perturbation control not implemented. Private staging/NFS/no-requeue,awaitcallbacks. |
+
+| BC-V2-PREVIOUS-EVENT-TESTS-PASS | 2026-10-25 |13111 actual log85passed/37.71s,including previous-command mask isolation and cast-history sensitivity.13112 gate cleared;no learned quality/closed-loop result yet,no new jobs/promotion. |

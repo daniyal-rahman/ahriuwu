@@ -1404,3 +1404,9 @@ Tests and quality pending; no calibration on val. CPU15min/GPU1h,privatecopies/
 20GiBreserve,NFS,no-requeue/append. Frozen-reference inference perturbation
 assessment remains planned/unimplemented,not part of13112. Await callbacks;
 no policy promotion.
+
+**Previous-event regression gate13111 COMPLETED/0:** actual NFS log
+85passed/37.71s. Includes masked previous-command/target invariance and retained
+own/enemy cast-history sensitivity. Learner13112 afterok gate cleared; quality
+result pending. This establishes feature isolation,not robustness to policy
+history or closed-loop play. Await registered callback,no new jobs/promotion.
