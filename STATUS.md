@@ -1177,3 +1177,14 @@ a component candidate, no complete-policy promotion. Summary artifact
 angle-aim3-summary-13087.json; paired intervals13091 remain gated on relative
 arm13090. Await registered calibration13093–13095 and remaining comparisons;
 no additional jobs needed on this receipt.
+
+**Opponent-relative angle13090 COMPLETED/0**,1000updates/470train/71val,
+662.82s training, same isolated budget/seed as angle reference. Q/E teacher aim
+mean per-match median12.37/27.36→8.93/14.27deg; within10 42.52/23.70→55.30/51.76%.
+Relative coordinates outperform angle+3x on E (14.27 versus22.37deg), similar Q
+(8.93 versus8.79deg), without extra labels/parameters. Sampled Q/W/E/R eventF1
+.1468/.1082/.0496/.0954: timing largely unchanged. Movement within2
+9.304→8.624%,attackpointer69.05→68.89%, so not a complete-policy promotion.
+Summary relative-angle-summary-13090.json. All model prerequisites for paired
+report13091 now completed; await its intervals before deciding combinations.
+Calibration13093–13095 remains registered; no duplicate jobs on this receipt.
