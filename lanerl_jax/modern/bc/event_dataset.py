@@ -22,7 +22,7 @@ from .sources import SOURCE_CONTRACT
 from . import fog
 
 
-CONTRACT = 'replay-lane-events-v2'
+CONTRACT = 'replay-lane-events-v3'
 MODES = {'self': 0, 'unit': 1, 'point': 2, 'direction': 3}
 
 
@@ -103,7 +103,7 @@ def convert_events(g, row, original_npz, catalog_dir):
     selected = slots[oi]
     unit_ids = np.where(selected >= 0, ids[np.maximum(selected, 0)], -1)
     scope, _, _ = C._scope(g, own_xy, RO.corridor(lane), True)
-    scope &= np.isfinite(own_xy).all(1) & np.isfinite(g.hp[:, me])
+    scope &= np.isfinite(own_xy).all(1) & np.isfinite(own_xy[oi]).all(1) & np.isfinite(g.hp[:, me])
     scope &= np.arange(len(g.t)) > 0
     labels = label_events(g.t, g.actions, own_xy[oi], unit_ids, np.asarray(frame.axis),
                           np.asarray(frame.normal), scope, g.me)

@@ -13,9 +13,8 @@ What is read, and how it is put on the grid:
   decoder's zero-order hold (`scalar_asof`) at each decision time.
 * alive: a minion from its received creation to its received death; a champion from the start, dead from a
   received death to its first positive health; a turret until its received death.
-* last hits: a minion death whose last received damage notice came from the champion (the death notices name
-  no killer).
-* champion combat: damage notices between the champion and any enemy champion (`in_combat`).
+* CS and champion combat: unavailable until received damage attribution is qualified;
+  death notices do not identify the killer.
 * the controlled champion's actions (`Action`): received movement paths, executed basic attacks with their
   target, and casts with slot, target and cast point (abilities, summoners, trinket, recall, items). These are
   what the server received or executed, not the clicks. Summoner and trinket casts carry no resolved target;
@@ -66,7 +65,6 @@ TOP_LANE = ((1169., 4287.), (1512., 6699.), (981., 10441.), (1700., 13200.), (43
             (7943., 13411.), (10481., 13650.))
 _TOP_LANE_RADIUS = 1500.0
 _RIVER = 14800.0                      # x + y below this is blue's half of the map
-_LAST_HIT_TOLERANCE_S = 0.034         # damage notices of the death's own tick count
 
 
 @dataclass(frozen=True)
@@ -344,9 +342,16 @@ def _read_lane_units(fields, position_model, champions, t, lane):
         if u.family == "turret":
             x[:, i], y[:, i] = placement[u.id]["position_xz"]
             continue
+        deaths = np.asarray(sorted(death_times.get(u.id, [])))
+        last_death = np.searchsorted(deaths, t, side="right") - 1
         for k in np.flatnonzero(alive[:, i]):
             e = model.estimate(u.id, float(t[k]))
-            if e["position_available"]:
+            accepted = (e["position_available"] and e.get("policy_position_accepted") is True
+                        and e.get("approximation_accepted_for_bc") is True)
+            # A living query does not make a path from the previous life current.
+            fresh = (last_death[k] < 0 or e.get("source", {}).get("movement_clock", -math.inf)
+                     > deaths[last_death[k]])
+            if accepted and fresh:
                 x[k, i], y[k, i] = e["position_xz"]
 
     return units, placement, turret_xy, turret_id, death_times, x, y, hp, max_hp, alive
@@ -383,8 +388,8 @@ def read_game(game_dir: Path, t: np.ndarray, champion: str = "Garen", lane: int 
     level = fields.asof("stat.mLevelRef", me, t)
     spell_rank = np.stack([np.stack([fields.asof(f"ability.{s}.rank", c, t) for s in range(4)], -1)
                            for c in (me, opponent)], 1)
-    last_hit_times = _last_hits(fields, me, death_times)
-    cs = np.searchsorted(np.asarray(last_hit_times), t, side="right").astype(np.int32)
+    # Last damage source is not qualified kill attribution, even with known roles.
+    cs = np.full(len(t), np.nan)
     champion_stats = np.stack([_combat_stats(fields, c, t) for c in (me, opponent)], 1)
     actions, opponent_casts = _actions(fields, me, opponent)
     cooldown_events, cooldown_audit = _cooldown_events(fields, me)
@@ -419,19 +424,19 @@ def _combat_stats(fields: _Fields, champion: int, t) -> np.ndarray:
 
 
 def _damage_notices(fields: _Fields):
-    """(time, receiver, source) of every received damage notice that names a source."""
+    """Qualified (time, victim, source); participant order does not establish roles."""
     out = []
     rows, times, _ = fields.rows("event.received_damage_notice")
     for row, tm in zip(rows, times):
         d = fields.value("event.received_damage_notice", row)
-        p = d["participant_ids"]
-        if len(p) > 1:
-            out.append((float(tm), int(d["receiver_id"]), int(p[1])))
+        if (d.get("victim_source_roles_available") is True
+                and d.get("victim_id") is not None and d.get("source_id") is not None):
+            out.append((float(tm), int(d["victim_id"]), int(d["source_id"])))
     return out
 
 
 def _last_hits(fields: _Fields, me: int, death_times) -> List[float]:
-    """Times of `me`'s last hits on minions (any lane)."""
+    """Causal last-damage proxy for diagnostics; not qualified CS."""
     last_source: Dict[int, List[Tuple[float, int]]] = {}
     for tm, receiver, source in _damage_notices(fields):
         last_source.setdefault(receiver, []).append((tm, source))
@@ -439,7 +444,7 @@ def _last_hits(fields: _Fields, me: int, death_times) -> List[float]:
     _, _, ids = fields.rows("event.unit_death_received_proxy", "minion")
     for mid in set(ids.tolist()):
         tm = death_times[mid][0]
-        hits = [h for h in last_source.get(mid, ()) if h[0] <= tm + _LAST_HIT_TOLERANCE_S]
+        hits = [h for h in last_source.get(mid, ()) if h[0] <= tm]
         if hits and hits[-1][1] == me:
             out.append(tm)
     return sorted(out)
@@ -447,6 +452,10 @@ def _last_hits(fields: _Fields, me: int, death_times) -> List[float]:
 
 def _champion_combat(fields: _Fields, me: int, enemies: set, t) -> np.ndarray:
     """(T,) time of the last damage notice between `me` and an enemy champion (-1e9 if none yet)."""
+    rows, _, _ = fields.rows("event.received_damage_notice")
+    if not len(rows) or any(fields.value("event.received_damage_notice", r).get(
+            "victim_source_roles_available") is not True for r in rows):
+        return np.full(len(t), np.nan)
     times = sorted(tm for tm, receiver, source in _damage_notices(fields)
                    if (receiver == me and source in enemies) or (source == me and receiver in enemies))
     times = np.asarray(times, float)

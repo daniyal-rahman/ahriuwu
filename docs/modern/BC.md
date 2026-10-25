@@ -1414,3 +1414,18 @@ identity or world-projected points across the two delayed camera anchors. This
 repairs metric consistency without asserting that clipped point targets are
 accurate labels or promoting an unqualified directional spell mode. Ordinary
 re-clicks are not collapsed by the review correction.
+
+
+### Source qualification correction: event contract v3 (2026-10-24)
+
+`replay-lane-events-v3` requires both per-estimate policy/BC position acceptance
+flags. After a received death, a champion needs a strictly postdeath path before
+its position is available again; positive HP alone does not renew an old path.
+Both current scope and the delayed own-position anchor must be available.
+
+Damage participant order does not establish victim/source roles. CS remains
+unavailable until kill attribution is qualified; the last-damage proxy is only a
+diagnostic and never consults a receipt later than the queried death. Combat
+history remains unavailable for sources with unqualified damage roles. Missing
+combat stays NaN through formatting. Rebuild shared observations as well as event
+sidecars: v2 arrays with unsupported inputs are not compatible v3 data.

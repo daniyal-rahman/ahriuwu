@@ -92,3 +92,61 @@ def test_actions_preserve_native_cross_field_order_and_special_motion():
     assert [a.kind for a in actions] == ['cast', 'path', 'attack']
     assert [a.source_order for a in actions] == [10, 20, 30]
     assert actions[1].special_motion and actions[1].source_event == 120
+
+
+def test_position_requires_acceptance_and_current_lifetime():
+    from lanerl_jax.modern.bc.replay import _read_lane_units
+    class Fields:
+        def rows(self, name, family=None):
+            if name == 'event.unit_death_received_proxy':
+                return [0], [1.], [1]
+            return [], [], []
+        def value(self, name, row):
+            return dict(victim_id=1)
+        def asof(self, name, uid, t):
+            return np.ones(len(t)) * 100.
+        def series(self, name, uid):
+            return dict(time_seconds=np.array([0., 2.]), values=np.array([100., 100.]),
+                        available=np.ones(2, bool))
+    class Model:
+        def __init__(self, *args, **kwargs):
+            pass
+        def speed(self, *args):
+            pass
+        def estimate(self, uid, t):
+            return dict(position_available=True, position_xz=[100., 200.],
+                        policy_position_accepted=t != .5, approximation_accepted_for_bc=t != .5,
+                        source=dict(movement_clock=2.1 if t == 3. else 0.))
+    result = _read_lane_units(Fields(), SimpleNamespace(MinionPositions=Model),
+                             [Unit(1, 'champion', 0, 'Garen')], np.array([.5, 1.5, 2.5, 3.]), 2)
+    assert np.isnan(result[5][:3]).all()  # unaccepted, dead, previous-life path
+    assert result[5][3, 0] == 100.
+
+
+def test_damage_roles_and_observation_cutoff_are_required():
+    from lanerl_jax.modern.bc.replay import _damage_notices, _last_hits, _champion_combat
+    class Fields:
+        qualified = False
+        clock = 10.02
+        def rows(self, name, family=None):
+            return np.array([0]), np.array([self.clock]), np.array([50])
+        def value(self, name, row):
+            return dict(receiver_id=50, participant_ids=[50, 1], victim_id=50, source_id=1,
+                        victim_source_roles_available=self.qualified)
+    fields = Fields()
+    assert _damage_notices(fields) == []
+    assert np.isnan(_champion_combat(fields, 1, {50}, np.array([10.]))).all()
+    assert _last_hits(fields, 1, {50: [10.]}) == []
+    fields.qualified = True
+    assert _last_hits(fields, 1, {50: [10.]}) == []  # later receipt cannot credit earlier state
+    fields.clock = 9.99
+    assert _last_hits(fields, 1, {50: [10.]}) == [10.]
+
+
+def test_unknown_combat_stays_unknown_in_formatter():
+    g = fixture()
+    g.last_champion_combat[:] = np.nan
+    g.cs = np.full(2, np.nan)
+    sv = build(g)[2]
+    col = C._self_columns(OB.REPLAY_PROFILE)
+    assert np.isnan(sv[:, [col['in_combat'], col['cs']]]).all()

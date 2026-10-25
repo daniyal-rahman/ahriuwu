@@ -940,3 +940,21 @@ validation jobs are unchanged. Diagnostic tool: `ops/modern/bc_system_audit.py`;
 local evidence: `review-fixes-20261024/system-synthetic-expanded.json` under
 `/mnt/nfs/shared/modern-bc/`. Pending source results must guide the next repairs
 before any source-fidelity or competent-play sign-off.
+
+
+## Source qualification repairs (2026-10-24)
+
+13058 completed:91tests passed43.17s,24conversions/parity/hashes passed;
+0post-initial-burn window omissions/0duplicates.13062 source output inspected:
+all687046damage notices unqualified;5475/370405alive queries unaccepted positions,
+158reuse predeath paths.0future-notice CS credits observed in this sample.
+Desktop recovered;13059first2shards running,13060dependent and13061resources pending
+at inspection. Earlier Windows/queued-only statements above are historical.
+
+New v3 repair masks unsupported CS/combat, requires per-position acceptance and
+postdeath path evidence, and requires a finite delayed own anchor.8local source/
+formatter tests pass; full tests and real-source reconstruction pending. Rebuild
+shared observations too: old v2fixtures contain unsupported inputs. Earlier
+13058..13061 snapshots remain useful event-fix diagnostics, not final v3data.
+Larger open issues: discarded own absolute pools/haste/AS/execution memory and
+strict fixture lacking AhriQ/R/per-target success. No broad training promotion.

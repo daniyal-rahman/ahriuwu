@@ -111,7 +111,8 @@ def build(g, frame, col, role, tier, extra_champions, timers):
     put("mana", np.where(g.max_mana > 0, g.mana / np.maximum(g.max_mana, 1.),
                           np.where(g.max_mana == 0, 0., np.nan)))
     put("shield", g.shield / np.where(g.max_hp[:, me] > 0, g.max_hp[:, me], np.nan))
-    put("in_combat", (g.t - g.last_champion_combat) < 5.)
+    put("in_combat", np.where(np.isfinite(g.last_champion_combat),
+                              (g.t - g.last_champion_combat) < 5., np.nan))
     for slot, name in enumerate(("q", "w", "e", "r")):
         put("cd_" + name, timers[:, slot] / 60.)
         put("rank_" + name, g.spell_rank[:, 0, slot] / 5.)
