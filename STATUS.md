@@ -1394,3 +1394,13 @@ observed enemy ages. Regression checks masked-feature invariance and retained
 cast-history sensitivity. Tests unrun; next CPU gate then matched4k train and
 frozen-reference feature-removal assessment. Motivation is replay human-history
 dependence/deploy distribution shift,not proof of leakage or a closed-loop test.
+
+**Previous-event gate13111 and afterok learner13112 registered**,immutable
+source21e2b806. CPU fullsuite includes new feature isolation regression; GPU
+no-previous-event4000/b64/seed0/window256/burn32/smooth2/relative,matching
+4k reference schedule/draws/aim support except this input group. Final greedy+
+sample71val,own/enemy cast history retained,identical parameter count expected.
+Tests and quality pending; no calibration on val. CPU15min/GPU1h,privatecopies/
+20GiBreserve,NFS,no-requeue/append. Frozen-reference inference perturbation
+assessment remains planned/unimplemented,not part of13112. Await callbacks;
+no policy promotion.
